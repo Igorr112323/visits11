@@ -152,6 +152,7 @@
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="Focusable" Value="False" />
         <Setter Property="Template">
+            <Setter.Value>
             <ControlTemplate TargetType="Button">
                 <Border x:Name="Bd" CornerRadius="12" Background="Transparent"
                         BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1">
@@ -164,6 +165,7 @@
                     </Trigger>
                 </ControlTemplate.Triggers>
             </ControlTemplate>
+        </Setter.Value>
         </Setter>
     </Style>
 
@@ -174,6 +176,7 @@
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="Focusable" Value="False" />
         <Setter Property="Template">
+            <Setter.Value>
             <ControlTemplate TargetType="Button">
                 <Border x:Name="Bd" CornerRadius="8" Background="{DynamicResource Brush.Panel3}" Padding="8,4">
                     <ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="False" />
@@ -185,6 +188,7 @@
                     </Trigger>
                 </ControlTemplate.Triggers>
             </ControlTemplate>
+        </Setter.Value>
         </Setter>
     </Style>
 
@@ -197,6 +201,7 @@
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="Focusable" Value="False" />
         <Setter Property="Template">
+            <Setter.Value>
             <ControlTemplate TargetType="RadioButton">
                 <Border x:Name="Bd" CornerRadius="12" Padding="12,8" Background="Transparent">
                     <StackPanel Orientation="Horizontal">
@@ -222,6 +227,7 @@
                     </Trigger>
                 </ControlTemplate.Triggers>
             </ControlTemplate>
+        </Setter.Value>
         </Setter>
     </Style>
 
@@ -237,6 +243,7 @@
         <Setter Property="Padding" Value="14,0" />
         <Setter Property="VerticalContentAlignment" Value="Center" />
         <Setter Property="Template">
+            <Setter.Value>
             <ControlTemplate TargetType="TextBox">
                 <Border x:Name="Bd" CornerRadius="12"
                         Background="{DynamicResource Brush.Panel3}"
@@ -249,6 +256,7 @@
                     </Trigger>
                 </ControlTemplate.Triggers>
             </ControlTemplate>
+        </Setter.Value>
         </Setter>
     </Style>
 

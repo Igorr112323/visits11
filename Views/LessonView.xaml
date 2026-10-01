@@ -111,14 +111,14 @@
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding RollcallState}" Value="Active">
                                     <Setter Property="Visibility" Value="Visible" />
-                                    <Trigger.EnterActions>
+                                    <DataTrigger.EnterActions>
                                         <BeginStoryboard>
                                             <Storyboard>
                                                 <DoubleAnimation Storyboard.TargetProperty="Opacity"
                                                                  From="0" To="1" Duration="0:0:0.3" />
                                             </Storyboard>
                                         </BeginStoryboard>
-                                    </Trigger.EnterActions>
+                                    </DataTrigger.EnterActions>
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
@@ -323,7 +323,7 @@
                                                 Value="{DynamicResource Brush.GreenSoft}" />
                                         <Setter TargetName="Badge" Property="TextElement.Foreground"
                                                 Value="{DynamicResource Brush.Green}" />
-                                        <Trigger.EnterActions>
+                                        <DataTrigger.EnterActions>
                                             <BeginStoryboard>
                                                 <Storyboard>
                                                     <DoubleAnimationUsingKeyFrames Storyboard.TargetName="Badge"
@@ -348,7 +348,7 @@
                                                     </DoubleAnimationUsingKeyFrames>
                                                 </Storyboard>
                                             </BeginStoryboard>
-                                        </Trigger.EnterActions>
+                                        </DataTrigger.EnterActions>
                                     </DataTrigger>
                                 </DataTemplate.Triggers>
                             </DataTemplate>
