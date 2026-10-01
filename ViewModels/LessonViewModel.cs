@@ -53,7 +53,6 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
     private readonly CameraLink _camera;
 
     private DispatcherTimer? _resetTimer;
-    private readonly DispatcherTimer _streamWatchdog;
     private string _lessonStartedAt = string.Empty;
 
     // ------------------------------------------------------------- QR-коды студентов
@@ -81,13 +80,6 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         TogglePresentCommand = new RelayCommand(
             row => TogglePresent((StudentRow)row!), _ => RollcallState == StateActive);
         _database.DataChanged += OnDataChanged;
-
-        _streamWatchdog = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-        _streamWatchdog.Tick += (_, _) =>
-        {
-            _streamWatchdog.Stop();
-            HasStream = false;
-        };
 
         // сервер спрашивает нас про вход студентов и просит свежий QR для показа
         _server.Login = LoginInternal;
@@ -242,27 +234,12 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
 
     // -------------------------------------------------------------- видеопоток
 
-    private bool _hasStream;
-    public bool HasStream
-    {
-        get => _hasStream;
-        private set => Set(ref _hasStream, value);
-    }
-
-    private ImageSource? _streamFrame;
-    public ImageSource? StreamFrame
-    {
-        get => _streamFrame;
-        private set => Set(ref _streamFrame, value);
-    }
+    /// <summary>Последний кадр с телефона (для распознавания QR; видео на экране больше не показываем).</summary>
+    private ImageSource? _lastFrame;
 
     private void OnFrame(byte[] jpeg, int rotation)
     {
-        StreamFrame = DecodeImage(jpeg, rotation);
-        if (!HasStream) HasStream = true;
-        _streamWatchdog.Stop();
-        _streamWatchdog.Start();
-
+        _lastFrame = DecodeImage(jpeg, rotation);
         TryScanQr();
     }
 
@@ -273,7 +250,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
     private void TryScanQr()
     {
         if (RollcallState != StateActive || _qrDecoding) return;
-        if (StreamFrame is not BitmapSource frame) return;
+        if (_lastFrame is not BitmapSource frame) return;
 
         var now = Environment.TickCount64;
         if (now - _lastQrDecodeAt < 250) return;
