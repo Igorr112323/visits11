@@ -413,7 +413,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
     private static ImageSource MakeQr(string content)
     {
         var generator = new QRCodeGenerator();
-        var data = generator.CreateQrCode(content, QRCodeGenerator.EccLevel.M);
+        var data = generator.CreateQrCode(content, QRCodeGenerator.ECCLevel.M);
         var qr = new PngByteQRCode(data);
         var png = qr.GetGraphic(12);
         return DecodeImage(png, 0);

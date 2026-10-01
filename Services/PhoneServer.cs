@@ -1,3 +1,4 @@
+using System.IO;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -147,7 +148,7 @@ public sealed class PhoneServer : IDisposable
                     case "/":
                     case "/checkin":
                     case "/index.html":
-                        Respond(stream, "200 OK", "text/html; charset=utf-8", BuildPage());
+                        Respond(stream, "200 OK", "text/html; charset=utf-8", Encoding.UTF8.GetBytes(BuildPage()));
                         break;
 
                     case "/favicon.ico":
