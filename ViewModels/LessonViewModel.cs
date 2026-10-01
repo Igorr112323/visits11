@@ -252,12 +252,13 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
 
     private void OnDataChanged()
     {
+        // снимок отметок ДО перезагрузки (ReloadGroups сам сбрасывает список)
+        var marked = Rows.Where(r => r.IsPresent).ToDictionary(r => r.StudentId, r => r.MarkedAt);
+
         ReloadGroups();
 
         if (RollcallState is StateActive or StateFinished)
         {
-            // сохраняем текущие отметки по Id студента
-            var marked = Rows.Where(r => r.IsPresent).ToDictionary(r => r.StudentId, r => r.MarkedAt);
             LoadStudents();
             foreach (var row in Rows)
             {

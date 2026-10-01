@@ -262,13 +262,22 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
             return;
         }
 
-        _database.AddStudents(fresh.Select(name => new Student
+        // логины уникальны и внутри партии: два разных ФИО могут дать одинаковый логин
+        var usedLogins = new HashSet<string>(StringComparer.Ordinal);
+        var students = new List<Student>();
+        foreach (var name in fresh)
         {
-            GroupId = group.Id,
-            FullName = name,
-            Login = _auth.GenerateLogin(name, _database.LoginExists),
-            Password = AuthService.GeneratePassword(),
-        }));
+            var student = new Student
+            {
+                GroupId = group.Id,
+                FullName = name,
+                Login = _auth.GenerateLogin(name, login => _database.LoginExists(login) || usedLogins.Contains(login)),
+                Password = AuthService.GeneratePassword(),
+            };
+            usedLogins.Add(student.Login);
+            students.Add(student);
+        }
+        _database.AddStudents(students);
 
         _toasts.Success("Импорт завершён",
             $"Добавлено {fresh.Count} {Pluralize(fresh.Count, "студент", "студента", "студентов")} в группу «{groupName}».");
