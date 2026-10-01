@@ -34,6 +34,9 @@ public sealed class PhoneServer : IDisposable
     public Func<string, string, (bool Ok, string Name, int StudentId)> Login { get; set; } =
         (_, _) => (false, "", 0);
 
+    /// <summary>Отметка студента по id (в потоке UI): (успех, имя) — NFC «телефон к телефону».</summary>
+    public Func<int, (bool Ok, string Name)> MarkStudent { get; set; } = _ => (false, "");
+
     /// <summary>PNG текущего QR студента; null — перекличка не активна.</summary>
     public Func<int, byte[]?> GetQrPng { get; set; } = _ => null;
 
@@ -126,6 +129,10 @@ public sealed class PhoneServer : IDisposable
                         HandleQr(stream, GetQueryParam(request.Query, "token"));
                         break;
 
+                    case "/api/nfc_mark" when request.Method == "POST":
+                        HandleNfcMark(stream, request.Body);
+                        break;
+
                     case "/":
                     case "/index.html":
                         Respond(stream, "200 OK", "text/html; charset=utf-8",
@@ -208,6 +215,40 @@ public sealed class PhoneServer : IDisposable
         {
             Respond(stream, "200 OK", "image/png", png);
         }
+    }
+
+    /// <summary>Отметка «телефон к телефону»: телефон преподавателя пересылает токен студента.</summary>
+    private void HandleNfcMark(NetworkStream stream, byte[]? body)
+    {
+        string token = "";
+        try
+        {
+            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(body ?? Array.Empty<byte>()));
+            if (doc.RootElement.TryGetProperty("token", out var value) &&
+                value.ValueKind == JsonValueKind.String)
+            {
+                token = value.GetString() ?? "";
+            }
+        }
+        catch (JsonException)
+        {
+            // повреждённый запрос
+        }
+
+        if (string.IsNullOrEmpty(token) || !_sessions.TryGetValue(token, out var studentId))
+        {
+            // сессия неизвестна — студенту нужно перевойти
+            Respond(stream, "200 OK", "application/json",
+                Encoding.UTF8.GetBytes("{\"ok\":false,\"relogin\":true}"));
+            return;
+        }
+
+        var result = OnUi(() => MarkStudent(studentId));
+        RespondJson(stream, new Dictionary<string, object?>
+        {
+            ["ok"] = result.Ok,
+            ["name"] = result.Name,
+        });
     }
 
     // ------------------------------------------------------------- HTTP-парсер

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nfc_service_desc">Отметка посещаемости Visits11</string>
+    <string name="nfc_group_desc">Visits11</string>
+</resources>

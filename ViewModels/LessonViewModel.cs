@@ -89,6 +89,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
 
         // сервер спрашивает нас про вход студентов и просит свежий QR для показа
         _server.Login = LoginInternal;
+        _server.MarkStudent = MarkStudentInternal;
         _server.GetQrPng = BuildQrPng;
         _camera.FrameReceived += OnFrame;
 
@@ -300,28 +301,22 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
     /// <summary>Отметка студента, чей QR попал в камеру преподавателя.</summary>
     private void MarkScanned(int studentId)
     {
-        if (RollcallState != StateActive) return;
+        MarkStudentInternal(studentId);
+    }
+
+    /// <summary>Отметка студента по id (сканирование камерой или NFC «телефон к телефону»).</summary>
+    private (bool Ok, string Name) MarkStudentInternal(int studentId)
+    {
+        if (RollcallState != StateActive) return (false, string.Empty);
         var row = Rows.FirstOrDefault(r => r.StudentId == studentId);
-        if (row is null || row.IsPresent) return;
+        if (row is null) return (false, string.Empty);
 
-        MarkRow(row);
-        _toasts.Success("Отмечен", row.FullName);
-    }
-
-    // ---------------------------------------------------------------- QR-код
-
-    private ImageSource? _qrImage;
-    public ImageSource? QrImage
-    {
-        get => _qrImage;
-        private set => Set(ref _qrImage, value);
-    }
-
-    private string _qrUrl = string.Empty;
-    public string QrUrl
-    {
-        get => _qrUrl;
-        private set => Set(ref _qrUrl, value);
+        if (!row.IsPresent)
+        {
+            MarkRow(row);
+            _toasts.Success("Отмечен", row.FullName);
+        }
+        return (true, row.FullName);
     }
 
     // --------------------------------------------------------------- перекличка
@@ -380,10 +375,6 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         // новый ключ шифрования и ID переклички: QR прошлых занятий не сработают
         _qrKey = RandomNumberGenerator.GetBytes(32);
         _rollcallId = RandomNumberGenerator.GetBytes(8);
-
-        // QR-код подключения на панели камеры
-        QrUrl = _server.Url;
-        QrImage = _server.IsRunning ? MakeQr(QrUrl) : null;
 
         RecalcStats();
         RollcallState = StateActive;
@@ -540,12 +531,4 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         return image;
     }
 
-    private static ImageSource MakeQr(string content)
-    {
-        var generator = new QRCodeGenerator();
-        var data = generator.CreateQrCode(content, QRCodeGenerator.ECCLevel.M);
-        var qr = new PngByteQRCode(data);
-        var png = qr.GetGraphic(12);
-        return DecodeImage(png, 0);
-    }
 }

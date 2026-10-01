@@ -31,7 +31,7 @@ public partial class App : Application
         Server = new PhoneServer();
         Server.Start();
 
-        Camera = new CameraLink();
+        Camera = new CameraLink(Server.Port);
         Camera.Start();
 
         DispatcherUnhandledException += (_, args) =>

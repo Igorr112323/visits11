@@ -16,11 +16,19 @@ public sealed class CameraLink : IDisposable
 {
     private const int Port = 8090;
 
+    private readonly int _serverPort;
+
     private CancellationTokenSource? _cts;
     private Task? _worker;
 
     /// <summary>Кадр (JPEG, поворот в градусах). Вызывается в потоке UI.</summary>
     public event Action<byte[], int>? FrameReceived;
+
+    /// <param name="serverPort">порт встроенного сервера — телефон передаёт его студентам для NFC-отметок.</param>
+    public CameraLink(int serverPort)
+    {
+        _serverPort = serverPort;
+    }
 
     public void Start()
     {
@@ -133,8 +141,15 @@ public sealed class CameraLink : IDisposable
     /// <summary>Цикл кадров: запрашивает /frame?since=N один за другим.</summary>
     private async Task StreamAsync(string host, CancellationToken token)
     {
+        // сообщаем телефону адрес ПК (для NFC-отметок) — IP этого соединения + порт сервера
+        var localHost = GetLocalHostFor(host);
+
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(4) };
         client.DefaultRequestHeaders.ConnectionClose = true;
+        if (localHost.Length > 0)
+        {
+            client.DefaultRequestHeaders.Add("X-Host", $"{localHost}:{_serverPort}");
+        }
 
         var failures = 0;
         long seq = 0;
@@ -234,6 +249,25 @@ public sealed class CameraLink : IDisposable
 
     private static uint ToUint(byte[] bytes)
         => (uint)(bytes[0] << 24 | bytes[1] << 16 | bytes[2] << 8 | bytes[3]);
+
+    /// <summary>Локальный IP, которым ПК выходит на телефон — телефон будет отвечать на него.</summary>
+    private static string GetLocalHostFor(string host)
+    {
+        try
+        {
+            using var probe = new TcpClient();
+            probe.Connect(host, Port);
+            if (probe.Client.LocalEndPoint is IPEndPoint endPoint)
+            {
+                return endPoint.Address.ToString();
+            }
+        }
+        catch
+        {
+            // не получилось — телефон узнает адрес иначе
+        }
+        return "";
+    }
 
     private static string ToStringIp(uint value)
         => $"{(value >> 24) & 0xFF}.{(value >> 16) & 0xFF}.{(value >> 8) & 0xFF}.{value & 0xFF}";

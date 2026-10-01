@@ -2,8 +2,10 @@ package ru.visits11.student;
 
 import android.app.Activity;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.nfc.NfcAdapter;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -46,6 +48,7 @@ public final class MainActivity extends Activity {
     private static final String KEY_LOGIN = "login";
     private static final String KEY_PASSWORD = "password";
     private static final String KEY_HOST = "host";
+    private static final String KEY_TOKEN = "token";
     private static final int PORT = 8090;
     private static final long POLL_MS = 5000;
 
@@ -70,6 +73,9 @@ public final class MainActivity extends Activity {
     private volatile String token;
     private volatile String host;
     private volatile byte[] lastPng;
+
+    /** true — NFC есть: отметка «телефон к телефону», сеть не нужна вовсе. */
+    private boolean useNfc;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
 
@@ -103,15 +109,59 @@ public final class MainActivity extends Activity {
             getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                     .putString(KEY_LOGIN, login)
                     .putString(KEY_PASSWORD, password)
+                    .remove(KEY_TOKEN)
                     .apply();
             token = null;
-            wake();
+            if (useNfc) {
+                updateNfcStatus();
+            } else {
+                wake();
+            }
         });
+
+        // тап по статусу — снова показать экран входа
+        statusText.setOnClickListener(v -> {
+            if (useNfc) {
+                loginPanel.setVisibility(View.VISIBLE);
+            }
+        });
+
+        useNfc = nfcSupported();
+        if (useNfc) {
+            dot.setVisibility(View.INVISIBLE);
+            updateNfcStatus();
+        }
+    }
+
+    /** NFC в этом телефоне? */
+    private boolean nfcSupported() {
+        return getPackageManager().hasSystemFeature(PackageManager.FEATURE_NFC)
+                && getPackageManager().hasSystemFeature(PackageManager.FEATURE_NFC_HOST_CARD_EMULATION)
+                && NfcAdapter.getDefaultAdapter(this) != null;
+    }
+
+    /** Экран NFC-режима: вход выполнен — ждём прикладывания телефона. */
+    private void updateNfcStatus() {
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        boolean hasLogin = prefs.getString(KEY_LOGIN, null) != null;
+        if (hasLogin) {
+            statusText.setText("Приложите телефон к телефону преподавателя");
+            statusText.setVisibility(View.VISIBLE);
+            qrView.setVisibility(View.GONE);
+            loginPanel.setVisibility(View.GONE);
+        } else {
+            loginPanel.setVisibility(View.VISIBLE);
+            statusText.setVisibility(View.GONE);
+        }
     }
 
     @Override
     protected void onStart() {
         super.onStart();
+        if (useNfc) {
+            updateNfcStatus();
+            return; // NFC-режим: сеть не нужна, работает даже с закрытым приложением
+        }
         running = true;
         if (loopThread == null) {
             loopThread = new Thread(this::loop, "Poll");

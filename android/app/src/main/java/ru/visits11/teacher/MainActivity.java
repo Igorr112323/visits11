@@ -9,11 +9,16 @@ import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.graphics.YuvImage;
 import android.hardware.Camera;
+import android.nfc.NfcAdapter;
+import android.nfc.Tag;
+import android.nfc.tech.IsoDep;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
 import android.view.TextureView;
 import android.view.View;
 import android.view.WindowManager;
@@ -24,12 +29,15 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.Locale;
 
@@ -38,7 +46,8 @@ import java.util.Locale;
  * слушает порт 8090 и отдаёт кадры ПК (Visits11 находит телефон сам).
  * Подсказывает включить «USB-модем», когда телефон подключён кабелем.
  */
-public final class MainActivity extends Activity implements TextureView.SurfaceTextureListener {
+public final class MainActivity extends Activity
+        implements TextureView.SurfaceTextureListener, NfcAdapter.ReaderCallback {
 
     private static final int REQUEST_CAMERA = 1;
     private static final int SERVER_PORT = 8090;
@@ -71,6 +80,12 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     private long frameSeq;
     private long lastEncodeAt;
     private volatile long lastClientAt;
+
+    /** Адрес ПК (приходит в заголовке X-Host запросов кадров) — для NFC-отметок. */
+    private volatile String pcAddress = "";
+
+    private static final byte[] NFC_AID = {(byte) 0xF0, 0x39, 0x11, 0x01, 0x02, 0x03, 0x04};
+    private static final Object NFC_LOCK = new Object();
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final Runnable statusTicker = new Runnable() {
@@ -105,6 +120,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     @Override
     protected void onResume() {
         super.onResume();
+        enableNfcReader();
         if (hasCameraPermission()) {
             if (preview.isAvailable()) {
                 startCamera();
@@ -117,6 +133,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     @Override
     protected void onPause() {
         super.onPause();
+        disableNfcReader();
         stopCamera();
     }
 
@@ -243,9 +260,17 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     private void handleClient(Socket client) {
         try {
             client.setSoTimeout(4000);
-            String requestLine = readRequestLine(client.getInputStream());
-            if (requestLine == null) {
+            String headers = readHeaders(client.getInputStream());
+            if (headers == null) {
                 return;
+            }
+            int lineEnd = headers.indexOf("\r\n");
+            String requestLine = lineEnd < 0 ? headers : headers.substring(0, lineEnd);
+
+            // ПК сообщает свой адрес — по нему пересылаем NFC-отметки
+            String hostHeader = extractHeader(headers, "X-Host");
+            if (hostHeader != null && !hostHeader.isEmpty()) {
+                pcAddress = hostHeader;
             }
             lastClientAt = SystemClock.elapsedRealtime();
 
@@ -325,8 +350,8 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         return 0;
     }
 
-    /** Читает заголовки до \r\n\r\n, возвращает первую строку запроса. */
-    private static String readRequestLine(InputStream input) throws IOException {
+    /** Читает заголовки до \r\n\r\n целиком. */
+    private static String readHeaders(InputStream input) throws IOException {
         byte[] head = new byte[4096];
         int len = 0;
         while (true) {
@@ -344,9 +369,20 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
                 break;
             }
         }
-        String text = new String(head, 0, len, StandardCharsets.US_ASCII);
-        int end = text.indexOf("\r\n");
-        return end < 0 ? text : text.substring(0, end);
+        return new String(head, 0, len, StandardCharsets.US_ASCII);
+    }
+
+    private static String extractHeader(String headers, String name) {
+        for (String line : headers.split("\r\n")) {
+            int colon = line.indexOf(':');
+            if (colon <= 0) {
+                continue;
+            }
+            if (line.substring(0, colon).trim().equalsIgnoreCase(name)) {
+                return line.substring(colon + 1).trim();
+            }
+        }
+        return null;
     }
 
     private static void respond(Socket client, String status, String contentType,
@@ -557,6 +593,253 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         params.width = width;
         params.height = height;
         preview.setLayoutParams(params);
+    }
+
+    // ------------------------------------------------------------ NFC-отметки
+
+    private void enableNfcReader() {
+        try {
+            NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
+            if (adapter != null) {
+                adapter.enableReaderMode(this, this,
+                        NfcAdapter.FLAG_READER_NFC_A | NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK, null);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private void disableNfcReader() {
+        try {
+            NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
+            if (adapter != null) {
+                adapter.disableReaderMode(this);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** Студент приложил телефон: обмен по NFC, отметка через ПК, ответ студенту. */
+    @Override
+    public void onTagDiscovered(Tag tag) {
+        IsoDep isoDep = IsoDep.get(tag);
+        if (isoDep == null) {
+            return;
+        }
+        try {
+            synchronized (NFC_LOCK) {
+                isoDep.connect();
+                isoDep.setTimeout(5000);
+
+                // выбор нашего приложения в телефоне студента
+                byte[] select = new byte[5 + NFC_AID.length];
+                select[1] = (byte) 0xA4;
+                select[2] = 0x04;
+                select[4] = (byte) NFC_AID.length;
+                System.arraycopy(NFC_AID, 0, select, 5, NFC_AID.length);
+                if (!apduOk(isoDep.transceive(select))) {
+                    return;
+                }
+
+                // кто ты: логин+пароль (первый раз) или токен сессии
+                byte[] answer = isoDep.transceive(new byte[]{0x00, 0x10, 0x00, 0x00, 0x00});
+                if (!apduOk(answer)) {
+                    return;
+                }
+                byte[] packet = payloadOf(answer);
+                if (packet == null || packet.length < 1) {
+                    return;
+                }
+                int type = packet[0] & 0xFF;
+                String data = new String(packet, 1, packet.length - 1, StandardCharsets.UTF_8);
+
+                NfcReply reply;
+                if (type == 1) {
+                    int split = data.indexOf('\n');
+                    if (split <= 0) {
+                        return;
+                    }
+                    reply = postLogin(data.substring(0, split), data.substring(split + 1));
+                    if (reply.code == REPLY_LOGIN_TOKEN) {
+                        // первое прикладывание отмечает сразу же
+                        postMark(new String(reply.value, StandardCharsets.UTF_8));
+                    }
+                } else if (type == 2) {
+                    reply = postMark(data);
+                } else {
+                    return;
+                }
+
+                byte[] result = new byte[1 + (reply.value == null ? 0 : reply.value.length)];
+                result[0] = (byte) reply.code;
+                if (reply.value != null) {
+                    System.arraycopy(reply.value, 0, result, 1, reply.value.length);
+                }
+                byte[] command = new byte[5 + result.length];
+                command[1] = 0x20;
+                command[4] = (byte) result.length;
+                System.arraycopy(result, 0, command, 5, result.length);
+
+                if (apduOk(isoDep.transceive(command))
+                        && (reply.code == REPLY_LOGIN_TOKEN || reply.code == REPLY_MARKED)) {
+                    vibrate();
+                }
+            }
+        } catch (Throwable ignored) {
+        } finally {
+            try {
+                isoDep.close();
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
+    private static final int REPLY_LOGIN_TOKEN = 0;  // + токен сессии
+    private static final int REPLY_MARKED = 1;       // + имя студента
+    private static final int REPLY_BAD_CREDENTIALS = 2;
+    private static final int REPLY_RELOGIN = 3;      // токен устарел
+    private static final int REPLY_UNAVAILABLE = 4;  // ПК недоступен / перекличка не идёт
+
+    private static final class NfcReply {
+        final int code;
+        final byte[] value;
+
+        NfcReply(int code, String value) {
+            this.code = code;
+            this.value = value == null ? null : value.getBytes(StandardCharsets.UTF_8);
+        }
+    }
+
+    private NfcReply postLogin(String login, String password) {
+        String address = pcAddress;
+        if (address == null || address.isEmpty()) {
+            return new NfcReply(REPLY_UNAVAILABLE, null);
+        }
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) new URL("http://" + address + "/api/login").openConnection();
+            connection.setRequestMethod("POST");
+            connection.setDoOutput(true);
+            connection.setConnectTimeout(2500);
+            connection.setReadTimeout(2500);
+            byte[] body = ("{\"login\":\"" + escape(login)
+                    + "\",\"password\":\"" + escape(password) + "\"}")
+                    .getBytes(StandardCharsets.UTF_8);
+            connection.setFixedLengthStreamingMode(body.length);
+            connection.setRequestProperty("Content-Type", "application/json");
+            OutputStream output = connection.getOutputStream();
+            output.write(body);
+            output.flush();
+            output.close();
+            if (connection.getResponseCode() != 200) {
+                return new NfcReply(REPLY_UNAVAILABLE, null);
+            }
+            String response = readAll(connection.getInputStream(), 8192);
+            if (!response.contains("\"ok\":true")) {
+                return new NfcReply(REPLY_BAD_CREDENTIALS, null);
+            }
+            String token = extractString(response, "token");
+            if (token == null || token.isEmpty()) {
+                return new NfcReply(REPLY_BAD_CREDENTIALS, null);
+            }
+            return new NfcReply(REPLY_LOGIN_TOKEN, token);
+        } catch (IOException e) {
+            return new NfcReply(REPLY_UNAVAILABLE, null);
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private NfcReply postMark(String token) {
+        String address = pcAddress;
+        if (address == null || address.isEmpty()) {
+            return new NfcReply(REPLY_UNAVAILABLE, null);
+        }
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) new URL("http://" + address + "/api/nfc_mark").openConnection();
+            connection.setRequestMethod("POST");
+            connection.setDoOutput(true);
+            connection.setConnectTimeout(2500);
+            connection.setReadTimeout(2500);
+            byte[] body = ("{\"token\":\"" + escape(token) + "\"}").getBytes(StandardCharsets.UTF_8);
+            connection.setFixedLengthStreamingMode(body.length);
+            connection.setRequestProperty("Content-Type", "application/json");
+            OutputStream output = connection.getOutputStream();
+            output.write(body);
+            output.flush();
+            output.close();
+            if (connection.getResponseCode() != 200) {
+                return new NfcReply(REPLY_UNAVAILABLE, null);
+            }
+            String response = readAll(connection.getInputStream(), 8192);
+            if (response.contains("\"ok\":true")) {
+                String name = extractString(response, "name");
+                return new NfcReply(REPLY_MARKED, name == null ? "" : name);
+            }
+            if (response.contains("\"relogin\":true")) {
+                return new NfcReply(REPLY_RELOGIN, null);
+            }
+            return new NfcReply(REPLY_UNAVAILABLE, null);
+        } catch (IOException e) {
+            return new NfcReply(REPLY_UNAVAILABLE, null);
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
+    private static boolean apduOk(byte[] response) {
+        return response != null && response.length >= 2
+                && (response[response.length - 2] & 0xFF) == 0x90
+                && (response[response.length - 1] & 0xFF) == 0x00;
+    }
+
+    private static byte[] payloadOf(byte[] response) {
+        if (response == null || response.length < 2) {
+            return null;
+        }
+        return Arrays.copyOfRange(response, 0, response.length - 2);
+    }
+
+    private static String readAll(InputStream input, int cap) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int read;
+        while (output.size() < cap && (read = input.read(buffer)) > 0) {
+            output.write(buffer, 0, read);
+        }
+        return new String(output.toByteArray(), StandardCharsets.UTF_8);
+    }
+
+    private static String extractString(String json, String key) {
+        String marker = "\"" + key + "\":\"";
+        int start = json.indexOf(marker);
+        if (start < 0) {
+            return null;
+        }
+        start += marker.length();
+        int end = json.indexOf('"', start);
+        if (end < 0) {
+            return null;
+        }
+        return json.substring(start, end);
+    }
+
+    private static String escape(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private void vibrate() {
+        try {
+            Vibrator vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+            if (vibrator != null) {
+                vibrator.vibrate(VibrationEffect.createOneShot(120, VibrationEffect.DEFAULT_AMPLITUDE));
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     // ------------------------------------------------------------ утилиты

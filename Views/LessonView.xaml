@@ -108,35 +108,6 @@
                                HorizontalAlignment="Center" Margin="0,6,0,0" />
                 </StackPanel>
 
-                <!-- QR-код для отметки студентов (во время переклички) -->
-                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <StackPanel.Style>
-                        <Style TargetType="StackPanel">
-                            <Setter Property="Visibility" Value="Collapsed" />
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding RollcallState}" Value="Active">
-                                    <Setter Property="Visibility" Value="Visible" />
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </StackPanel.Style>
-                    <Border CornerRadius="16" Background="#F2FFFFFF" Padding="10"
-                            Effect="{StaticResource Effect.ShadowLg}">
-                        <Image Source="{Binding QrImage}" Width="172" Height="172"
-                               RenderOptions.BitmapScalingMode="NearestNeighbor" />
-                    </Border>
-                    <TextBlock Text="Студенты: покажите QR-код из приложения"
-                               TextAlignment="Center" FontSize="13"
-                               FontFamily="{StaticResource Font.SemiBold}"
-                               Foreground="{DynamicResource Brush.Camera.Text}"
-                               Margin="0,14,0,0" />
-                    <TextBlock Text="{Binding QrUrl}"
-                               TextAlignment="Center" FontSize="11"
-                               FontFamily="{StaticResource Font.Mono}"
-                               Foreground="{DynamicResource Brush.Camera.TextDim}"
-                               Margin="0,4,0,0" />
-                </StackPanel>
-
                 <!-- рамка сканирования -->
                 <Grid x:Name="ScanFrame" Margin="34">
                     <Grid.Style>
