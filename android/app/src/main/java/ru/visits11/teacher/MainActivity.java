@@ -2,6 +2,7 @@ package ru.visits11.teacher;
 
 import android.Manifest;
 import android.app.Activity;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
@@ -11,55 +12,74 @@ import android.hardware.Camera;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.view.TextureView;
 import android.view.View;
 import android.view.WindowManager;
-import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.Toast;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-
-import java.util.concurrent.atomic.AtomicReference;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
+import java.util.Enumeration;
+import java.util.Locale;
 
 /**
- * Камера преподавателя: показывает превью и шлёт кадры (JPEG) на ПК
- * в приложение Visits11: POST http://адрес/api/frame?rot=N
+ * Камера преподавателя. Сам ничего не настраивает и не вводит:
+ * слушает порт 8090 и отдаёт кадры ПК (Visits11 находит телефон сам).
+ * Подсказывает включить «USB-модем», когда телефон подключён кабелем.
  */
 public final class MainActivity extends Activity implements TextureView.SurfaceTextureListener {
 
-    private static final String PREFS = "visits11";
-    private static final String KEY_ADDRESS = "address";
     private static final int REQUEST_CAMERA = 1;
+    private static final int SERVER_PORT = 8090;
+    private static final long FRAME_WAIT_MS = 800;   // long-poll на /frame
+    private static final long PC_TIMEOUT_MS = 3000;  // точка гаснет, если ПК давно не спрашивал
+    private static final long ENCODE_INTERVAL_MS = 100; // не чаще ~10 кадров/с
 
     private TextureView preview;
     private View dot;
-    private View setupPanel;
-    private EditText addressInput;
+    private View promptPanel;
 
     private volatile SurfaceTexture surface;
-    private volatile String serverBase = "";
     private volatile int frameRotation = 90;
-    private volatile boolean connected;
+    private int previewWidth;
+    private int previewHeight;
 
     private Camera camera;
     private int cameraId;
-    private int previewWidth;
-    private int previewHeight;
     private HandlerThread cameraThread;
     private Handler cameraHandler;
     private boolean cameraStarted;
 
-    private volatile boolean senderRunning;
-    private Thread senderThread;
+    private ServerSocket serverSocket;
+    private volatile boolean serverRunning;
+    private Thread serverThread;
 
-    /** последний сжатый кадр, ждёт отправки (отправляется только свежий) */
-    private final AtomicReference<byte[]> pendingFrame = new AtomicReference<>();
+    /** последний готовый JPEG + счётчик кадров */
+    private final Object frameLock = new Object();
+    private byte[] latestJpeg;
+    private long frameSeq;
+    private long lastEncodeAt;
+    private volatile long lastClientAt;
+
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private final Runnable statusTicker = new Runnable() {
+        @Override
+        public void run() {
+            updateStatus();
+            ui.postDelayed(this, 500);
+        }
+    };
 
     // ------------------------------------------------------------ жизненный цикл
 
@@ -71,20 +91,15 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
 
         preview = findViewById(R.id.preview);
         dot = findViewById(R.id.dot);
-        setupPanel = findViewById(R.id.setupPanel);
-        addressInput = findViewById(R.id.addressInput);
-        Button connectButton = findViewById(R.id.connectButton);
+        promptPanel = findViewById(R.id.promptPanel);
+        Button tetherButton = findViewById(R.id.tetherButton);
 
         preview.setSurfaceTextureListener(this);
-        dot.setOnClickListener(v -> setupPanel.setVisibility(View.VISIBLE));
-        connectButton.setOnClickListener(v -> connect());
+        dot.setOnClickListener(v -> openTetherSettings());
+        tetherButton.setOnClickListener(v -> openTetherSettings());
 
-        String saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_ADDRESS, null);
-        if (saved != null && !saved.isEmpty()) {
-            serverBase = saved;
-        } else {
-            setupPanel.setVisibility(View.VISIBLE);
-        }
+        startServer();
+        ui.post(statusTicker);
     }
 
     @Override
@@ -97,14 +112,20 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         } else {
             requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA);
         }
-        startSender();
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        stopSender();
         stopCamera();
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        ui.removeCallbacks(statusTicker);
+        serverRunning = false;
+        closeQuietly(serverSocket);
     }
 
     @Override
@@ -125,105 +146,202 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         return checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
     }
 
-    // ------------------------------------------------------------ подключение
+    // ------------------------------------------------------------ индикатор и подсказка
 
-    private void connect() {
-        String addr = addressInput.getText().toString().trim();
-        if (addr.isEmpty()) {
-            toast("Введите адрес ПК");
-            return;
-        }
-        if (!addr.startsWith("http://") && !addr.startsWith("https://")) {
-            addr = "http://" + addr;
-        }
-        while (addr.endsWith("/")) {
-            addr = addr.substring(0, addr.length() - 1);
-        }
-        serverBase = addr;
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(KEY_ADDRESS, addr).apply();
-
-        setupPanel.setVisibility(View.GONE);
-        InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-        if (imm != null) {
-            imm.hideSoftInputFromWindow(addressInput.getWindowToken(), 0);
-        }
-        startSender();
+    private void updateStatus() {
+        boolean pcConnected = serverRunning
+                && SystemClock.elapsedRealtime() - lastClientAt < PC_TIMEOUT_MS;
+        dot.setBackgroundResource(pcConnected ? R.drawable.dot_green : R.drawable.dot_red);
+        promptPanel.setVisibility(pcConnected || isUsbTethered() ? View.GONE : View.VISIBLE);
     }
 
-    private void startSender() {
-        if (serverBase.isEmpty() || senderRunning) {
-            return;
-        }
-        senderRunning = true;
-        senderThread = new Thread(this::senderLoop, "Sender");
-        senderThread.start();
-    }
-
-    private void stopSender() {
-        senderRunning = false;
-        Thread thread = senderThread;
-        senderThread = null;
-        if (thread != null) {
-            thread.interrupt();
+    /** Открыть экран настроек USB-модема (одна кнопка — больше ничего не нужно). */
+    private void openTetherSettings() {
+        try {
+            startActivity(new Intent("android.settings.TETHER_SETTINGS"));
+        } catch (Exception e) {
             try {
-                thread.join(1000);
-            } catch (InterruptedException ignored) {
-                Thread.currentThread().interrupt();
+                startActivity(new Intent("android.settings.WIRELESS_SETTINGS"));
+            } catch (Exception ignored) {
+                toast("Откройте «USB-модем» в настройках");
             }
         }
     }
 
-    /** Отправляет свежие кадры; при сбое сети — пауза и повтор. */
-    private void senderLoop() {
-        while (senderRunning && !Thread.currentThread().isInterrupted()) {
-            byte[] frame = pendingFrame.getAndSet(null);
-            if (frame == null) {
-                sleepMs(50);
-                continue;
-            }
-            boolean ok = sendFrame(frame);
-            if (ok != connected) {
-                connected = ok;
-                runOnUiThread(() -> dot.setBackgroundResource(
-                        ok ? R.drawable.dot_green : R.drawable.dot_red));
-            }
-            if (!ok) {
-                sleepMs(1500);
-            }
-        }
-    }
-
-    private boolean sendFrame(byte[] jpeg) {
-        HttpURLConnection connection = null;
+    /** Появилась ли сеть USB-модема (usb0/rndis0). */
+    private boolean isUsbTethered() {
         try {
-            connection = (HttpURLConnection) new URL(
-                    serverBase + "/api/frame?rot=" + frameRotation).openConnection();
-            connection.setRequestMethod("POST");
-            connection.setDoOutput(true);
-            connection.setConnectTimeout(3000);
-            connection.setReadTimeout(3000);
-            connection.setFixedLengthStreamingMode(jpeg.length);
-            connection.setRequestProperty("Content-Type", "image/jpeg");
-            OutputStream output = connection.getOutputStream();
-            output.write(jpeg);
-            output.flush();
-            output.close();
-            int code = connection.getResponseCode();
-            return code >= 200 && code < 300;
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                NetworkInterface nic = interfaces.nextElement();
+                String name = nic.getName().toLowerCase(Locale.ROOT);
+                if (!name.contains("usb") && !name.contains("rndis")) continue;
+                if (!nic.isUp()) continue;
+                Enumeration<InetAddress> addresses = nic.getInetAddresses();
+                while (addresses.hasMoreElements()) {
+                    InetAddress address = addresses.nextElement();
+                    if (address instanceof Inet4Address && !address.isLoopbackAddress()) {
+                        return true;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    // ------------------------------------------------------------ HTTP-сервер кадров
+
+    private void startServer() {
+        if (serverRunning) {
+            return;
+        }
+        serverRunning = true;
+        serverThread = new Thread(this::serverLoop, "FrameServer");
+        serverThread.start();
+    }
+
+    private void serverLoop() {
+        try {
+            serverSocket = new ServerSocket(SERVER_PORT);
         } catch (IOException e) {
-            return false;
-        } finally {
-            if (connection != null) {
-                connection.disconnect();
+            serverRunning = false;
+            toast("Не удалось занять порт 8090");
+            return;
+        }
+        while (serverRunning) {
+            try {
+                Socket client = serverSocket.accept();
+                new Thread(() -> handleClient(client), "Http").start();
+            } catch (IOException e) {
+                break;
             }
         }
     }
 
-    private static void sleepMs(long ms) {
+    private void handleClient(Socket client) {
         try {
-            Thread.sleep(ms);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
+            client.setSoTimeout(4000);
+            String requestLine = readRequestLine(client.getInputStream());
+            if (requestLine == null) {
+                return;
+            }
+            lastClientAt = SystemClock.elapsedRealtime();
+
+            // "GET /frame?since=0 HTTP/1.1"
+            String[] parts = requestLine.split(" ");
+            if (parts.length < 2) {
+                return;
+            }
+            String method = parts[0];
+            String target = parts[1];
+            String path = target;
+            String query = "";
+            int queryAt = target.indexOf('?');
+            if (queryAt >= 0) {
+                path = target.substring(0, queryAt);
+                query = target.substring(queryAt + 1);
+            }
+
+            if ("/info".equals(path)) {
+                respond(client, "200 OK", "application/json",
+                        "{\"app\":\"visits11-camera\"}".getBytes(StandardCharsets.US_ASCII), 0, 0);
+            } else if ("/frame".equals(path) && "GET".equals(method)) {
+                serveFrame(client, query);
+            } else {
+                respond(client, "404 Not Found", "text/plain",
+                        new byte[0], 0, 0);
+            }
+        } catch (Throwable ignored) {
+        } finally {
+            closeQuietly(client);
+        }
+    }
+
+    /** Отдаёт новый кадр (или ждёт его до FRAME_WAIT_MS); нет кадра — 204. */
+    private void serveFrame(Socket client, String query) {
+        long since = parseSince(query);
+
+        byte[] jpeg = null;
+        long seq = 0;
+        long deadline = SystemClock.elapsedRealtime() + FRAME_WAIT_MS;
+        synchronized (frameLock) {
+            while (frameSeq == since) {
+                long left = deadline - SystemClock.elapsedRealtime();
+                if (left <= 0) {
+                    break;
+                }
+                try {
+                    frameLock.wait(left);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+            if (frameSeq != since) {
+                jpeg = latestJpeg;
+                seq = frameSeq;
+            }
+        }
+
+        if (jpeg == null) {
+            respond(client, "204 No Content", "text/plain", new byte[0], 0, 0);
+        } else {
+            respond(client, "200 OK", "image/jpeg", jpeg, seq, frameRotation);
+        }
+    }
+
+    private static long parseSince(String query) {
+        for (String pair : query.split("&")) {
+            int eq = pair.indexOf('=');
+            if (eq > 0 && "since".equals(pair.substring(0, eq))) {
+                try {
+                    return Long.parseLong(pair.substring(eq + 1));
+                } catch (NumberFormatException ignored) {
+                }
+            }
+        }
+        return 0;
+    }
+
+    /** Читает заголовки до \r\n\r\n, возвращает первую строку запроса. */
+    private static String readRequestLine(InputStream input) throws IOException {
+        byte[] head = new byte[4096];
+        int len = 0;
+        while (true) {
+            if (len >= head.length) {
+                return null;
+            }
+            int b = input.read();
+            if (b < 0) {
+                return null;
+            }
+            head[len++] = (byte) b;
+            if (len >= 4
+                    && head[len - 1] == '\n' && head[len - 2] == '\r'
+                    && head[len - 3] == '\n' && head[len - 4] == '\r') {
+                break;
+            }
+        }
+        String text = new String(head, 0, len, StandardCharsets.US_ASCII);
+        int end = text.indexOf("\r\n");
+        return end < 0 ? text : text.substring(0, end);
+    }
+
+    private static void respond(Socket client, String status, String contentType,
+                                byte[] body, long seq, int rotation) {
+        try {
+            OutputStream output = client.getOutputStream();
+            String head = "HTTP/1.1 " + status + "\r\n"
+                    + "Content-Type: " + contentType + "\r\n"
+                    + "Content-Length: " + body.length + "\r\n"
+                    + (seq > 0 ? "X-Seq: " + seq + "\r\n" : "")
+                    + (rotation > 0 ? "X-Rot: " + rotation + "\r\n" : "")
+                    + "Connection: close\r\n\r\n";
+            output.write(head.getBytes(StandardCharsets.US_ASCII));
+            output.write(body);
+            output.flush();
+        } catch (IOException ignored) {
         }
     }
 
@@ -317,14 +435,21 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         }
     }
 
-    /** Сжатие кадра в JPEG; если предыдущий ещё не отправлен — кадр пропускаем. */
+    /** Камера отдает NV21 → сжимаем в JPEG (не чаще 10 раз/с), ПК заберёт свежий. */
     private void onPreviewFrame(byte[] data, Camera c) {
-        if (pendingFrame.get() == null && previewWidth > 0) {
+        long now = SystemClock.elapsedRealtime();
+        if (now - lastEncodeAt >= ENCODE_INTERVAL_MS && previewWidth > 0) {
+            lastEncodeAt = now;
             try {
                 YuvImage yuv = new YuvImage(data, ImageFormat.NV21, previewWidth, previewHeight, null);
                 ByteArrayOutputStream out = new ByteArrayOutputStream(48 * 1024);
                 yuv.compressToJpeg(new Rect(0, 0, previewWidth, previewHeight), 70, out);
-                pendingFrame.set(out.toByteArray());
+                byte[] jpeg = out.toByteArray();
+                synchronized (frameLock) {
+                    latestJpeg = jpeg;
+                    frameSeq++;
+                    frameLock.notifyAll();
+                }
             } catch (Throwable ignored) {
             }
         }
@@ -350,7 +475,6 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
             cameraThread = null;
             cameraHandler = null;
         }
-        pendingFrame.set(null);
     }
 
     private static void releaseCameraQuietly(Camera camera) {
@@ -415,5 +539,15 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
 
     private void toast(String message) {
         runOnUiThread(() -> Toast.makeText(this, message, Toast.LENGTH_SHORT).show());
+    }
+
+    private static void closeQuietly(java.io.Closeable closeable) {
+        if (closeable == null) {
+            return;
+        }
+        try {
+            closeable.close();
+        } catch (IOException ignored) {
+        }
     }
 }

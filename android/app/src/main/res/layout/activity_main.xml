@@ -10,7 +10,7 @@
         android:layout_height="match_parent"
         android:layout_gravity="center" />
 
-    <!-- индикатор соединения: клик — снова показать панель подключения -->
+    <!-- индикатор связи с ПК: клик — открыть настройки USB-модема -->
     <View
         android:id="@+id/dot"
         android:layout_width="16dp"
@@ -20,9 +20,9 @@
         android:layout_marginEnd="22dp"
         android:background="@drawable/dot_red" />
 
-    <!-- панель подключения (показывается при запуске и по клику на точку) -->
+    <!-- подсказка: показывается, пока не включён USB-модем и ПК не подключился -->
     <LinearLayout
-        android:id="@+id/setupPanel"
+        android:id="@+id/promptPanel"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
@@ -34,28 +34,22 @@
         android:paddingBottom="24dp"
         android:visibility="gone">
 
-        <EditText
-            android:id="@+id/addressInput"
-            android:layout_width="260dp"
+        <TextView
+            android:layout_width="280dp"
             android:layout_height="wrap_content"
-            android:background="@drawable/input_bg"
-            android:hint="192.168.1.5:8090"
-            android:textColorHint="@color/textDim"
-            android:inputType="text"
-            android:imeOptions="actionDone"
-            android:maxLines="1"
-            android:padding="14dp"
-            android:textSize="15sp"
-            android:textColor="@color/text" />
+            android:gravity="center"
+            android:text="Подключите телефон кабелем к ПК и включите «USB-модем»"
+            android:textColor="@color/text"
+            android:textSize="15sp" />
 
         <Button
-            android:id="@+id/connectButton"
+            android:id="@+id/tetherButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="14dp"
+            android:layout_marginTop="16dp"
             android:background="@drawable/button_bg"
             android:stateListAnimator="@null"
-            android:text="Подключиться"
+            android:text="Включить USB-модем"
             android:textAllCaps="false"
             android:textColor="#FFFFFF"
             android:textSize="15sp" />

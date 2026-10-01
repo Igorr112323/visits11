@@ -12,6 +12,7 @@ public partial class App : Application
     public static ThemeService Theme { get; private set; } = null!;
     public static ToastService Toasts { get; private set; } = null!;
     public static PhoneServer Server { get; private set; } = null!;
+    public static CameraLink Camera { get; private set; } = null!;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -30,19 +31,23 @@ public partial class App : Application
         Server = new PhoneServer();
         Server.Start();
 
+        Camera = new CameraLink();
+        Camera.Start();
+
         DispatcherUnhandledException += (_, args) =>
         {
             MessageBox.Show(args.Exception.Message, "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
             args.Handled = true;
         };
 
-        var viewModel = new MainViewModel(Db, Toasts, Theme, new AuthService(), new WordService(), Server);
+        var viewModel = new MainViewModel(Db, Toasts, Theme, new AuthService(), new WordService(), Server, Camera);
         var window = new MainWindow(viewModel);
         window.Show();
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        Camera.Dispose();
         Server.Dispose();
         base.OnExit(e);
     }

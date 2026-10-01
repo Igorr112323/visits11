@@ -48,16 +48,18 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
     private readonly DatabaseService _database;
     private readonly ToastService _toasts;
     private readonly PhoneServer _server;
+    private readonly CameraLink _camera;
 
     private DispatcherTimer? _resetTimer;
     private readonly DispatcherTimer _streamWatchdog;
     private string _lessonStartedAt = string.Empty;
 
-    public LessonViewModel(DatabaseService database, ToastService toasts, PhoneServer server)
+    public LessonViewModel(DatabaseService database, ToastService toasts, PhoneServer server, CameraLink camera)
     {
         _database = database;
         _toasts = toasts;
         _server = server;
+        _camera = camera;
 
         StartStopCommand = new RelayCommand(_ => StartOrStop(), _ => RollcallState != StateFinished);
         _database.DataChanged += OnDataChanged;
@@ -77,7 +79,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
             .ToList();
         _server.MarkStudent = MarkStudentInternal;
         _server.CheckInByPhone = CheckInByPhoneInternal;
-        _server.FrameReceived += OnFrame;
+        _camera.FrameReceived += OnFrame;
 
         ReloadGroups();
     }

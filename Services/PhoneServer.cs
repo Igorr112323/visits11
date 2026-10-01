@@ -16,7 +16,6 @@ public sealed record MarkResult(bool Ok, string? Name = null, string? PhoneId = 
 
 /// <summary>
 /// Встроенный сервер (порт 8090–8099):
-///  • POST /api/frame?rot=N — кадры камеры с телефона преподавателя (JPEG);
 ///  • GET / — страница отметки для студентов (по QR-коду);
 ///  • GET /api/checkin?phone=ID — автоматическая отметка по сохранённому ID телефона;
 ///  • GET /api/mark?student=ID — отметка выбранного студента (генерирует ID телефона).
@@ -28,8 +27,7 @@ public sealed class PhoneServer : IDisposable
 
     public int Port { get; private set; }
     public bool IsRunning { get; private set; }
-    public string LanAddress { get; private set; } = "127.0.0.1";
-    public string Url => $"http://{LanAddress}:{Port}/";
+    public string Url => $"http://{DetectLanAddress()}:{Port}/";
 
     /// <summary>Поставщики данных и обработчики отметок (вызываются в потоке UI).</summary>
     public Func<bool> IsRollcallActive { get; set; } = () => false;
@@ -38,14 +36,10 @@ public sealed class PhoneServer : IDisposable
     public Func<int, MarkResult> MarkStudent { get; set; } = _ => MarkResult.Fail;
     public Func<string, MarkResult> CheckInByPhone { get; set; } = _ => MarkResult.Fail;
 
-    /// <summary>Кадр видео с телефона (JPEG, rotation). Вызывается в потоке UI.</summary>
-    public event Action<byte[], int>? FrameReceived;
-
     public void Start()
     {
         if (IsRunning) return;
 
-        LanAddress = DetectLanAddress();
         for (var port = 8090; port <= 8099; port++)
         {
             try
@@ -118,15 +112,6 @@ public sealed class PhoneServer : IDisposable
 
                 switch (request.Path)
                 {
-                    case "/api/frame":
-                        Respond(stream, "204 No Content", "text/plain", Array.Empty<byte>());
-                        if (request.Body is { Length: > 0 } jpeg)
-                        {
-                            var rotation = ParseRotation(request.Query);
-                            RaiseFrame(jpeg, rotation);
-                        }
-                        break;
-
                     case "/api/checkin":
                     {
                         var phone = GetQueryParam(request.Query, "phone");
@@ -278,12 +263,6 @@ public sealed class PhoneServer : IDisposable
         return string.Empty;
     }
 
-    private static int ParseRotation(string query)
-    {
-        var raw = GetQueryParam(query, "rot");
-        return int.TryParse(raw, out var value) ? ((value % 360) + 360) % 360 : 0;
-    }
-
     // ------------------------------------------------------------- ответы
 
     private static void Respond(NetworkStream stream, string status, string contentType, byte[] body)
@@ -371,13 +350,6 @@ p{color:#9099b8;font-size:13px;margin-top:6px}
 
     // ------------------------------------------------------------- утилиты
 
-    private void RaiseFrame(byte[] jpeg, int rotation)
-    {
-        var dispatcher = Application.Current?.Dispatcher;
-        if (dispatcher is null) return;
-        dispatcher.BeginInvoke(() => FrameReceived?.Invoke(jpeg, rotation));
-    }
-
     private static T OnUi<T>(Func<T> func)
     {
         var dispatcher = Application.Current?.Dispatcher;
@@ -389,14 +361,22 @@ p{color:#9099b8;font-size:13px;margin-top:6px}
     {
         try
         {
+            // Wi-Fi в приоритете: студенты чаще всего в беспроводной сети
             var addresses = NetworkInterface.GetAllNetworkInterfaces()
                 .Where(n => n.OperationalStatus == OperationalStatus.Up)
                 .Where(n => n.NetworkInterfaceType is NetworkInterfaceType.Ethernet
                             or NetworkInterfaceType.Wireless80211)
+                // USB-модем телефона не подходит: студенты до него не достучатся
+                .Where(n => !n.Description.Contains("RNDIS", StringComparison.OrdinalIgnoreCase)
+                            && !n.Description.Contains("Remote NDIS", StringComparison.OrdinalIgnoreCase)
+                            && !n.Description.Contains("NCM", StringComparison.OrdinalIgnoreCase)
+                            && !n.Description.Contains("USB", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(n => n.NetworkInterfaceType == NetworkInterfaceType.Wireless80211 ? 0 : 1)
                 .SelectMany(n => n.GetIPProperties().UnicastAddresses)
                 .Where(a => a.Address.AddressFamily == AddressFamily.InterNetwork
                             && !IPAddress.IsLoopback(a.Address))
                 .Select(a => a.Address.ToString())
+                .Where(ip => !ip.StartsWith("192.168.42.") && !ip.StartsWith("192.168.44."))
                 .ToList();
             return addresses.FirstOrDefault() ?? "127.0.0.1";
         }
