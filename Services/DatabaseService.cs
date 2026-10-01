@@ -71,6 +71,11 @@ public sealed class DatabaseService
               FOREIGN KEY (LessonId) REFERENCES Lessons(Id) ON DELETE CASCADE,
               FOREIGN KEY (StudentId) REFERENCES Students(Id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS Sessions (
+              Token TEXT PRIMARY KEY,
+              StudentId INTEGER NOT NULL
+            );
             """;
         command.ExecuteNonQuery();
 
@@ -105,6 +110,42 @@ public sealed class DatabaseService
         command.CommandText = "UPDATE Students SET DeviceId = @device WHERE Id = @id";
         command.Parameters.AddWithValue("@device", deviceId);
         command.Parameters.AddWithValue("@id", studentId);
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>Студент, к чьему аккаунту привязано устройство; null — устройство неизвестно.</summary>
+    public int? FindStudentIdByDevice(string device)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Id FROM Students WHERE DeviceId = @device LIMIT 1";
+        command.Parameters.AddWithValue("@device", device);
+        return command.ExecuteScalar() is long value ? (int)value : null;
+    }
+
+    /// <summary>Токены сессий студентов — переживают перезапуск приложения.</summary>
+    public Dictionary<string, int> LoadSessions()
+    {
+        var result = new Dictionary<string, int>();
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Token, StudentId FROM Sessions";
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            result[reader.GetString(0)] = reader.GetInt32(1);
+        }
+        return result;
+    }
+
+    /// <summary>Сохраняет выданный токен сессии.</summary>
+    public void SaveSession(string token, int studentId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "INSERT OR REPLACE INTO Sessions (Token, StudentId) VALUES (@token, @studentId)";
+        command.Parameters.AddWithValue("@token", token);
+        command.Parameters.AddWithValue("@studentId", studentId);
         command.ExecuteNonQuery();
     }
 
@@ -191,7 +232,7 @@ public sealed class DatabaseService
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Id, GroupId, FullName, Login, Password, PhoneId FROM Students WHERE Login = @login LIMIT 1";
+        command.CommandText = "SELECT Id, GroupId, FullName, Login, Password, PhoneId FROM Students WHERE Login = @login COLLATE NOCASE LIMIT 1";
         command.Parameters.AddWithValue("@login", login);
         using var reader = command.ExecuteReader();
         if (!reader.Read()) return null;
@@ -210,7 +251,7 @@ public sealed class DatabaseService
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT COUNT(*) FROM Students WHERE Login = @login";
+        command.CommandText = "SELECT COUNT(*) FROM Students WHERE Login = @login COLLATE NOCASE";
         command.Parameters.AddWithValue("@login", login);        return Convert.ToInt64(command.ExecuteScalar()) > 0;
     }
 

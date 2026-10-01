@@ -41,6 +41,18 @@ public sealed class PhoneServer : IDisposable
     /// <summary>PNG текущего QR студента; null — перекличка не активна.</summary>
     public Func<int, byte[]?> GetQrPng { get; set; } = _ => null;
 
+    /// <summary>Студент по привязанному устройству (в потоке UI); null — устройство неизвестно.</summary>
+    public Func<string, int?> FindStudentByDevice { get; set; } = _ => null;
+
+    /// <summary>Выдан токен сессии — сохранить, чтобы перезапуск ПК не разлогинивал студентов.</summary>
+    public Action<string, int>? TokenIssued { get; set; }
+
+    /// <summary>NFC-касаание: вход не прошёл — показать преподавателю (в потоке UI).</summary>
+    public Action<string>? NfcLoginFailed { get; set; }
+
+    /// <summary>NFC-касаание: отметка не прошла — показать преподавателю (в потоке UI).</summary>
+    public Action? NfcMarkFailed { get; set; }
+
     public void Start()
     {
         if (IsRunning) return;
@@ -188,8 +200,7 @@ public sealed class PhoneServer : IDisposable
         var result = OnUi(() => Login(login, password, device));
         if (result.Ok)
         {
-            var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
-            _sessions[token] = result.StudentId;
+            var token = IssueToken(result.StudentId);
             RespondJson(stream, new Dictionary<string, object?>
             {
                 ["ok"] = true,
@@ -425,6 +436,24 @@ h1{font-size:16px;font-weight:700}
 p{color:#9099b8;font-size:13px;margin-top:6px}
 </style></head><body><div class='card'><h1>Отметка посещаемости</h1><p>Установите приложение «Visits11 Студент» и войдите по логину и паролю.</p></div></body></html>";
 
+    /// <summary>Токены из базы: студенты остаются «вошедшими» и после перезапуска ПК.</summary>
+    public void LoadSessions(IEnumerable<KeyValuePair<string, int>> sessions)
+    {
+        foreach (var (storedToken, studentId) in sessions)
+        {
+            _sessions[storedToken] = studentId;
+        }
+    }
+
+    /// <summary>Выдаёт новый токен сессии и сообщает о нём для сохранения.</summary>
+    private string IssueToken(int studentId)
+    {
+        var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
+        _sessions[token] = studentId;
+        TokenIssued?.Invoke(token, studentId);
+        return token;
+    }
+
     /// <summary>
     /// Обработка NFC-запроса, который ПК сам забрал с телефона преподавателя
     /// (исходящее соединение — брандмауэр Windows не мешает).
@@ -435,6 +464,7 @@ p{color:#9099b8;font-size:13px;margin-top:6px}
     public string Relay(string json)
     {
         int type = 0;
+        long id = 0;
         string login = "", password = "", token = "", device = "";
         try
         {
@@ -465,6 +495,11 @@ p{color:#9099b8;font-size:13px;margin-top:6px}
             {
                 device = deviceValue.GetString() ?? "";
             }
+            if (root.TryGetProperty("id", out var idValue) &&
+                idValue.ValueKind == JsonValueKind.Number)
+            {
+                id = idValue.GetInt64();
+            }
         }
         catch (JsonException)
         {
@@ -474,35 +509,70 @@ p{color:#9099b8;font-size:13px;margin-top:6px}
         if (type == 1)
         {
             var loginResult = OnUi(() => Login(login, password, device));
-            if (loginResult.DeviceBlocked) return RelayJson(5, string.Empty);
-            if (!loginResult.Ok) return RelayJson(2, string.Empty);
+            if (loginResult.DeviceBlocked) return RelayJson(5, string.Empty, id);
+            if (!loginResult.Ok)
+            {
+                OnUi(() => { NfcLoginFailed?.Invoke(login); return true; });
+                return RelayJson(2, string.Empty, id);
+            }
 
-            var sessionToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
-            _sessions[sessionToken] = loginResult.StudentId;
-
-            // первое касание отмечает сразу же
-            OnUi(() => MarkStudent(loginResult.StudentId, device));
-            return RelayJson(0, sessionToken);
+            // первое касание отмечает сразу же; если перекличка не идёт или
+            // студент не из этой группы — честно отвечаем «не получилось»,
+            // а не «вы отмечены»
+            var mark = OnUi(() => MarkStudent(loginResult.StudentId, device));
+            if (mark.DeviceBlocked) return RelayJson(5, string.Empty, id);
+            if (!mark.Ok)
+            {
+                OnUi(() => { NfcMarkFailed?.Invoke(); return true; });
+                return RelayJson(4, string.Empty, id);
+            }
+            return RelayJson(0, IssueToken(loginResult.StudentId), id);
         }
 
         if (type == 2)
         {
-            if (token.Length == 0 || !_sessions.TryGetValue(token, out var studentId))
+            if (token.Length > 0 && _sessions.TryGetValue(token, out var studentId))
             {
-                return RelayJson(3, string.Empty);
+                var mark = OnUi(() => MarkStudent(studentId, device));
+                if (!mark.DeviceBlocked)
+                {
+                    if (!mark.Ok) OnUi(() => { NfcMarkFailed?.Invoke(); return true; });
+                    return mark.Ok ? RelayJson(1, mark.Name, id) : RelayJson(4, string.Empty, id);
+                }
+                // токен чужой — кто студент, подскажет привязанный телефон
             }
-            var mark = OnUi(() => MarkStudent(studentId, device));
-            if (mark.DeviceBlocked) return RelayJson(5, string.Empty);
-            return mark.Ok ? RelayJson(1, mark.Name) : RelayJson(4, string.Empty);
+
+            // токен ПК незнаком (например, ПК перезапускали или меняли базу),
+            // но телефон уже привязан к студенту — этим же касанием выдаём
+            // свежий токен и отмечаем
+            if (device.Length > 0)
+            {
+                var bound = OnUi(() => FindStudentByDevice(device));
+                if (bound is int renewId)
+                {
+                    var mark = OnUi(() => MarkStudent(renewId, device));
+                    if (mark.DeviceBlocked) return RelayJson(5, string.Empty, id);
+                    if (!mark.Ok)
+                    {
+                        OnUi(() => { NfcMarkFailed?.Invoke(); return true; });
+                        return RelayJson(4, string.Empty, id);
+                    }
+                    return RelayJson(0, IssueToken(renewId), id);
+                }
+            }
+
+            return RelayJson(3, string.Empty, id);
         }
 
         return RelayJson(4, string.Empty);
     }
 
-    private static string RelayJson(int code, string value)
+    private static string RelayJson(int code, string value, long id = 0)
     {
         var escaped = value.Replace("\\", "\\\\").Replace("\"", "\\\"");
-        return $"{{\"code\":{code},\"value\":\"{escaped}\"}}";
+        return id > 0
+            ? $"{{\"code\":{code},\"value\":\"{escaped}\",\"id\":{id}}}"
+            : $"{{\"code\":{code},\"value\":\"{escaped}\"}}";
     }
 
     // ------------------------------------------------------------- утилиты

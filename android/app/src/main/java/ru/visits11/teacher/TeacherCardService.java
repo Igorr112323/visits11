@@ -7,6 +7,7 @@ import android.os.Vibrator;
 
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.TimeUnit;
 
@@ -26,6 +27,9 @@ public final class TeacherCardService extends HostApduService {
 
     /** Касания обрабатываются по одному. */
     static final Object TAP_LOCK = new Object();
+
+    /** Номера запросов: ответ опоздавшего касания не достанется следующему. */
+    private static final AtomicLong SEQ = new AtomicLong();
 
     private static final byte[] NFC_AID = {(byte) 0xF0, 0x39, 0x11, 0x01, 0x02, 0x03, 0x04};
 
@@ -80,14 +84,31 @@ public final class TeacherCardService extends HostApduService {
             }
 
             synchronized (TAP_LOCK) {
-                // отдаём запрос ПК и ждём ответ прямо в момент касания
-                requests.add(request);
-                String result;
-                try {
-                    result = resultBox.poll(4, TimeUnit.SECONDS);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    result = null;
+                // отдаём запрос ПК и ждём ответ прямо в момент касания;
+                // чужие (опоздавшие) ответы пропускаем — ждём именно свой
+                long id = SEQ.incrementAndGet();
+                requests.add("{\"id\":" + id + "," + request.substring(1));
+                String result = null;
+                long deadline = System.nanoTime() + 4_000_000_000L;
+                while (true) {
+                    long remain = deadline - System.nanoTime();
+                    if (remain <= 0) {
+                        break;
+                    }
+                    String candidate;
+                    try {
+                        candidate = resultBox.poll(remain, TimeUnit.NANOSECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                    if (candidate == null) {
+                        break;
+                    }
+                    if (idOf(candidate) == id) {
+                        result = candidate;
+                        break;
+                    }
                 }
                 if (result == null) {
                     return ok(new byte[]{REPLY_UNAVAILABLE});
@@ -111,6 +132,24 @@ public final class TeacherCardService extends HostApduService {
 
     @Override
     public void onDeactivated(int reason) {
+    }
+
+    /** Номер запроса в ответе ПК (0 — нет). */
+    private static long idOf(String json) {
+        try {
+            int at = json.indexOf("\"id\":");
+            if (at < 0) {
+                return 0;
+            }
+            at += 5;
+            int end = at;
+            while (end < json.length() && Character.isDigit(json.charAt(end))) {
+                end++;
+            }
+            return Long.parseLong(json.substring(at, end));
+        } catch (Throwable ignored) {
+            return 0;
+        }
     }
 
     /** Число после "code": в ответе ПК. */

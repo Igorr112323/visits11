@@ -85,6 +85,21 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         _server.Login = LoginInternal;
         _server.MarkStudent = MarkStudentInternal;
         _server.GetQrPng = BuildQrPng;
+
+        // токены сессий храним в базе: перезапуск ПК не выбрасывает
+        // студентов из аккаунтов («вошёл один раз и навсегда»)
+        _server.LoadSessions(_database.LoadSessions());
+        _server.TokenIssued = (issuedToken, studentId) => _database.SaveSession(issuedToken, studentId);
+        _server.FindStudentByDevice = device => _database.FindStudentIdByDevice(device);
+        _server.NfcLoginFailed = login =>
+        {
+            var known = _database.FindByLogin(login);
+            _toasts.Error("Касание: вход не прошёл", known is null
+                ? $"Логин «{login}» не найден в базе"
+                : $"Неверный пароль для «{login}»");
+        };
+        _server.NfcMarkFailed = () =>
+            _toasts.Error("Касание: не отмечен", "Перекличка не идёт или студент не из этой группы");
         _camera.FrameReceived += OnFrame;
         // NFC-запросы с телефона преподавателя обрабатывает встроенный сервер
         _camera.NfcRelay += json => _server.Relay(json);
@@ -96,7 +111,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
     private (bool Ok, bool DeviceBlocked, string Name, int StudentId) LoginInternal(
         string login, string password, string device)
     {
-        var student = _database.FindByLogin(login);
+        var student = _database.FindByLogin(login.Trim());
         if (student is null || student.Password != password)
         {
             return (false, false, string.Empty, 0);
