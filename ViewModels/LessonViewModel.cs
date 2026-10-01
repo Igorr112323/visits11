@@ -78,6 +78,8 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         _camera = camera;
 
         StartStopCommand = new RelayCommand(_ => StartOrStop(), _ => RollcallState != StateFinished);
+        TogglePresentCommand = new RelayCommand(
+            row => TogglePresent((StudentRow)row!), _ => RollcallState == StateActive);
         _database.DataChanged += OnDataChanged;
 
         _streamWatchdog = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
@@ -344,6 +346,9 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
 
     public RelayCommand StartStopCommand { get; }
 
+    /// <summary>Клик по строке списка — ручная отметка/снятие (например, студенты с iPhone).</summary>
+    public RelayCommand TogglePresentCommand { get; }
+
     private void StartOrStop()
     {
         if (RollcallState == StateFinished) return;
@@ -378,6 +383,23 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
 
         RecalcStats();
         RollcallState = StateActive;
+    }
+
+    /// <summary>Ручная отметка кликом по строке: ставит или снимает «Есть».</summary>
+    private void TogglePresent(StudentRow row)
+    {
+        if (RollcallState != StateActive) return;
+
+        if (row.IsPresent)
+        {
+            row.IsPresent = false;
+            row.MarkedAt = null;
+            RecalcStats();
+        }
+        else
+        {
+            MarkRow(row);
+        }
     }
 
     private void MarkRow(StudentRow row)
