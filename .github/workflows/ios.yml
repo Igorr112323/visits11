@@ -22,7 +22,10 @@ jobs:
 
       - name: Generate Xcode project
         working-directory: ios
-        run: xcodegen generate
+        run: |
+          xcodegen generate
+          # XcodeGen пишет формат Xcode 16 (objectVersion 77), а на раннере Xcode 15 — понижаем
+          sed -i '' 's/objectVersion = 77;/objectVersion = 56;/' Visits11Student.xcodeproj/project.pbxproj
 
       - name: Build unsigned app (проверка компиляции)
         working-directory: ios
