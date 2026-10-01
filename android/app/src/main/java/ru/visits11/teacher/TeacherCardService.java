@@ -98,10 +98,10 @@ public final class TeacherCardService extends HostApduService {
                 if (code == REPLY_LOGIN_TOKEN || code == REPLY_MARKED) {
                     vibrate();
                 }
-                byte[] data = value == null ? new byte[0] : value.getBytes(StandardCharsets.UTF_8);
-                byte[] payload = new byte[1 + data.length];
+                byte[] bytes = value == null ? new byte[0] : value.getBytes(StandardCharsets.UTF_8);
+                byte[] payload = new byte[1 + bytes.length];
                 payload[0] = (byte) code;
-                System.arraycopy(data, 0, payload, 1, data.length);
+                System.arraycopy(bytes, 0, payload, 1, bytes.length);
                 return ok(payload);
             }
         }

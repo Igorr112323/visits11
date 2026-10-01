@@ -124,6 +124,61 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private static final String[][] TETHER_SCREENS = {
+            {"com.android.settings", "com.android.settings.Settings$TetherSettingsActivity"},
+            {"com.android.settings", "com.android.settings.Settings$TetherSettings"},
+            {"com.android.settings", "com.android.settings.Settings$WirelessSettingsActivity"},
+    };
+
+    /**
+     * Открывает сразу экран с тумблером «USB-модем».
+     * Включить его за пользователя Android запрещает даже системным приложениям,
+     * поэтому единственный переключатель делает сам пользователь.
+     */
+    private void openTetherSettings() {
+        for (String[] screen : TETHER_SCREENS) {
+            try {
+                Intent intent = new Intent();
+                intent.setComponent(new android.content.ComponentName(screen[0], screen[1]));
+                startActivity(intent);
+                return;
+            } catch (Throwable ignored) {
+            }
+        }
+        try {
+            startActivity(new Intent("android.settings.TETHER_SETTINGS"));
+            return;
+        } catch (Throwable ignored) {
+        }
+        try {
+            startActivity(new Intent("android.settings.WIRELESS_SETTINGS"));
+        } catch (Throwable ignored) {
+            toast("Откройте «USB-модем» в настройках");
+        }
+    }
+
+    /** Появилась ли сеть USB-модема (usb0/rndis0). */
+    private boolean isUsbTethered() {
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                NetworkInterface nic = interfaces.nextElement();
+                String name = nic.getName().toLowerCase(Locale.ROOT);
+                if (!name.contains("usb") && !name.contains("rndis")) continue;
+                if (!nic.isUp()) continue;
+                Enumeration<InetAddress> addresses = nic.getInetAddresses();
+                while (addresses.hasMoreElements()) {
+                    InetAddress address = addresses.nextElement();
+                    if (address instanceof Inet4Address && !address.isLoopbackAddress()) {
+                        return true;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
     // ------------------------------------------------------------ связь с ПК
 
     private void startServer() {
