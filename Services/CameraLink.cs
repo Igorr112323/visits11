@@ -200,7 +200,7 @@ public sealed class CameraLink : IDisposable
                     own.Add(address.Address.ToString());
 
                     // только /24 и мельче — иначе перебор адресов затянется
-                    var prefix = address.PrefixLength is >= 24 and <= 32 ? (int)address.PrefixLength.Value : 24;
+                    var prefix = address.PrefixLength is >= 24 and <= 32 ? address.PrefixLength : 24;
                     var ip = ToUint(address.Address.GetAddressBytes());
                     var mask = uint.MaxValue << (32 - prefix);
                     var network = ip & mask;
