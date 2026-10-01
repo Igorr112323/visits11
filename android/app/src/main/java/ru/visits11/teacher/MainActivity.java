@@ -2,6 +2,7 @@ package ru.visits11.teacher;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.nfc.NfcAdapter;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -14,11 +15,13 @@ import android.widget.Toast;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.Enumeration;
 import java.util.Locale;
@@ -41,6 +44,7 @@ public final class MainActivity extends Activity {
     private volatile boolean serverRunning;
 
     private volatile long lastClientAt;
+    private volatile long lastPingOkAt;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final Runnable statusTicker = new Runnable() {
@@ -61,14 +65,24 @@ public final class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         statusText = findViewById(R.id.statusText);
-        // нет связи — по нажатию открываем экран с тумблером «USB-модем»
+        // нажатие: выключенный NFC -> настройки NFC, нет ПК -> тумблер USB-модема
         findViewById(R.id.root).setOnClickListener(v -> {
+            NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
+            if (adapter != null && !adapter.isEnabled()) {
+                try {
+                    startActivity(new Intent("android.settings.NFC_SETTINGS"));
+                } catch (Throwable ignored) {
+                    toast("Включите NFC в настройках");
+                }
+                return;
+            }
             if (!pcConnected()) {
                 openTetherSettings();
             }
         });
 
         startServer();
+        startPingLoop();
         ui.post(statusTicker);
     }
 
@@ -87,15 +101,69 @@ public final class MainActivity extends Activity {
     }
 
     private void updateStatus() {
+        // 1. NFC — без него касания не работают вовсе
+        NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
+        if (adapter == null) {
+            statusText.setText("NFC не поддерживается этим телефоном");
+            statusText.setTextColor(0xFFB34A4A);
+            return;
+        }
+        if (!adapter.isEnabled()) {
+            statusText.setText("NFC ВЫКЛЮЧЕН — нажмите, чтобы включить");
+            statusText.setTextColor(0xFFB34A4A);
+            return;
+        }
+
+        // 2. связь с ПК
         if (pcConnected()) {
-            statusText.setText("ПК подключён");
-            statusText.setTextColor(0xFF2E7D32);
+            // 3. может ли телефон доставить отметку на ПК (брандмауэр Windows)
+            boolean pingOk = SystemClock.elapsedRealtime() - lastPingOkAt < 12_000;
+            if (pingOk) {
+                statusText.setText("ПК подключён, NFC готов");
+                statusText.setTextColor(0xFF2E7D32);
+            } else {
+                statusText.setText("БРАНДМАУЭР WINDOWS БЛОКИРУЕТ — разрешите Visits11 на ПК");
+                statusText.setTextColor(0xFFB34A4A);
+            }
         } else if (isUsbTethered()) {
             statusText.setText("Кабель подключён — запустите Visits11 на ПК");
             statusText.setTextColor(0xFF8A8A8A);
         } else {
             statusText.setText("Нет связи с ПК — нажмите, чтобы включить USB-модем");
             statusText.setTextColor(0xFFB34A4A);
+        }
+    }
+
+    /** Раз в 4 секунды проверяем, пускает ли ПК наш запрос отметки (анти-брандмауэр). */
+    private void startPingLoop() {
+        new Thread(() -> {
+            while (true) {
+                String address = TeacherCardService.pcAddress;
+                if (address != null && !address.isEmpty() && pingPc(address)) {
+                    lastPingOkAt = SystemClock.elapsedRealtime();
+                }
+                try {
+                    Thread.sleep(4000);
+                } catch (InterruptedException e) {
+                    return;
+                }
+            }
+        }, "PcPing").start();
+    }
+
+    private static boolean pingPc(String address) {
+        HttpURLConnection connection = null;
+        try {
+            connection = (HttpURLConnection) new URL("http://" + address + "/api/ping").openConnection();
+            connection.setConnectTimeout(1500);
+            connection.setReadTimeout(1500);
+            return connection.getResponseCode() == 200;
+        } catch (IOException e) {
+            return false;
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
         }
     }
 

@@ -1,6 +1,7 @@
 package ru.visits11.student;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
@@ -130,6 +131,16 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
             loginPanel.setVisibility(View.VISIBLE);
             return true;
         });
+        // выключенный NFC — по нажатию открываем настройки
+        statusText.setOnClickListener(v -> {
+            NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
+            if (adapter != null && !adapter.isEnabled()) {
+                try {
+                    startActivity(new Intent("android.settings.NFC_SETTINGS"));
+                } catch (Throwable ignored) {
+                }
+            }
+        });
 
         useNfc = nfcSupported();
         if (useNfc) {
@@ -150,7 +161,6 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
     /** NFC в этом телефоне? */
     private boolean nfcSupported() {
         return getPackageManager().hasSystemFeature(PackageManager.FEATURE_NFC)
-                && getPackageManager().hasSystemFeature(PackageManager.FEATURE_NFC_HOST_CARD_EMULATION)
                 && NfcAdapter.getDefaultAdapter(this) != null;
     }
 
@@ -159,7 +169,10 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         boolean hasLogin = prefs.getString(KEY_LOGIN, null) != null;
         if (hasLogin) {
-            statusText.setText("Приложите телефон к телефону преподавателя");
+            NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
+            statusText.setText(adapter != null && !adapter.isEnabled()
+                    ? "Включите NFC в настройках телефона"
+                    : "Приложите телефон к телефону преподавателя");
             statusText.setVisibility(View.VISIBLE);
             qrView.setVisibility(View.GONE);
             loginPanel.setVisibility(View.GONE);
@@ -197,6 +210,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         if (!useNfc) {
             return;
         }
+        updateNfcStatus();
         try {
             NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
             if (adapter != null) {
@@ -240,6 +254,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
             select[4] = (byte) NFC_AID.length;
             System.arraycopy(NFC_AID, 0, select, 5, NFC_AID.length);
             if (!apduOk(isoDep.transceive(select))) {
+                ui.post(() -> setStatus("Не получилось — приложите телефон еще раз"));
                 return;
             }
 
