@@ -67,7 +67,7 @@ public sealed class CameraLink : IDisposable
     private static async Task<string?> DiscoverAsync(CancellationToken token)
     {
         var targets = BuildTargets();
-        foreach (var batch in targets.Chunk(60))
+        foreach (var batch in targets.Chunk(128))
         {
             if (token.IsCancellationRequested) return null;
 
@@ -89,10 +89,11 @@ public sealed class CameraLink : IDisposable
     /// <summary>Подключается к кандидату и проверяет, что это Visits11-камера.</summary>
     private static async Task<string?> ProbeAsync(string host, CancellationToken token)
     {
+        var text = new StringBuilder();
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-            timeout.CancelAfter(TimeSpan.FromMilliseconds(600));
+            timeout.CancelAfter(TimeSpan.FromMilliseconds(1200));
 
             using var tcp = new TcpClient();
             await tcp.ConnectAsync(host, Port, timeout.Token);
@@ -102,19 +103,31 @@ public sealed class CameraLink : IDisposable
                 $"GET /info HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
             await stream.WriteAsync(request, timeout.Token);
 
-            var buffer = new byte[1024];
-            var read = await stream.ReadAsync(buffer, timeout.Token);
-            var response = Encoding.ASCII.GetString(buffer, 0, read);
-            if (response.Contains("200") && response.Contains("visits11-camera"))
+            // читаем ответ ДО КОНЦА (телефон закрывает соединение): ответ может
+            // прийти несколькими кусками, одного чтения мало
+            var buffer = new byte[2048];
+            while (text.Length <= 4096)
             {
-                return host;
+                int read;
+                try
+                {
+                    read = await stream.ReadAsync(buffer, timeout.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    break; // время вышло — проверяем то, что успели прочитать
+                }
+                if (read == 0) break;
+                text.Append(Encoding.ASCII.GetString(buffer, 0, read));
+                if (text.ToString().Contains("visits11-camera")) break;
             }
         }
         catch
         {
             // этот адрес не наш — просто пропускаем
         }
-        return null;
+        var response = text.ToString();
+        return response.Contains("200") && response.Contains("visits11-camera") ? host : null;
     }
 
     /// <summary>Цикл кадров: запрашивает /frame?since=N один за другим.</summary>

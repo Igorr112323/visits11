@@ -155,16 +155,37 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         promptPanel.setVisibility(pcConnected || isUsbTethered() ? View.GONE : View.VISIBLE);
     }
 
-    /** Открыть экран настроек USB-модема (одна кнопка — больше ничего не нужно). */
+    /** Экраны с тумблером USB-модема на разных прошивках (пробуем по порядку). */
+    private static final String[][] TETHER_SCREENS = {
+            {"com.android.settings", "com.android.settings.Settings$TetherSettingsActivity"},
+            {"com.android.settings", "com.android.settings.Settings$TetherSettings"},
+            {"com.android.settings", "com.android.settings.Settings$WirelessSettingsActivity"},
+    };
+
+    /**
+     * Открывает сразу экран с тумблером «USB-модем» — искать ничего не нужно.
+     * Включить его за пользователя Android запрещает даже системным приложениям,
+     * поэтому единственный переключатель делает сам пользователь.
+     */
     private void openTetherSettings() {
+        for (String[] screen : TETHER_SCREENS) {
+            try {
+                Intent intent = new Intent();
+                intent.setComponent(new android.content.ComponentName(screen[0], screen[1]));
+                startActivity(intent);
+                return;
+            } catch (Throwable ignored) {
+            }
+        }
         try {
             startActivity(new Intent("android.settings.TETHER_SETTINGS"));
-        } catch (Exception e) {
-            try {
-                startActivity(new Intent("android.settings.WIRELESS_SETTINGS"));
-            } catch (Exception ignored) {
-                toast("Откройте «USB-модем» в настройках");
-            }
+            return;
+        } catch (Throwable ignored) {
+        }
+        try {
+            startActivity(new Intent("android.settings.WIRELESS_SETTINGS"));
+        } catch (Throwable ignored) {
+            toast("Откройте «USB-модем» в настройках");
         }
     }
 
@@ -331,15 +352,18 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     private static void respond(Socket client, String status, String contentType,
                                 byte[] body, long seq, int rotation) {
         try {
-            OutputStream output = client.getOutputStream();
-            String head = "HTTP/1.1 " + status + "\r\n"
+            byte[] head = ("HTTP/1.1 " + status + "\r\n"
                     + "Content-Type: " + contentType + "\r\n"
                     + "Content-Length: " + body.length + "\r\n"
                     + (seq > 0 ? "X-Seq: " + seq + "\r\n" : "")
                     + (rotation > 0 ? "X-Rot: " + rotation + "\r\n" : "")
-                    + "Connection: close\r\n\r\n";
-            output.write(head.getBytes(StandardCharsets.US_ASCII));
-            output.write(body);
+                    + "Connection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII);
+            // заголовки и тело — ОДНИМ пакетом, чтобы клиент не потерял половину
+            byte[] packet = new byte[head.length + body.length];
+            System.arraycopy(head, 0, packet, 0, head.length);
+            System.arraycopy(body, 0, packet, head.length, body.length);
+            OutputStream output = client.getOutputStream();
+            output.write(packet);
             output.flush();
         } catch (IOException ignored) {
         }
