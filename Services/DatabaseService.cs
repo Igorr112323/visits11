@@ -50,6 +50,7 @@ public sealed class DatabaseService
               Login TEXT NOT NULL UNIQUE,
               Password TEXT NOT NULL,
               PhoneId TEXT NULL,
+              DeviceId TEXT NULL,
               FOREIGN KEY (GroupId) REFERENCES Groups(Id) ON DELETE CASCADE
             );
 
@@ -71,6 +72,39 @@ public sealed class DatabaseService
               FOREIGN KEY (StudentId) REFERENCES Students(Id) ON DELETE CASCADE
             );
             """;
+        command.ExecuteNonQuery();
+
+        // привязка аккаунта к устройству (для старых баз — добавляем колонку)
+        try
+        {
+            using var alter = connection.CreateCommand();
+            alter.CommandText = "ALTER TABLE Students ADD COLUMN DeviceId TEXT NULL";
+            alter.ExecuteNonQuery();
+        }
+        catch
+        {
+            // колонка уже есть
+        }
+    }
+
+    /// <summary>Устройство, к которому привязан аккаунт студента (null — ещё не привязан).</summary>
+    public string? GetDeviceId(int studentId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT DeviceId FROM Students WHERE Id = @id";
+        command.Parameters.AddWithValue("@id", studentId);
+        return command.ExecuteScalar() as string;
+    }
+
+    /// <summary>Привязывает аккаунт студента к устройству.</summary>
+    public void SetDeviceId(int studentId, string deviceId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE Students SET DeviceId = @device WHERE Id = @id";
+        command.Parameters.AddWithValue("@device", deviceId);
+        command.Parameters.AddWithValue("@id", studentId);
         command.ExecuteNonQuery();
     }
 

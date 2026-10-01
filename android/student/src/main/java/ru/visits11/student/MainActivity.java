@@ -13,6 +13,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.provider.Settings;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
@@ -124,17 +125,25 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
             }
         });
 
-        // тап по статусу — снова показать экран входа
-        statusText.setOnClickListener(v -> {
-            if (useNfc) {
-                loginPanel.setVisibility(View.VISIBLE);
-            }
+        // смена студента — только долгим нажатием (чтобы не открыть случайно)
+        statusText.setOnLongClickListener(v -> {
+            loginPanel.setVisibility(View.VISIBLE);
+            return true;
         });
 
         useNfc = nfcSupported();
         if (useNfc) {
             dot.setVisibility(View.INVISIBLE);
             updateNfcStatus();
+        }
+    }
+
+    /** Уникальный ID устройства — аккаунт привязывается к первому телефону.</summary> */
+    private String deviceId() {
+        try {
+            return Settings.Secure.ANDROID_ID;
+        } catch (Throwable ignored) {
+            return "";
         }
     }
 
@@ -241,11 +250,12 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
                 return;
             }
 
+            String device = deviceId();
             for (int attempt = 0; attempt < 2; attempt++) {
                 String token = prefs.getString(KEY_TOKEN, null);
                 byte[] identity = token != null
-                        ? nfcCommand((byte) 2, token)
-                        : nfcCommand((byte) 1, login + "\n" + password);
+                        ? nfcCommand((byte) 2, token + "\n" + device)
+                        : nfcCommand((byte) 1, login + "\n" + password + "\n" + device);
                 byte[] answer = isoDep.transceive(identity);
                 if (!apduOk(answer) || answer.length < 3) {
                     ui.post(() -> setStatus("Не получилось, попробуйте ещё раз"));
@@ -270,6 +280,10 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
                     // сессия устарела — этим же касанием перелогинимся
                     prefs.edit().remove(KEY_TOKEN).apply();
                     continue;
+                }
+                if (result == 5) {
+                    ui.post(() -> setStatus("Аккаунт привязан к другому телефону"));
+                    return;
                 }
                 if (result == 2) {
                     ui.post(() -> {
@@ -407,7 +421,8 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
             connection.setConnectTimeout(2500);
             connection.setReadTimeout(2500);
             byte[] body = ("{\"login\":\"" + escape(login)
-                    + "\",\"password\":\"" + escape(password) + "\"}")
+                    + "\",\"password\":\"" + escape(password)
+                    + "\",\"device\":\"" + escape(deviceId()) + "\"}")
                     .getBytes(StandardCharsets.UTF_8);
             connection.setFixedLengthStreamingMode(body.length);
             connection.setRequestProperty("Content-Type", "application/json");

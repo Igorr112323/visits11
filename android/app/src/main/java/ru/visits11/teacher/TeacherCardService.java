@@ -30,6 +30,7 @@ public final class TeacherCardService extends HostApduService {
     private static final int REPLY_BAD_CREDENTIALS = 2;
     private static final int REPLY_RELOGIN = 3;      // токен устарел
     private static final int REPLY_UNAVAILABLE = 4;  // ПК недоступен / перекличка не идёт
+    private static final int REPLY_DEVICE_BLOCKED = 5; // аккаунт привязан к другому телефону
 
     @Override
     public byte[] processCommandApdu(byte[] apdu, Bundle extras) {
@@ -54,17 +55,24 @@ public final class TeacherCardService extends HostApduService {
 
             NfcReply reply;
             if (type == 1) {
-                int split = data.indexOf('\n');
-                if (split <= 0) {
+                // логин \n пароль \n id устройства
+                String[] parts = data.split("\n", 3);
+                if (parts.length < 2) {
                     return ok(new byte[0]);
                 }
-                reply = postLogin(data.substring(0, split), data.substring(split + 1));
+                String device = parts.length > 2 ? parts[2] : "";
+                reply = postLogin(parts[0], parts[1], device);
                 if (reply.code == REPLY_LOGIN_TOKEN) {
                     // первое касание отмечает сразу же
-                    postMark(new String(reply.value, StandardCharsets.UTF_8));
+                    postMark(new String(reply.value, StandardCharsets.UTF_8), device);
                 }
             } else if (type == 2) {
-                reply = postMark(data);
+                // токен \n id устройства
+                String[] parts = data.split("\n", 2);
+                if (parts.length < 1) {
+                    return ok(new byte[0]);
+                }
+                reply = postMark(parts[0], parts.length > 1 ? parts[1] : "");
             } else {
                 return ok(new byte[0]);
             }
@@ -98,7 +106,7 @@ public final class TeacherCardService extends HostApduService {
         }
     }
 
-    private static NfcReply postLogin(String login, String password) {
+    private static NfcReply postLogin(String login, String password, String device) {
         String address = pcAddress;
         if (address == null || address.isEmpty()) {
             return new NfcReply(REPLY_UNAVAILABLE, null);
@@ -111,7 +119,8 @@ public final class TeacherCardService extends HostApduService {
             connection.setConnectTimeout(2500);
             connection.setReadTimeout(2500);
             byte[] body = ("{\"login\":\"" + escape(login)
-                    + "\",\"password\":\"" + escape(password) + "\"}")
+                    + "\",\"password\":\"" + escape(password)
+                    + "\",\"device\":\"" + escape(device) + "\"}")
                     .getBytes(StandardCharsets.UTF_8);
             connection.setFixedLengthStreamingMode(body.length);
             connection.setRequestProperty("Content-Type", "application/json");
@@ -123,6 +132,9 @@ public final class TeacherCardService extends HostApduService {
                 return new NfcReply(REPLY_UNAVAILABLE, null);
             }
             String response = readAll(connection.getInputStream(), 8192);
+            if (response.contains("\"device\":true")) {
+                return new NfcReply(REPLY_DEVICE_BLOCKED, null);
+            }
             if (!response.contains("\"ok\":true")) {
                 return new NfcReply(REPLY_BAD_CREDENTIALS, null);
             }
@@ -140,7 +152,7 @@ public final class TeacherCardService extends HostApduService {
         }
     }
 
-    private static NfcReply postMark(String token) {
+    private static NfcReply postMark(String token, String device) {
         String address = pcAddress;
         if (address == null || address.isEmpty()) {
             return new NfcReply(REPLY_UNAVAILABLE, null);
@@ -152,7 +164,8 @@ public final class TeacherCardService extends HostApduService {
             connection.setDoOutput(true);
             connection.setConnectTimeout(2500);
             connection.setReadTimeout(2500);
-            byte[] body = ("{\"token\":\"" + escape(token) + "\"}").getBytes(StandardCharsets.UTF_8);
+            byte[] body = ("{\"token\":\"" + escape(token)
+                    + "\",\"device\":\"" + escape(device) + "\"}").getBytes(StandardCharsets.UTF_8);
             connection.setFixedLengthStreamingMode(body.length);
             connection.setRequestProperty("Content-Type", "application/json");
             OutputStream output = connection.getOutputStream();
@@ -166,6 +179,9 @@ public final class TeacherCardService extends HostApduService {
             if (response.contains("\"ok\":true")) {
                 String name = extractString(response, "name");
                 return new NfcReply(REPLY_MARKED, name == null ? "" : name);
+            }
+            if (response.contains("\"device\":true")) {
+                return new NfcReply(REPLY_DEVICE_BLOCKED, null);
             }
             if (response.contains("\"relogin\":true")) {
                 return new NfcReply(REPLY_RELOGIN, null);

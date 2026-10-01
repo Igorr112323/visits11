@@ -91,14 +91,31 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
     }
 
     /// <summary>Вход студента в приложении (логин/пароль из базы).</summary>
-    private (bool Ok, string Name, int StudentId) LoginInternal(string login, string password)
+    private (bool Ok, bool DeviceBlocked, string Name, int StudentId) LoginInternal(
+        string login, string password, string device)
     {
         var student = _database.FindByLogin(login);
         if (student is null || student.Password != password)
         {
-            return (false, string.Empty, 0);
+            return (false, false, string.Empty, 0);
         }
-        return (true, student.FullName, student.Id);
+
+        // первый вход с телефона — привязываем аккаунт к этому устройству;
+        // вход с чужого телефона отклоняем
+        if (device.Length > 0)
+        {
+            var bound = _database.GetDeviceId(student.Id);
+            if (bound is null)
+            {
+                _database.SetDeviceId(student.Id, device);
+            }
+            else if (bound != device)
+            {
+                return (false, true, string.Empty, 0);
+            }
+        }
+
+        return (true, false, student.FullName, student.Id);
     }
 
     /// <summary>PNG текущего QR студента; null — перекличка не активна.</summary>
@@ -280,22 +297,36 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
     /// <summary>Отметка студента, чей QR попал в камеру преподавателя.</summary>
     private void MarkScanned(int studentId)
     {
-        MarkStudentInternal(studentId);
+        MarkStudentInternal(studentId, string.Empty);
     }
 
     /// <summary>Отметка студента по id (сканирование камерой или NFC «телефон к телефону»).</summary>
-    private (bool Ok, string Name) MarkStudentInternal(int studentId)
+    private (bool Ok, bool DeviceBlocked, string Name) MarkStudentInternal(int studentId, string device)
     {
-        if (RollcallState != StateActive) return (false, string.Empty);
+        if (RollcallState != StateActive) return (false, false, string.Empty);
         var row = Rows.FirstOrDefault(r => r.StudentId == studentId);
-        if (row is null) return (false, string.Empty);
+        if (row is null) return (false, false, string.Empty);
+
+        // отметка с чужого телефона не проходит
+        if (device.Length > 0)
+        {
+            var bound = _database.GetDeviceId(studentId);
+            if (bound is null)
+            {
+                _database.SetDeviceId(studentId, device);
+            }
+            else if (bound != device)
+            {
+                return (false, true, string.Empty);
+            }
+        }
 
         if (!row.IsPresent)
         {
             MarkRow(row);
             _toasts.Success("Отмечен", row.FullName);
         }
-        return (true, row.FullName);
+        return (true, false, row.FullName);
     }
 
     // --------------------------------------------------------------- перекличка

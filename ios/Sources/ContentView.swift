@@ -9,6 +9,17 @@ private let prefs = UserDefaults.standard
 private let keyLogin = "login"
 private let keyPassword = "password"
 private let keyToken = "token"
+private let keyDevice = "device"
+
+/// Уникальный ID устройства — аккаунт привязывается к первому телефону.
+private func deviceId() -> String {
+    if let saved = prefs.string(forKey: keyDevice), !saved.isEmpty {
+        return saved
+    }
+    let id = UUID().uuidString
+    prefs.set(id, forKey: keyDevice)
+    return id
+}
 
 // MARK: - модель NFC
 
@@ -78,11 +89,12 @@ final class MarkModel: NSObject, ObservableObject, NFCTagReaderSessionDelegate {
             return
         }
 
+        let device = deviceId()
         var type: UInt8 = 1
-        var payload = login + "\n" + password
+        var payload = login + "\n" + password + "\n" + device
         if let token = prefs.string(forKey: keyToken), !token.isEmpty {
             type = 2
-            payload = token
+            payload = token + "\n" + device
         }
         let command = NFCISO7816APDU(instructionClass: 0x00, instructionCode: 0x10,
                                      p1Parameter: 0x00, p2Parameter: 0x00,
@@ -110,6 +122,9 @@ final class MarkModel: NSObject, ObservableObject, NFCTagReaderSessionDelegate {
                 // сессия устарела — этим же касанием перелогинимся
                 prefs.removeObject(forKey: keyToken)
                 self.sendIdentity(tag: tag, session: session, allowRelogin: false)
+            case 5:
+                DispatchQueue.main.async { self.status = "Аккаунт привязан к другому телефону" }
+                session.invalidate(errorMessage: "Аккаунт привязан к другому телефону")
             default:
                 session.invalidate(errorMessage: "Не получилось, попробуйте ещё раз")
             }

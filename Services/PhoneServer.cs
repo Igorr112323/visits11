@@ -30,12 +30,13 @@ public sealed class PhoneServer : IDisposable
     public bool IsRunning { get; private set; }
     public string Url => $"http://{DetectLanAddress()}:{Port}/";
 
-    /// <summary>Проверка логина/пароля (в потоке UI): (успех, имя, id студента).</summary>
-    public Func<string, string, (bool Ok, string Name, int StudentId)> Login { get; set; } =
-        (_, _) => (false, "", 0);
+    /// <summary>Проверка логина/пароля (в потоке UI): (успех, отказ из-за устройства, имя, id студента).</summary>
+    public Func<string, string, string, (bool Ok, bool DeviceBlocked, string Name, int StudentId)> Login { get; set; } =
+        (_, _, _) => (false, false, "", 0);
 
-    /// <summary>Отметка студента по id (в потоке UI): (успех, имя) — NFC «телефон к телефону».</summary>
-    public Func<int, (bool Ok, string Name)> MarkStudent { get; set; } = _ => (false, "");
+    /// <summary>Отметка студента по id (в потоке UI): (успех, отказ из-за устройства, имя).</summary>
+    public Func<int, string, (bool Ok, bool DeviceBlocked, string Name)> MarkStudent { get; set; } =
+        (_, _) => (false, false, "");
 
     /// <summary>PNG текущего QR студента; null — перекличка не активна.</summary>
     public Func<int, byte[]?> GetQrPng { get; set; } = _ => null;
@@ -159,6 +160,7 @@ public sealed class PhoneServer : IDisposable
     {
         string login = "";
         string password = "";
+        string device = "";
         try
         {
             using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(body ?? Array.Empty<byte>()));
@@ -172,13 +174,18 @@ public sealed class PhoneServer : IDisposable
             {
                 password = passwordValue.GetString() ?? "";
             }
+            if (doc.RootElement.TryGetProperty("device", out var deviceValue) &&
+                deviceValue.ValueKind == JsonValueKind.String)
+            {
+                device = deviceValue.GetString() ?? "";
+            }
         }
         catch (JsonException)
         {
             // повреждённый запрос — просто отказ
         }
 
-        var result = OnUi(() => Login(login, password));
+        var result = OnUi(() => Login(login, password, device));
         if (result.Ok)
         {
             var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
@@ -188,6 +195,15 @@ public sealed class PhoneServer : IDisposable
                 ["ok"] = true,
                 ["name"] = result.Name,
                 ["token"] = token,
+            });
+        }
+        else if (result.DeviceBlocked)
+        {
+            // аккаунт привязан к другому телефону
+            RespondJson(stream, new Dictionary<string, object?>
+            {
+                ["ok"] = false,
+                ["device"] = true,
             });
         }
         else
@@ -221,6 +237,7 @@ public sealed class PhoneServer : IDisposable
     private void HandleNfcMark(NetworkStream stream, byte[]? body)
     {
         string token = "";
+        string device = "";
         try
         {
             using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(body ?? Array.Empty<byte>()));
@@ -228,6 +245,11 @@ public sealed class PhoneServer : IDisposable
                 value.ValueKind == JsonValueKind.String)
             {
                 token = value.GetString() ?? "";
+            }
+            if (doc.RootElement.TryGetProperty("device", out var deviceValue) &&
+                deviceValue.ValueKind == JsonValueKind.String)
+            {
+                device = deviceValue.GetString() ?? "";
             }
         }
         catch (JsonException)
@@ -243,7 +265,17 @@ public sealed class PhoneServer : IDisposable
             return;
         }
 
-        var result = OnUi(() => MarkStudent(studentId));
+        var result = OnUi(() => MarkStudent(studentId, device));
+        if (result.DeviceBlocked)
+        {
+            // отметка с чужого телефона
+            RespondJson(stream, new Dictionary<string, object?>
+            {
+                ["ok"] = false,
+                ["device"] = true,
+            });
+            return;
+        }
         RespondJson(stream, new Dictionary<string, object?>
         {
             ["ok"] = result.Ok,
