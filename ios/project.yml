@@ -2,7 +2,7 @@ name: Visits11Student
 options:
   bundleIdPrefix: ru.visits11
   deploymentTarget:
-    iOS: "14.0"
+    iOS: "15.0"
 settings:
   base:
     SWIFT_VERSION: "5.9"

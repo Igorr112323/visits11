@@ -33,7 +33,17 @@ jobs:
             -sdk iphoneos \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            clean build
+            clean build > build.log 2>&1 || {
+              grep -m 5 "error:" build.log | while read -r line; do echo "::error::$line"; done
+              tail -5 build.log | while read -r line; do echo "::error::$line"; done
+              exit 1
+            }
+
+      - name: Diagnostics (схема/список)
+        if: failure()
+        working-directory: ios
+        run: |
+          xcodebuild -project Visits11Student.xcodeproj -list 2>&1 | head -14 | while read -r line; do echo "::error::LIST: $line"; done
 
       - name: Package unsigned .ipa (подписывается через Sideloadly своим Apple ID)
         working-directory: ios
