@@ -254,7 +254,7 @@ public final class MainActivity extends Activity {
             connection.setReadTimeout(2500);
             int code = connection.getResponseCode();
             if (code == 200) {
-                byte[] png = readAll(connection.getInputStream(), 1024 * 1024);
+                byte[] png = readAllBytes(connection.getInputStream(), 1024 * 1024);
                 if (png.length == 0) {
                     return QR_ERROR;
                 }
@@ -369,13 +369,17 @@ public final class MainActivity extends Activity {
     // ------------------------------------------------------------ утилиты
 
     private static String readAll(InputStream input, int cap) throws IOException {
+        return new String(readAllBytes(input, cap), StandardCharsets.UTF_8);
+    }
+
+    private static byte[] readAllBytes(InputStream input, int cap) throws IOException {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         byte[] buffer = new byte[8192];
         int read;
         while (output.size() < cap && (read = input.read(buffer)) > 0) {
             output.write(buffer, 0, read);
         }
-        return new String(output.toByteArray(), StandardCharsets.UTF_8);
+        return output.toByteArray();
     }
 
     private static String escape(String value) {
