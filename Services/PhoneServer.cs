@@ -425,6 +425,86 @@ h1{font-size:16px;font-weight:700}
 p{color:#9099b8;font-size:13px;margin-top:6px}
 </style></head><body><div class='card'><h1>Отметка посещаемости</h1><p>Установите приложение «Visits11 Студент» и войдите по логину и паролю.</p></div></body></html>";
 
+    /// <summary>
+    /// Обработка NFC-запроса, который ПК сам забрал с телефона преподавателя
+    /// (исходящее соединение — брандмауэр Windows не мешает).
+    /// Запрос: {"type":1,"login","password","device"} или {"type":2,"token","device"}.
+    /// Ответ: {"code":0..5,"value":...} — 0 вход+токен, 1 отмечен+имя, 2 плохой пароль,
+    /// 3 перелогинься, 4 не получилось, 5 чужой телефон.
+    /// </summary>
+    public string Relay(string json)
+    {
+        int type = 0;
+        string login = "", password = "", token = "", device = "";
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("type", out var typeValue) &&
+                typeValue.ValueKind == JsonValueKind.Number)
+            {
+                type = typeValue.GetInt32();
+            }
+            if (root.TryGetProperty("login", out var loginValue) &&
+                loginValue.ValueKind == JsonValueKind.String)
+            {
+                login = loginValue.GetString() ?? "";
+            }
+            if (root.TryGetProperty("password", out var passwordValue) &&
+                passwordValue.ValueKind == JsonValueKind.String)
+            {
+                password = passwordValue.GetString() ?? "";
+            }
+            if (root.TryGetProperty("token", out var tokenValue) &&
+                tokenValue.ValueKind == JsonValueKind.String)
+            {
+                token = tokenValue.GetString() ?? "";
+            }
+            if (root.TryGetProperty("device", out var deviceValue) &&
+                deviceValue.ValueKind == JsonValueKind.String)
+            {
+                device = deviceValue.GetString() ?? "";
+            }
+        }
+        catch (JsonException)
+        {
+            return "{\"code\":4}";
+        }
+
+        if (type == 1)
+        {
+            var loginResult = OnUi(() => Login(login, password, device));
+            if (loginResult.DeviceBlocked) return RelayJson(5, string.Empty);
+            if (!loginResult.Ok) return RelayJson(2, string.Empty);
+
+            var sessionToken = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
+            _sessions[sessionToken] = loginResult.StudentId;
+
+            // первое касание отмечает сразу же
+            OnUi(() => MarkStudent(loginResult.StudentId, device));
+            return RelayJson(0, sessionToken);
+        }
+
+        if (type == 2)
+        {
+            if (token.Length == 0 || !_sessions.TryGetValue(token, out var studentId))
+            {
+                return RelayJson(3, string.Empty);
+            }
+            var mark = OnUi(() => MarkStudent(studentId, device));
+            if (mark.DeviceBlocked) return RelayJson(5, string.Empty);
+            return mark.Ok ? RelayJson(1, mark.Name) : RelayJson(4, string.Empty);
+        }
+
+        return RelayJson(4, string.Empty);
+    }
+
+    private static string RelayJson(int code, string value)
+    {
+        var escaped = value.Replace("\\", "\\\\").Replace("\"", "\\\"");
+        return $"{{\"code\":{code},\"value\":\"{escaped}\"}}";
+    }
+
     // ------------------------------------------------------------- утилиты
 
     private static T OnUi<T>(Func<T> func)

@@ -15,16 +15,15 @@ import android.widget.Toast;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.net.HttpURLConnection;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.Enumeration;
 import java.util.Locale;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Телефон преподавателя: логотип КубГАУ на весь экран, экран не гаснет.
@@ -44,7 +43,6 @@ public final class MainActivity extends Activity {
     private volatile boolean serverRunning;
 
     private volatile long lastClientAt;
-    private volatile long lastPingOkAt;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final Runnable statusTicker = new Runnable() {
@@ -82,7 +80,6 @@ public final class MainActivity extends Activity {
         });
 
         startServer();
-        startPingLoop();
         ui.post(statusTicker);
     }
 
@@ -114,17 +111,10 @@ public final class MainActivity extends Activity {
             return;
         }
 
-        // 2. связь с ПК
+        // 2. связь с ПК (ПК сам забирает отметки с телефона — брандмауэр не мешает)
         if (pcConnected()) {
-            // 3. может ли телефон доставить отметку на ПК (брандмауэр Windows)
-            boolean pingOk = SystemClock.elapsedRealtime() - lastPingOkAt < 12_000;
-            if (pingOk) {
-                statusText.setText("ПК подключён, NFC готов");
-                statusText.setTextColor(0xFF2E7D32);
-            } else {
-                statusText.setText("БРАНДМАУЭР WINDOWS БЛОКИРУЕТ — разрешите Visits11 на ПК");
-                statusText.setTextColor(0xFFB34A4A);
-            }
+            statusText.setText("ПК подключён, NFC готов");
+            statusText.setTextColor(0xFF2E7D32);
         } else if (isUsbTethered()) {
             statusText.setText("Кабель подключён — запустите Visits11 на ПК");
             statusText.setTextColor(0xFF8A8A8A);
@@ -132,95 +122,6 @@ public final class MainActivity extends Activity {
             statusText.setText("Нет связи с ПК — нажмите, чтобы включить USB-модем");
             statusText.setTextColor(0xFFB34A4A);
         }
-    }
-
-    /** Раз в 4 секунды проверяем, пускает ли ПК наш запрос отметки (анти-брандмауэр). */
-    private void startPingLoop() {
-        new Thread(() -> {
-            while (true) {
-                String address = TeacherCardService.pcAddress;
-                if (address != null && !address.isEmpty() && pingPc(address)) {
-                    lastPingOkAt = SystemClock.elapsedRealtime();
-                }
-                try {
-                    Thread.sleep(4000);
-                } catch (InterruptedException e) {
-                    return;
-                }
-            }
-        }, "PcPing").start();
-    }
-
-    private static boolean pingPc(String address) {
-        HttpURLConnection connection = null;
-        try {
-            connection = (HttpURLConnection) new URL("http://" + address + "/api/ping").openConnection();
-            connection.setConnectTimeout(1500);
-            connection.setReadTimeout(1500);
-            return connection.getResponseCode() == 200;
-        } catch (IOException e) {
-            return false;
-        } finally {
-            if (connection != null) {
-                connection.disconnect();
-            }
-        }
-    }
-
-    /** Экраны с тумблером USB-модема на разных прошивках (пробуем по порядку). */
-    private static final String[][] TETHER_SCREENS = {
-            {"com.android.settings", "com.android.settings.Settings$TetherSettingsActivity"},
-            {"com.android.settings", "com.android.settings.Settings$TetherSettings"},
-            {"com.android.settings", "com.android.settings.Settings$WirelessSettingsActivity"},
-    };
-
-    /**
-     * Открывает сразу экран с тумблером «USB-модем».
-     * Включить его за пользователя Android запрещает даже системным приложениям,
-     * поэтому единственный переключатель делает сам пользователь.
-     */
-    private void openTetherSettings() {
-        for (String[] screen : TETHER_SCREENS) {
-            try {
-                Intent intent = new Intent();
-                intent.setComponent(new android.content.ComponentName(screen[0], screen[1]));
-                startActivity(intent);
-                return;
-            } catch (Throwable ignored) {
-            }
-        }
-        try {
-            startActivity(new Intent("android.settings.TETHER_SETTINGS"));
-            return;
-        } catch (Throwable ignored) {
-        }
-        try {
-            startActivity(new Intent("android.settings.WIRELESS_SETTINGS"));
-        } catch (Throwable ignored) {
-            toast("Откройте «USB-модем» в настройках");
-        }
-    }
-
-    /** Появилась ли сеть USB-модема (usb0/rndis0). */
-    private boolean isUsbTethered() {
-        try {
-            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
-            while (interfaces != null && interfaces.hasMoreElements()) {
-                NetworkInterface nic = interfaces.nextElement();
-                String name = nic.getName().toLowerCase(Locale.ROOT);
-                if (!name.contains("usb") && !name.contains("rndis")) continue;
-                if (!nic.isUp()) continue;
-                Enumeration<InetAddress> addresses = nic.getInetAddresses();
-                while (addresses.hasMoreElements()) {
-                    InetAddress address = addresses.nextElement();
-                    if (address instanceof Inet4Address && !address.isLoopbackAddress()) {
-                        return true;
-                    }
-                }
-            }
-        } catch (Throwable ignored) {
-        }
-        return false;
     }
 
     // ------------------------------------------------------------ связь с ПК
@@ -261,11 +162,6 @@ public final class MainActivity extends Activity {
             int lineEnd = headers.indexOf("\r\n");
             String requestLine = lineEnd < 0 ? headers : headers.substring(0, lineEnd);
 
-            // ПК сообщает свой адрес — по нему NFC-сервис пересылает отметки
-            String hostHeader = extractHeader(headers, "X-Host");
-            if (hostHeader != null && !hostHeader.isEmpty()) {
-                TeacherCardService.pcAddress = hostHeader;
-            }
             lastClientAt = SystemClock.elapsedRealtime();
 
             // "GET /frame?since=0 HTTP/1.1"
@@ -287,12 +183,67 @@ public final class MainActivity extends Activity {
                 // кадров больше нет: немного ждём, чтобы ПК не крутил запросы вхолостую
                 Thread.sleep(FRAME_WAIT_MS);
                 respond(client, "204 No Content", "text/plain", new byte[0]);
+            } else if ("/event".equals(path) && "GET".equals(method)) {
+                // ПК забирает NFC-запросы (long-poll 3 сек)
+                serveEvent(client);
+            } else if ("/event_result".equals(path) && "POST".equals(method)) {
+                // ПК возвращает ответ на касание
+                acceptEventResult(client, headers);
             } else {
                 respond(client, "404 Not Found", "text/plain", new byte[0]);
             }
         } catch (Throwable ignored) {
         } finally {
             closeQuietly(client);
+        }
+    }
+
+    /** Отдаёт ПК ожидающий NFC-запрос (или 204, если касаний не было). */
+    private static void serveEvent(Socket client) {
+        String request = null;
+        try {
+            request = TeacherCardService.requests.poll(3, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        if (request == null) {
+            respond(client, "204 No Content", "text/plain", new byte[0]);
+        } else {
+            respond(client, "200 OK", "application/json", request.getBytes(StandardCharsets.UTF_8));
+        }
+    }
+
+    /** Принимает ответ ПК на касание и передаёт его ожидающему студенту. */
+    private static void acceptEventResult(Socket client, String headers) {
+        try {
+            int length = 0;
+            String declared = extractHeader(headers, "Content-Length");
+            if (declared != null) {
+                length = Integer.parseInt(declared.trim());
+            }
+            if (length <= 0 || length > 8192) {
+                respond(client, "400 Bad Request", "text/plain", new byte[0]);
+                return;
+            }
+            byte[] body = new byte[length];
+            InputStream input = client.getInputStream();
+            int filled = 0;
+            while (filled < length) {
+                int read = input.read(body, filled, length - filled);
+                if (read < 0) {
+                    break;
+                }
+                filled += read;
+            }
+            if (filled > 0) {
+                TeacherCardService.resultBox.offer(new String(body, 0, filled, StandardCharsets.UTF_8));
+            }
+            respond(client, "200 OK", "text/plain", new byte[0]);
+        } catch (Throwable ignored) {
+            try {
+                respond(client, "500 Server Error", "text/plain", new byte[0]);
+            } catch (Throwable ignored2) {
+            }
         }
     }
 

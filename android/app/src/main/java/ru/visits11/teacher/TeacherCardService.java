@@ -5,31 +5,35 @@ import android.os.Bundle;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.TimeUnit;
 
 /**
- * Телефон преподавателя «притворяется картой»: студенты (Android и iPhone)
- * прикладывают свои телефоны-считыватели, мы пересылаем их данные на ПК
- * по USB-каналу камеры и возвращаем ответ прямо в момент касания.
+ * Телефон преподавателя «притворяется картой»: студенты прикладывают свои
+ * телефоны-считыватели, мы кладём их данные в очередь — ПК сам забирает
+ * их по /event и возвращает ответ в /event_result (все соединения исходящие
+ * со стороны ПК, брандмауэр Windows ничего не блокирует).
  */
 public final class TeacherCardService extends HostApduService {
 
-    /** Адрес ПК — обновляется из запросов камеры (заголовок X-Host). */
-    public static volatile String pcAddress = "";
+    /** NFC-запросы, ждущие ПК: {"type":1|2,...}. */
+    static final LinkedBlockingQueue<String> requests = new LinkedBlockingQueue<>();
+
+    /** Ответ ПК на текущее касание. */
+    static final SynchronousQueue<String> resultBox = new SynchronousQueue<>();
+
+    /** Касания обрабатываются по одному. */
+    static final Object TAP_LOCK = new Object();
 
     private static final byte[] NFC_AID = {(byte) 0xF0, 0x39, 0x11, 0x01, 0x02, 0x03, 0x04};
 
-    private static final int REPLY_LOGIN_TOKEN = 0;  // + токен сессии
-    private static final int REPLY_MARKED = 1;       // + имя студента
+    private static final int REPLY_LOGIN_TOKEN = 0;    // + токен сессии
+    private static final int REPLY_MARKED = 1;         // + имя студента
     private static final int REPLY_BAD_CREDENTIALS = 2;
-    private static final int REPLY_RELOGIN = 3;      // токен устарел
-    private static final int REPLY_UNAVAILABLE = 4;  // ПК недоступен / перекличка не идёт
+    private static final int REPLY_RELOGIN = 3;        // токен устарел
+    private static final int REPLY_UNAVAILABLE = 4;    // ПК недоступен / перекличка не идёт
     private static final int REPLY_DEVICE_BLOCKED = 5; // аккаунт привязан к другому телефону
 
     @Override
@@ -45,7 +49,7 @@ public final class TeacherCardService extends HostApduService {
         }
 
         if (instruction == 0x10) {
-            // данные студента: логин+пароль (первый раз) или токен
+            // данные студента: логин\nпароль\nid-устройства (первый раз) или токен\nid-устройства
             int length = apdu.length >= 5 ? apdu[4] & 0xFF : 0;
             if (length < 1 || apdu.length < 5 + length) {
                 return ok(new byte[0]);
@@ -53,40 +57,53 @@ public final class TeacherCardService extends HostApduService {
             int type = apdu[5] & 0xFF;
             String data = new String(apdu, 6, length - 1, StandardCharsets.UTF_8);
 
-            NfcReply reply;
+            String request;
             if (type == 1) {
-                // логин \n пароль \n id устройства
                 String[] parts = data.split("\n", 3);
                 if (parts.length < 2) {
                     return ok(new byte[0]);
                 }
                 String device = parts.length > 2 ? parts[2] : "";
-                reply = postLogin(parts[0], parts[1], device);
-                if (reply.code == REPLY_LOGIN_TOKEN) {
-                    // первое касание отмечает сразу же
-                    postMark(new String(reply.value, StandardCharsets.UTF_8), device);
-                }
+                request = "{\"type\":1,\"login\":\"" + escape(parts[0])
+                        + "\",\"password\":\"" + escape(parts[1])
+                        + "\",\"device\":\"" + escape(device) + "\"}";
             } else if (type == 2) {
-                // токен \n id устройства
                 String[] parts = data.split("\n", 2);
-                if (parts.length < 1) {
+                if (parts.length < 1 || parts[0].isEmpty()) {
                     return ok(new byte[0]);
                 }
-                reply = postMark(parts[0], parts.length > 1 ? parts[1] : "");
+                String device = parts.length > 1 ? parts[1] : "";
+                request = "{\"type\":2,\"token\":\"" + escape(parts[0])
+                        + "\",\"device\":\"" + escape(device) + "\"}";
             } else {
                 return ok(new byte[0]);
             }
 
-            if (reply.code == REPLY_LOGIN_TOKEN || reply.code == REPLY_MARKED) {
-                vibrate();
-            }
+            synchronized (TAP_LOCK) {
+                // отдаём запрос ПК и ждём ответ прямо в момент касания
+                requests.add(request);
+                String result;
+                try {
+                    result = resultBox.poll(4, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    result = null;
+                }
+                if (result == null) {
+                    return ok(new byte[]{REPLY_UNAVAILABLE});
+                }
 
-            byte[] payload = new byte[1 + (reply.value == null ? 0 : reply.value.length)];
-            payload[0] = (byte) reply.code;
-            if (reply.value != null) {
-                System.arraycopy(reply.value, 0, payload, 1, reply.value.length);
+                int code = codeOf(result);
+                String value = extractString(result, "value");
+                if (code == REPLY_LOGIN_TOKEN || code == REPLY_MARKED) {
+                    vibrate();
+                }
+                byte[] data = value == null ? new byte[0] : value.getBytes(StandardCharsets.UTF_8);
+                byte[] payload = new byte[1 + data.length];
+                payload[0] = (byte) code;
+                System.arraycopy(data, 0, payload, 1, data.length);
+                return ok(payload);
             }
-            return ok(payload);
         }
 
         return new byte[]{(byte) 0x6D, (byte) 0x00};
@@ -96,114 +113,22 @@ public final class TeacherCardService extends HostApduService {
     public void onDeactivated(int reason) {
     }
 
-    private static final class NfcReply {
-        final int code;
-        final byte[] value;
-
-        NfcReply(int code, String value) {
-            this.code = code;
-            this.value = value == null ? null : value.getBytes(StandardCharsets.UTF_8);
-        }
-    }
-
-    private static NfcReply postLogin(String login, String password, String device) {
-        String address = pcAddress;
-        if (address == null || address.isEmpty()) {
-            return new NfcReply(REPLY_UNAVAILABLE, null);
-        }
-        HttpURLConnection connection = null;
+    /** Число после "code": в ответе ПК. */
+    private static int codeOf(String json) {
         try {
-            connection = (HttpURLConnection) new URL("http://" + address + "/api/login").openConnection();
-            connection.setRequestMethod("POST");
-            connection.setDoOutput(true);
-            connection.setConnectTimeout(2500);
-            connection.setReadTimeout(2500);
-            byte[] body = ("{\"login\":\"" + escape(login)
-                    + "\",\"password\":\"" + escape(password)
-                    + "\",\"device\":\"" + escape(device) + "\"}")
-                    .getBytes(StandardCharsets.UTF_8);
-            connection.setFixedLengthStreamingMode(body.length);
-            connection.setRequestProperty("Content-Type", "application/json");
-            OutputStream output = connection.getOutputStream();
-            output.write(body);
-            output.flush();
-            output.close();
-            if (connection.getResponseCode() != 200) {
-                return new NfcReply(REPLY_UNAVAILABLE, null);
+            int at = json.indexOf("\"code\":");
+            if (at < 0) {
+                return REPLY_UNAVAILABLE;
             }
-            String response = readAll(connection.getInputStream(), 8192);
-            if (response.contains("\"device\":true")) {
-                return new NfcReply(REPLY_DEVICE_BLOCKED, null);
+            at += 7;
+            int end = at;
+            while (end < json.length() && Character.isDigit(json.charAt(end))) {
+                end++;
             }
-            if (!response.contains("\"ok\":true")) {
-                return new NfcReply(REPLY_BAD_CREDENTIALS, null);
-            }
-            String token = extractString(response, "token");
-            if (token == null || token.isEmpty()) {
-                return new NfcReply(REPLY_BAD_CREDENTIALS, null);
-            }
-            return new NfcReply(REPLY_LOGIN_TOKEN, token);
-        } catch (IOException e) {
-            return new NfcReply(REPLY_UNAVAILABLE, null);
-        } finally {
-            if (connection != null) {
-                connection.disconnect();
-            }
+            return Integer.parseInt(json.substring(at, end));
+        } catch (Throwable ignored) {
+            return REPLY_UNAVAILABLE;
         }
-    }
-
-    private static NfcReply postMark(String token, String device) {
-        String address = pcAddress;
-        if (address == null || address.isEmpty()) {
-            return new NfcReply(REPLY_UNAVAILABLE, null);
-        }
-        HttpURLConnection connection = null;
-        try {
-            connection = (HttpURLConnection) new URL("http://" + address + "/api/nfc_mark").openConnection();
-            connection.setRequestMethod("POST");
-            connection.setDoOutput(true);
-            connection.setConnectTimeout(2500);
-            connection.setReadTimeout(2500);
-            byte[] body = ("{\"token\":\"" + escape(token)
-                    + "\",\"device\":\"" + escape(device) + "\"}").getBytes(StandardCharsets.UTF_8);
-            connection.setFixedLengthStreamingMode(body.length);
-            connection.setRequestProperty("Content-Type", "application/json");
-            OutputStream output = connection.getOutputStream();
-            output.write(body);
-            output.flush();
-            output.close();
-            if (connection.getResponseCode() != 200) {
-                return new NfcReply(REPLY_UNAVAILABLE, null);
-            }
-            String response = readAll(connection.getInputStream(), 8192);
-            if (response.contains("\"ok\":true")) {
-                String name = extractString(response, "name");
-                return new NfcReply(REPLY_MARKED, name == null ? "" : name);
-            }
-            if (response.contains("\"device\":true")) {
-                return new NfcReply(REPLY_DEVICE_BLOCKED, null);
-            }
-            if (response.contains("\"relogin\":true")) {
-                return new NfcReply(REPLY_RELOGIN, null);
-            }
-            return new NfcReply(REPLY_UNAVAILABLE, null);
-        } catch (IOException e) {
-            return new NfcReply(REPLY_UNAVAILABLE, null);
-        } finally {
-            if (connection != null) {
-                connection.disconnect();
-            }
-        }
-    }
-
-    private static String readAll(InputStream input, int cap) throws IOException {
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        byte[] buffer = new byte[8192];
-        int read;
-        while (output.size() < cap && (read = input.read(buffer)) > 0) {
-            output.write(buffer, 0, read);
-        }
-        return new String(output.toByteArray(), StandardCharsets.UTF_8);
     }
 
     private static String extractString(String json, String key) {

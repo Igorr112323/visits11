@@ -24,6 +24,9 @@ public sealed class CameraLink : IDisposable
     /// <summary>Кадр (JPEG, поворот в градусах). Вызывается в потоке UI.</summary>
     public event Action<byte[], int>? FrameReceived;
 
+    /// <summary>NFC-запрос с телефона (json) → ответ (json). Блокирующий, потокобезопасный.</summary>
+    public event Func<string, string>? NfcRelay;
+
     /// <param name="serverPort">порт встроенного сервера — телефон передаёт его студентам для NFC-отметок.</param>
     public CameraLink(int serverPort)
     {
@@ -63,7 +66,17 @@ public sealed class CameraLink : IDisposable
                 continue;
             }
 
-            try { await StreamAsync(host, token); }
+            try
+            {
+                // кадры и NFC-события — два параллельных исходящих соединения;
+                // оборвалось видео — пересканируем и NFC тоже
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(token);
+                var cameraTask = StreamAsync(host, linked.Token);
+                var eventTask = EventStreamAsync(host, linked.Token);
+                await cameraTask;
+                linked.Cancel();
+                try { await eventTask; } catch { /* отменено — нормально */ }
+            }
             catch (OperationCanceledException) { break; }
             catch { /* поток оборвался — пересканируем */ }
 
@@ -136,6 +149,56 @@ public sealed class CameraLink : IDisposable
         }
         var response = text.ToString();
         return response.Contains("200") && response.Contains("visits11-camera") ? host : null;
+    }
+
+    /// <summary>
+    /// Забирает NFC-события с телефона: GET /event (long-poll) → обработать → POST /event_result.
+    /// Всё исходящее со стороны ПК — брандмауэр Windows ничего не спрашивает.
+    /// </summary>
+    private async Task EventStreamAsync(string host, CancellationToken token)
+    {
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
+        client.DefaultRequestHeaders.ConnectionClose = true;
+
+        var failures = 0;
+        while (!token.IsCancellationRequested && failures < 4)
+        {
+            try
+            {
+                using var response = await client.GetAsync($"http://{host}:{Port}/event?wait=3000", token);
+                if (response.StatusCode == HttpStatusCode.NoContent)
+                {
+                    failures = 0;
+                    continue;
+                }
+                if (!response.IsSuccessStatusCode)
+                {
+                    // старый APK преподавателя без /event — подождём и повторим
+                    failures++;
+                    try { await Task.Delay(1000, token); } catch (OperationCanceledException) { break; }
+                    continue;
+                }
+
+                failures = 0;
+                var request = await response.Content.ReadAsStringAsync(token);
+                if (request.Length == 0) continue;
+
+                var handler = NfcRelay;
+                var result = handler is not null ? handler(request) : "{\"code\":4}";
+
+                using var content = new StringContent(result, Encoding.UTF8, "application/json");
+                await client.PostAsync($"http://{host}:{Port}/event_result", content, token);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch
+            {
+                failures++;
+                try { await Task.Delay(500, token); } catch (OperationCanceledException) { break; }
+            }
+        }
     }
 
     /// <summary>Цикл кадров: запрашивает /frame?since=N один за другим.</summary>

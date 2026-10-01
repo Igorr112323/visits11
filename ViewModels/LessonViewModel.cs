@@ -86,6 +86,8 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         _server.MarkStudent = MarkStudentInternal;
         _server.GetQrPng = BuildQrPng;
         _camera.FrameReceived += OnFrame;
+        // NFC-запросы с телефона преподавателя обрабатывает встроенный сервер
+        _camera.NfcRelay += json => _server.Relay(json);
 
         ReloadGroups();
     }
