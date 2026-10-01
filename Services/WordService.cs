@@ -1,3 +1,4 @@
+using System.IO;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
@@ -44,7 +45,7 @@ public sealed class WordService
     public void ExportStudents(string path, IReadOnlyList<Student> students)
     {
         using var document = WordprocessingDocument.Create(path, WordprocessingDocumentType.Document);
-        var mainPart = document.AddMainPart();
+        var mainPart = document.AddMainDocumentPart();
         var doc = new Document();
         var body = new Body();
         doc.Append(body);
@@ -64,7 +65,7 @@ public sealed class WordService
     public void ExportLesson(string path, string title, IReadOnlyList<LessonDetail> rows)
     {
         using var document = WordprocessingDocument.Create(path, WordprocessingDocumentType.Document);
-        var mainPart = document.AddMainPart();
+        var mainPart = document.AddMainDocumentPart();
         var doc = new Document();
         var body = new Body();
         doc.Append(body);
@@ -121,7 +122,7 @@ public sealed class WordService
                 new Paragraph(run));
             headerRow.AppendChild(cell);
         }
-        headerRow.TableHeader = new TableHeader();
+        headerRow.AppendChild(new TableHeader());
         table.AppendChild(headerRow);
         return table;
     }

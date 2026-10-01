@@ -24,7 +24,7 @@ public sealed class ModalViewModel : ObservableObject
 
     internal event Action? CloseRequested;
 
-    public RelayCommand ConfirmCommand => new(() =>
+    public RelayCommand ConfirmCommand => new(_ =>
     {
         if (OnConfirm?.Invoke(this) != false)
         {
@@ -32,5 +32,5 @@ public sealed class ModalViewModel : ObservableObject
         }
     });
 
-    public RelayCommand CancelCommand => new(() => CloseRequested?.Invoke());
+    public RelayCommand CancelCommand => new(_ => CloseRequested?.Invoke());
 }

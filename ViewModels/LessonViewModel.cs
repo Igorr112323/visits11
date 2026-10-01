@@ -53,7 +53,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         _database = database;
         _toasts = toasts;
 
-        StartStopCommand = new RelayCommand(StartOrStop, () => RollcallState != StateFinished);
+        StartStopCommand = new RelayCommand(_ => StartOrStop(), _ => RollcallState != StateFinished);
         _database.DataChanged += OnDataChanged;
 
         ReloadGroups();

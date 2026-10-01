@@ -39,7 +39,7 @@ public sealed class JournalViewModel : ObservableObject, ITabViewModel
         _toasts = toasts;
         _word = word;
 
-        ExportCommand = new RelayCommand(_ => ExportSelectedLesson(), () => SelectedLesson is not null);
+        ExportCommand = new RelayCommand(_ => ExportSelectedLesson(), _ => SelectedLesson is not null);
         _database.DataChanged += OnDataChanged;
         ReloadGroups();
     }

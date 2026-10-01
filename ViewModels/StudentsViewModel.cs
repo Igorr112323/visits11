@@ -92,6 +92,7 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
     public RelayCommand ImportWordCommand { get; }
     public RelayCommand ExportWordCommand { get; }
     public RelayCommand CopyTextCommand { get; }
+    public RelayCommand SelectGroupCommand { get; }
 
     // --------------------------------------------------------------- студенты
 
