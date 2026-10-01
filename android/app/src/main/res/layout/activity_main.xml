@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg">
+
+    <TextureView
+        android:id="@+id/preview"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center" />
+
+    <!-- индикатор соединения: клик — снова показать панель подключения -->
+    <View
+        android:id="@+id/dot"
+        android:layout_width="16dp"
+        android:layout_height="16dp"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="22dp"
+        android:layout_marginEnd="22dp"
+        android:background="@drawable/dot_red" />
+
+    <!-- панель подключения (показывается при запуске и по клику на точку) -->
+    <LinearLayout
+        android:id="@+id/setupPanel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:background="@drawable/card_bg"
+        android:orientation="vertical"
+        android:paddingStart="24dp"
+        android:paddingEnd="24dp"
+        android:paddingTop="26dp"
+        android:paddingBottom="24dp"
+        android:visibility="gone">
+
+        <EditText
+            android:id="@+id/addressInput"
+            android:layout_width="260dp"
+            android:layout_height="wrap_content"
+            android:background="@drawable/input_bg"
+            android:hint="192.168.1.5:8090"
+            android:textColorHint="@color/textDim"
+            android:inputType="text"
+            android:imeOptions="actionDone"
+            android:maxLines="1"
+            android:padding="14dp"
+            android:textSize="15sp"
+            android:textColor="@color/text" />
+
+        <Button
+            android:id="@+id/connectButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/button_bg"
+            android:stateListAnimator="@null"
+            android:text="Подключиться"
+            android:textAllCaps="false"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp" />
+    </LinearLayout>
+
+</FrameLayout>

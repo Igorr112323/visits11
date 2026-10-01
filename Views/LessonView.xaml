@@ -60,8 +60,14 @@
                 <!-- сетка -->
                 <Rectangle Fill="{StaticResource Brush.GridPattern}" />
 
-                <!-- центр: плейсхолдер камеры -->
-                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                <!-- видеопоток с телефона преподавателя -->
+                <Image Source="{Binding StreamFrame}"
+                       Stretch="Uniform"
+                       Visibility="{Binding HasStream, Converter={StaticResource Conv.BoolToVis}}" />
+
+                <!-- центр: плейсхолдер камеры (когда телефон не подключён) -->
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Visibility="{Binding HasStream, Converter={StaticResource Conv.BoolToVis}, ConverterParameter=invert}">
                     <Border Width="80" Height="80" CornerRadius="24"
                             Background="{DynamicResource Brush.Camera.IconBg}"
                             BorderBrush="{DynamicResource Brush.Camera.IconBorder}" BorderThickness="1"
@@ -100,6 +106,35 @@
                                FontSize="12.5"
                                Foreground="{DynamicResource Brush.Camera.TextDim}"
                                HorizontalAlignment="Center" Margin="0,6,0,0" />
+                </StackPanel>
+
+                <!-- QR-код для отметки студентов (во время переклички) -->
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding RollcallState}" Value="Active">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </StackPanel.Style>
+                    <Border CornerRadius="16" Background="#F2FFFFFF" Padding="10"
+                            Effect="{StaticResource Effect.ShadowLg}">
+                        <Image Source="{Binding QrImage}" Width="172" Height="172"
+                               RenderOptions.BitmapScalingMode="NearestNeighbor" />
+                    </Border>
+                    <TextBlock Text="Отсканируйте QR-код, чтобы отметиться"
+                               TextAlignment="Center" FontSize="13"
+                               FontFamily="{StaticResource Font.SemiBold}"
+                               Foreground="{DynamicResource Brush.Camera.Text}"
+                               Margin="0,14,0,0" />
+                    <TextBlock Text="{Binding QrUrl}"
+                               TextAlignment="Center" FontSize="11"
+                               FontFamily="{StaticResource Font.Mono}"
+                               Foreground="{DynamicResource Brush.Camera.TextDim}"
+                               Margin="0,4,0,0" />
                 </StackPanel>
 
                 <!-- рамка сканирования -->

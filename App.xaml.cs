@@ -11,6 +11,7 @@ public partial class App : Application
     public static DatabaseService Db { get; private set; } = null!;
     public static ThemeService Theme { get; private set; } = null!;
     public static ToastService Toasts { get; private set; } = null!;
+    public static PhoneServer Server { get; private set; } = null!;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -26,15 +27,24 @@ public partial class App : Application
 
         Toasts = new ToastService();
 
+        Server = new PhoneServer();
+        Server.Start();
+
         DispatcherUnhandledException += (_, args) =>
         {
             MessageBox.Show(args.Exception.Message, "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
             args.Handled = true;
         };
 
-        var viewModel = new MainViewModel(Db, Toasts, Theme, new AuthService(), new WordService());
+        var viewModel = new MainViewModel(Db, Toasts, Theme, new AuthService(), new WordService(), Server);
         var window = new MainWindow(viewModel);
         window.Show();
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        Server.Dispose();
+        base.OnExit(e);
     }
 
     /// <summary>

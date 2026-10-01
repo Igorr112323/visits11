@@ -14,12 +14,13 @@ public sealed class MainViewModel : ObservableObject
         ToastService toasts,
         ThemeService theme,
         AuthService auth,
-        WordService word)
+        WordService word,
+        PhoneServer server)
     {
         _theme = theme;
         Toasts = toasts;
 
-        Lesson = new LessonViewModel(database, toasts);
+        Lesson = new LessonViewModel(database, toasts, server);
         Students = new StudentsViewModel(database, toasts, auth, word, this);
         Journal = new JournalViewModel(database, toasts, word);
 

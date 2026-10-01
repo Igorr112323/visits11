@@ -1,5 +1,9 @@
 using System.Collections.ObjectModel;
+using System.IO;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using QRCoder;
 using Visits11.Models;
 using Visits11.Services;
 
@@ -32,7 +36,8 @@ public sealed class StudentRow : ObservableObject
 }
 
 /// <summary>
-/// Вкладка «Занятия»: выбор группы, симуляция QR-переклички, статистика.
+/// Вкладка «Занятия»: выбор группы, перекличка по QR-коду (отметка приходит с телефона студента),
+/// видеопоток с телефона преподавателя, статистика.
 /// </summary>
 public sealed class LessonViewModel : ObservableObject, ITabViewModel
 {
@@ -42,19 +47,37 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
 
     private readonly DatabaseService _database;
     private readonly ToastService _toasts;
-    private readonly Random _random = new();
+    private readonly PhoneServer _server;
 
-    private DispatcherTimer? _scanTimer;
     private DispatcherTimer? _resetTimer;
+    private readonly DispatcherTimer _streamWatchdog;
     private string _lessonStartedAt = string.Empty;
 
-    public LessonViewModel(DatabaseService database, ToastService toasts)
+    public LessonViewModel(DatabaseService database, ToastService toasts, PhoneServer server)
     {
         _database = database;
         _toasts = toasts;
+        _server = server;
 
         StartStopCommand = new RelayCommand(_ => StartOrStop(), _ => RollcallState != StateFinished);
         _database.DataChanged += OnDataChanged;
+
+        _streamWatchdog = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+        _streamWatchdog.Tick += (_, _) =>
+        {
+            _streamWatchdog.Stop();
+            HasStream = false;
+        };
+
+        // сервер спрашивает нас о перекличке и передаёт отметки/кадры видео
+        _server.IsRollcallActive = () => RollcallState == StateActive;
+        _server.GetGroupName = () => SelectedGroup?.Name ?? "";
+        _server.GetStudents = () => Rows
+            .Select(r => new StudentDto(r.StudentId, r.FullName, r.IsPresent))
+            .ToList();
+        _server.MarkStudent = MarkStudentInternal;
+        _server.CheckInByPhone = CheckInByPhoneInternal;
+        _server.FrameReceived += OnFrame;
 
         ReloadGroups();
     }
@@ -113,7 +136,47 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
     public string PercentText => Rows.Count == 0 ? "0%" : $"{(int)Math.Round(Percent * 100)}%";
     public string RatioText => $"{PresentCount}/{Rows.Count}";
 
-    // ------------------------------------------------------------- перекличка
+    // -------------------------------------------------------------- видеопоток
+
+    private bool _hasStream;
+    public bool HasStream
+    {
+        get => _hasStream;
+        private set => Set(ref _hasStream, value);
+    }
+
+    private ImageSource? _streamFrame;
+    public ImageSource? StreamFrame
+    {
+        get => _streamFrame;
+        private set => Set(ref _streamFrame, value);
+    }
+
+    private void OnFrame(byte[] jpeg, int rotation)
+    {
+        StreamFrame = DecodeImage(jpeg, rotation);
+        if (!HasStream) HasStream = true;
+        _streamWatchdog.Stop();
+        _streamWatchdog.Start();
+    }
+
+    // ---------------------------------------------------------------- QR-код
+
+    private ImageSource? _qrImage;
+    public ImageSource? QrImage
+    {
+        get => _qrImage;
+        private set => Set(ref _qrImage, value);
+    }
+
+    private string _qrUrl = string.Empty;
+    public string QrUrl
+    {
+        get => _qrUrl;
+        private set => Set(ref _qrUrl, value);
+    }
+
+    // --------------------------------------------------------------- перекличка
 
     private string _rollcallState = StateIdle;
     public string RollcallState
@@ -165,26 +228,39 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
             row.MarkedAt = null;
         }
         _lessonStartedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+
+        // QR-код со ссылкой для отметки
+        QrUrl = _server.Url;
+        QrImage = _server.IsRunning ? MakeQr(QrUrl) : null;
+
         RecalcStats();
-
-        _scanTimer?.Stop();
-        _scanTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.2) };
-        _scanTimer.Tick += (_, _) => ScanTick();
-        _scanTimer.Start();
-
         RollcallState = StateActive;
     }
 
-    private void ScanTick()
+    /// <summary>Отметка студента со страницы (по выбору имени). Приходит с телефона.</summary>
+    private MarkResult MarkStudentInternal(int studentId)
     {
-        var remaining = Rows.Where(r => !r.IsPresent).ToList();
-        if (remaining.Count == 0)
-        {
-            Finish();
-            return;
-        }
+        if (RollcallState != StateActive) return MarkResult.Fail;
+        var row = Rows.FirstOrDefault(r => r.StudentId == studentId);
+        if (row is null) return MarkResult.Fail;
 
-        var row = remaining[_random.Next(remaining.Count)];
+        if (!row.IsPresent) MarkRow(row);
+        return new MarkResult(true, row.FullName, row.PhoneId);
+    }
+
+    /// <summary>Автоматическая отметка по сохранённому на телефоне ID.</summary>
+    private MarkResult CheckInByPhoneInternal(string phoneId)
+    {
+        if (RollcallState != StateActive || string.IsNullOrEmpty(phoneId)) return MarkResult.Fail;
+        var row = Rows.FirstOrDefault(r => r.PhoneId == phoneId);
+        if (row is null) return MarkResult.Fail;
+
+        if (!row.IsPresent) MarkRow(row);
+        return new MarkResult(true, row.FullName, row.PhoneId);
+    }
+
+    private void MarkRow(StudentRow row)
+    {
         row.IsPresent = true;
         row.MarkedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
 
@@ -204,9 +280,6 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
 
     private void Finish()
     {
-        _scanTimer?.Stop();
-        _scanTimer = null;
-
         var now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
         if (SelectedGroup is not null)
         {
@@ -239,7 +312,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         OnPropertyChanged(nameof(RatioText));
     }
 
-    // ------------------------------------------------------------- загрузка
+    // ---------------------------------------------------------------- загрузка
 
     public void OnActivated()
     {
@@ -312,5 +385,37 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
             });
         }
         RecalcStats();
+    }
+
+    // ---------------------------------------------------------------- картинки
+
+    private static ImageSource DecodeImage(byte[] data, int rotation)
+    {
+        var image = new BitmapImage();
+        using (var stream = new MemoryStream(data))
+        {
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.StreamSource = stream;
+            image.Rotation = rotation switch
+            {
+                90 => Rotation.Rotate90,
+                180 => Rotation.Rotate180,
+                270 => Rotation.Rotate270,
+                _ => Rotation.Rotate0,
+            };
+            image.EndInit();
+        }
+        image.Freeze();
+        return image;
+    }
+
+    private static ImageSource MakeQr(string content)
+    {
+        var generator = new QRCodeGenerator();
+        var data = generator.CreateQrCode(content, QRCodeGenerator.EccLevel.M);
+        var qr = new PngByteQRCode(data);
+        var png = qr.GetGraphic(12);
+        return DecodeImage(png, 0);
     }
 }

@@ -1,0 +1,53 @@
+name: Build Android APK
+
+on:
+  push:
+    paths:
+      - 'android/**'
+      - '.github/workflows/apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.9'
+
+      - name: Build release APK
+        working-directory: android
+        run: gradle assembleRelease --no-daemon
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Visits11-Teacher-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Publish APK to release v1.0.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk Visits11-Teacher.apk
+          if gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload v1.0.0 Visits11-Teacher.apk --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create v1.0.0 Visits11-Teacher.apk \
+              --title "Visits11 v1.0.0" \
+              --notes "Учёт посещаемости — офлайн. Exe для ПК и APK камеры преподавателя." \
+              --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY"
+          fi

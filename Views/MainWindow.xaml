@@ -12,7 +12,60 @@
         UseLayoutRounding="True"
         SnapsToDevicePixels="True">
 
+    <!-- без системной полосы заголовка -->
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="0"
+                      ResizeBorderThickness="6"
+                      GlassFrameThickness="0"
+                      CornerRadius="0"
+                      UseAeroCaptionButtons="False" />
+    </WindowChrome.WindowChrome>
+
     <Window.Resources>
+        <!-- кнопки управления окном -->
+        <Style x:Key="Style.WinControl" TargetType="Button">
+            <Setter Property="Width" Value="46" />
+            <Setter Property="Height" Value="64" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Foreground" Value="{DynamicResource Brush.TextDim}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="Transparent">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Brush.Panel3}" />
+                                <Setter Property="Foreground" Value="{DynamicResource Brush.Text}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="Style.WinClose" TargetType="Button">
+            <Setter Property="Width" Value="46" />
+            <Setter Property="Height" Value="64" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Foreground" Value="{DynamicResource Brush.TextDim}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="Transparent">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#E81123" />
+                                <Setter Property="Foreground" Value="#FFFFFF" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <DataTemplate DataType="{x:Type vm:LessonViewModel}">
             <views:LessonView />
         </DataTemplate>
@@ -227,9 +280,10 @@
             <!-- ТОПБАР -->
             <Border Background="{DynamicResource Brush.Topbar}"
                     BorderBrush="{DynamicResource Brush.Border}"
-                    BorderThickness="0,0,0,1">
-                <Grid Margin="20,0">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    BorderThickness="0,0,0,1"
+                    MouseLeftButtonDown="Topbar_OnMouseLeftButtonDown">
+                <Grid>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="20,0,196,0">
                         <RadioButton Style="{StaticResource Widget.TabToggle}"
                                      GroupName="Tabs"
                                      Tag="{StaticResource Icon.Camera}"
@@ -249,23 +303,65 @@
                                      IsChecked="{Binding TabJournal, Mode=TwoWay}" />
                     </StackPanel>
 
-                    <Button Style="{StaticResource Btn.Icon}"
-                            Command="{Binding ToggleThemeCommand}"
-                            HorizontalAlignment="Right" VerticalAlignment="Center"
-                            ToolTip="Переключить тему">
-                        <Grid Width="18" Height="18">
-                            <Path Data="{StaticResource Icon.Sun}"
-                                  Stretch="Uniform"
-                                  Stroke="{DynamicResource Brush.TextDim}" StrokeThickness="1.8"
-                                  StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                  Visibility="{Binding IsDarkTheme, Converter={StaticResource Conv.BoolToVis}}" />
-                            <Path Data="{StaticResource Icon.Moon}"
-                                  Stretch="Uniform"
-                                  Stroke="{DynamicResource Brush.TextDim}" StrokeThickness="1.8"
-                                  StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
-                                  Visibility="{Binding IsDarkTheme, Converter={StaticResource Conv.BoolToVis}, ConverterParameter=invert}" />
-                        </Grid>
-                    </Button>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                        <Button Style="{StaticResource Btn.Icon}"
+                                Command="{Binding ToggleThemeCommand}"
+                                VerticalAlignment="Center" Margin="0,0,12,0"
+                                ToolTip="Переключить тему">
+                            <Grid Width="18" Height="18">
+                                <Path Data="{StaticResource Icon.Sun}"
+                                      Stretch="Uniform"
+                                      Stroke="{DynamicResource Brush.TextDim}" StrokeThickness="1.8"
+                                      StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Visibility="{Binding IsDarkTheme, Converter={StaticResource Conv.BoolToVis}}" />
+                                <Path Data="{StaticResource Icon.Moon}"
+                                      Stretch="Uniform"
+                                      Stroke="{DynamicResource Brush.TextDim}" StrokeThickness="1.8"
+                                      StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Visibility="{Binding IsDarkTheme, Converter={StaticResource Conv.BoolToVis}, ConverterParameter=invert}" />
+                            </Grid>
+                        </Button>
+
+                        <!-- свои кнопки управления окном -->
+                        <Button Style="{StaticResource Style.WinControl}" Click="MinimizeButton_Click" ToolTip="Свернуть">
+                            <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  StrokeThickness="1" Data="M 0,5 H 10" />
+                        </Button>
+                        <Button Style="{StaticResource Style.WinControl}" Click="MaximizeButton_Click" ToolTip="Развернуть">
+                            <Grid>
+                                <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      StrokeThickness="1" Data="M 0,0 H 10 V 10 H 0 Z">
+                                    <Path.Style>
+                                        <Style TargetType="Path">
+                                            <Setter Property="Visibility" Value="Visible" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding WindowState, RelativeSource={RelativeSource AncestorType=Window}}" Value="Maximized">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Path.Style>
+                                </Path>
+                                <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                      StrokeThickness="1" Data="M 2,8 V 2 H 8 M 0,6 V 0 H 6">
+                                    <Path.Style>
+                                        <Style TargetType="Path">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding WindowState, RelativeSource={RelativeSource AncestorType=Window}}" Value="Maximized">
+                                                    <Setter Property="Visibility" Value="Visible" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Path.Style>
+                                </Path>
+                            </Grid>
+                        </Button>
+                        <Button Style="{StaticResource Style.WinClose}" Click="CloseButton_Click" ToolTip="Закрыть">
+                            <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  StrokeThickness="1" Data="M 0,0 L 10,10 M 10,0 L 0,10" />
+                        </Button>
+                    </StackPanel>
                 </Grid>
             </Border>
 
