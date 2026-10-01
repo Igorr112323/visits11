@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -29,3 +32,15 @@ jobs:
           name: Visits11-win-x64
           path: publish/Visits11.exe
           if-no-files-found: error
+
+      - name: Publish release with exe
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view v1.0.0 --repo "$env:GITHUB_REPOSITORY" *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload v1.0.0 publish/Visits11.exe --clobber --repo "$env:GITHUB_REPOSITORY"
+          } else {
+            gh release create v1.0.0 publish/Visits11.exe --target "$env:GITHUB_SHA" --repo "$env:GITHUB_REPOSITORY" --title "Visits11 v1.0.0" --notes "Готовый single-file .exe (Windows x64, .NET 8, self-contained). Установка не требуется — скачайте и запустите. Данные (attendance.db, settings.json) создаются рядом с файлом."
+          }
