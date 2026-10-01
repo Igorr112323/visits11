@@ -4,6 +4,16 @@
     android:layout_height="match_parent"
     android:background="@color/bg">
 
+    <!-- логотип КубГАУ -->
+    <ImageView
+        android:layout_width="110dp"
+        android:layout_height="110dp"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="40dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/logo"
+        android:contentDescription="КубГАУ" />
+
     <!-- QR-код на весь экран (обновляется с ПК каждые 5 секунд) -->
     <ImageView
         android:id="@+id/qrView"

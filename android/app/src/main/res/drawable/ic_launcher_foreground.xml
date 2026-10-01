@@ -1,28 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
-    <!-- глиф камеры в безопасной зоне: занимает половину области -->
-    <group
-        android:scaleX="0.5"
-        android:scaleY="0.5"
-        android:translateX="6"
-        android:translateY="6">
-        <path
-            android:pathData="M14.5,4h-5L7,7H4a2,2 0 0 0-2,2v9a2,2 0 0 0,2,2h16a2,2 0 0 0,2,-2V9a2,2 0 0 0-2,-2h-3l-2.5,-3z"
-            android:strokeLineJoin="round"
-            android:strokeLineCap="round"
-            android:strokeWidth="2"
-            android:strokeColor="#FFFFFF"
-            android:fillColor="#00000000" />
-        <path
-            android:pathData="M12,13m-3,0a3,3 0 1 0,6 0a3,3 0 1 0-6 0"
-            android:strokeLineJoin="round"
-            android:strokeLineCap="round"
-            android:strokeWidth="2"
-            android:strokeColor="#FFFFFF"
-            android:fillColor="#00000000" />
-    </group>
-</vector>
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:inset="20%">
+    <bitmap android:src="@drawable/logo_icon" />
+</inset>
