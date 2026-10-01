@@ -128,7 +128,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         _rollcallId.CopyTo(payload, 4);
         BitConverter.GetBytes(studentId).CopyTo(payload, 12);
         BitConverter.GetBytes(CurrentQrWindow()).CopyTo(payload, 16);
-        RandomNumberGenerator.GetBytes(payload.AsSpan(24, 4));
+        RandomNumberGenerator.Fill(payload.AsSpan(24, 4));
         return payload;
     }
 
