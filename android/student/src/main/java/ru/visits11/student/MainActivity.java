@@ -329,7 +329,7 @@ public final class MainActivity extends Activity {
         }
     }
 
-    /** Адреса своей подсети /24 (кроме собственного). */
+    /** Адреса своей Wi-Fi подсети /24 (кроме собственного) — строго локальная сеть. */
     private static List<String> buildTargets() {
         List<String> targets = new ArrayList<>();
         List<String> own = new ArrayList<>();
@@ -338,6 +338,12 @@ public final class MainActivity extends Activity {
             while (interfaces != null && interfaces.hasMoreElements()) {
                 NetworkInterface nic = interfaces.nextElement();
                 if (!nic.isUp() || nic.isLoopback()) {
+                    continue;
+                }
+                // только Wi-Fi: мобильный интернет не используется вовсе
+                String name = nic.getName().toLowerCase(Locale.ROOT);
+                if (!name.startsWith("wlan") && !name.startsWith("wifi")
+                        && !name.startsWith("ap") && !name.startsWith("swlan")) {
                     continue;
                 }
                 Enumeration<InetAddress> addresses = nic.getInetAddresses();
