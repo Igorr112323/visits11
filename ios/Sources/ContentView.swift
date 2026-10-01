@@ -59,14 +59,11 @@ final class MarkModel: NSObject, ObservableObject, NFCTagReaderSessionDelegate {
     // MARK: обмен APDU
 
     private func handle(tag: NFCISO7816Tag, session: NFCTagReaderSession) {
-        guard let select = NFCISO7816APDU(instructionClass: 0x00, instructionCode: 0xA4,
-                                         p1Parameter: 0x04, p2Parameter: 0x00,
-                                         data: Data(aid), expectedResponseLength: 2) else {
-            session.invalidate(errorMessage: "Не получилось, попробуйте ещё раз")
-            return
-        }
-        tag.sendCommand(commandAPDU: select) { [weak self] _, statusWord, error in
-            guard let self, error == nil, statusWord == 0x9000 else {
+        let select = NFCISO7816APDU(instructionClass: 0x00, instructionCode: 0xA4,
+                                    p1Parameter: 0x04, p2Parameter: 0x00,
+                                    data: Data(aid), expectedResponseLength: 2)
+        tag.sendCommand(apdu: select) { [weak self] _, sw1, sw2, error in
+            guard let self, error == nil, sw1 == 0x90, sw2 == 0x00 else {
                 session.invalidate(errorMessage: "Это не телефон преподавателя")
                 return
             }
@@ -87,15 +84,12 @@ final class MarkModel: NSObject, ObservableObject, NFCTagReaderSessionDelegate {
             type = 2
             payload = token
         }
-        guard let command = NFCISO7816APDU(instructionClass: 0x00, instructionCode: 0x10,
-                                           p1Parameter: 0x00, p2Parameter: 0x00,
-                                           data: Data([type] + Array(payload.utf8)),
-                                           expectedResponseLength: 256) else {
-            session.invalidate(errorMessage: "Не получилось, попробуйте ещё раз")
-            return
-        }
-        tag.sendCommand(commandAPDU: command) { [weak self] data, statusWord, error in
-            guard let self, error == nil, statusWord == 0x9000, !data.isEmpty else {
+        let command = NFCISO7816APDU(instructionClass: 0x00, instructionCode: 0x10,
+                                     p1Parameter: 0x00, p2Parameter: 0x00,
+                                     data: Data([type] + Array(payload.utf8)),
+                                     expectedResponseLength: 256)
+        tag.sendCommand(apdu: command) { [weak self] data, sw1, sw2, error in
+            guard let self, error == nil, sw1 == 0x90, sw2 == 0x00, !data.isEmpty else {
                 session.invalidate(errorMessage: "Не получилось, попробуйте ещё раз")
                 return
             }
