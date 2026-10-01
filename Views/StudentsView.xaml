@@ -1,0 +1,215 @@
+<UserControl x:Class="Visits11.Views.StudentsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Focusable="False">
+
+    <UserControl.Resources>
+        <DataTemplate x:Key="Tpl.GroupItem">
+            <TextBlock Text="{Binding Name}" FontSize="14"
+                       FontFamily="{StaticResource Font.SemiBold}"
+                       TextTrimming="CharacterEllipsis" />
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="320" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- ================================================== ГРУППЫ (ЛЕВО) -->
+
+        <Border Grid.Column="0" Margin="0,0,20,0"
+                CornerRadius="20"
+                Background="{DynamicResource Brush.Panel}"
+                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+                Effect="{StaticResource Effect.ShadowMd}">
+            <Grid Margin="18">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <Grid>
+                    <TextBlock Text="Группы" Style="{StaticResource Txt.H2}" VerticalAlignment="Center" />
+                    <Button Style="{StaticResource Btn.Soft}"
+                            Command="{Binding NewGroupCommand}"
+                            HorizontalAlignment="Right">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{StaticResource Icon.Plus}" Width="13" Height="13" Stretch="Uniform"
+                                  Stroke="{DynamicResource Brush.Accent}" StrokeThickness="2.2"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                            <TextBlock Text="Новая" Margin="7,0,0,0" />
+                        </StackPanel>
+                    </Button>
+                </Grid>
+
+                <ScrollViewer Grid.Row="1" Margin="0,14,0,0" VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding Groups}">
+                        <ItemsControl.ItemContainerStyle>
+                            <Style TargetType="ContentPresenter">
+                                <Setter Property="HorizontalAlignment" Value="Stretch" />
+                            </Style>
+                        </ItemsControl.ItemContainerStyle>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Button Style="{StaticResource Widget.GroupCard}"
+                                        Margin="0,0,0,8"
+                                        Content="{Binding}"
+                                        ContentTemplate="{StaticResource Tpl.GroupItem}"
+                                        Command="{Binding DataContext.SelectGroupCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                        CommandParameter="{Binding}" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <!-- ================================================ СТУДЕНТЫ (ПРАВО) -->
+
+        <Border Grid.Column="1"
+                CornerRadius="20"
+                Background="{DynamicResource Brush.Panel}"
+                BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
+                Effect="{StaticResource Effect.ShadowMd}">
+            <Grid Margin="22">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <!-- заголовок -->
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{Binding HeaderTitle}" Style="{StaticResource Txt.H1}" />
+                    <TextBlock Text="{Binding HeaderCount}" FontSize="13"
+                               Foreground="{DynamicResource Brush.TextDim}"
+                               Margin="10,4,0,0" VerticalAlignment="Bottom" />
+                </StackPanel>
+
+                <!-- действия -->
+                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,16,0,0">
+                    <Button Style="{StaticResource Btn.Green}" Command="{Binding AddStudentCommand}">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{StaticResource Icon.UserPlus}" Width="15" Height="15" Stretch="Uniform"
+                                  Stroke="#FFFFFF" StrokeThickness="1.8"
+                                  StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                            <TextBlock Text="Добавить студента" Margin="8,0,0,0" />
+                        </StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource Btn.Violet}" Command="{Binding ImportWordCommand}" Margin="10,0,0,0">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{StaticResource Icon.Import}" Width="15" Height="15" Stretch="Uniform"
+                                  Stroke="#FFFFFF" StrokeThickness="1.8"
+                                  StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                            <TextBlock Text="Импорт из Word" Margin="8,0,0,0" />
+                        </StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource Btn.Violet}" Command="{Binding ExportWordCommand}" Margin="10,0,0,0">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{StaticResource Icon.Export}" Width="15" Height="15" Stretch="Uniform"
+                                  Stroke="#FFFFFF" StrokeThickness="1.8"
+                                  StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                            <TextBlock Text="Экспорт в Word" Margin="8,0,0,0" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+
+                <!-- таблица -->
+                <Grid Grid.Row="2" Margin="0,18,0,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- шапка -->
+                    <Border BorderBrush="{DynamicResource Brush.Border}" BorderThickness="0,0,0,1"
+                            Padding="0,0,10,10" Margin="0,0,0,4">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="40" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="130" />
+                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="120" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="№" Style="{StaticResource Txt.Label}" />
+                            <TextBlock Grid.Column="1" Text="ФИО" Style="{StaticResource Txt.Label}" />
+                            <TextBlock Grid.Column="2" Text="Логин" Style="{StaticResource Txt.Label}" />
+                            <TextBlock Grid.Column="3" Text="Пароль" Style="{StaticResource Txt.Label}" />
+                            <TextBlock Grid.Column="4" Text="ID телефона" Style="{StaticResource Txt.Label}" />
+                        </Grid>
+                    </Border>
+
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Visible"
+                                  HorizontalScrollBarVisibility="Disabled">
+                        <ItemsControl ItemsSource="{Binding Students}">
+                            <ItemsControl.ItemContainerStyle>
+                                <Style TargetType="ContentPresenter">
+                                    <Setter Property="HorizontalAlignment" Value="Stretch" />
+                                </Style>
+                            </ItemsControl.ItemContainerStyle>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Padding="0,9" BorderBrush="{DynamicResource Brush.Border}"
+                                            BorderThickness="0,0,0,1">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="40" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="130" />
+                                                <ColumnDefinition Width="110" />
+                                                <ColumnDefinition Width="120" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <TextBlock Grid.Column="0" Text="{Binding Number}"
+                                                       FontSize="12" FontFamily="{StaticResource Font.Medium}"
+                                                       Foreground="{DynamicResource Brush.TextSoft}"
+                                                       VerticalAlignment="Center" />
+                                            <TextBlock Grid.Column="1" Text="{Binding FullName}"
+                                                       Style="{StaticResource Txt.Body}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       VerticalAlignment="Center" />
+
+                                            <Button Grid.Column="2"
+                                                    Style="{StaticResource Btn.Chip}"
+                                                    Content="{Binding Login}"
+                                                    Command="{Binding DataContext.CopyTextCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding Login}"
+                                                    HorizontalAlignment="Left" />
+                                            <Button Grid.Column="3"
+                                                    Style="{StaticResource Btn.Chip}"
+                                                    Content="{Binding Password}"
+                                                    Command="{Binding DataContext.CopyTextCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding Password}"
+                                                    HorizontalAlignment="Left" />
+
+                                            <Grid Grid.Column="4">
+                                                <TextBlock Text="{Binding PhoneId}"
+                                                           Style="{StaticResource Txt.Mono}"
+                                                           VerticalAlignment="Center"
+                                                           Visibility="{Binding PhoneId, Converter={StaticResource Conv.NullToVis}}" />
+                                                <Grid Visibility="{Binding PhoneId, Converter={StaticResource Conv.NullToVis}, ConverterParameter=invert}"
+                                                      Height="24">
+                                                    <Rectangle RadiusX="8" RadiusY="8"
+                                                               Stroke="{DynamicResource Brush.BorderStrong}"
+                                                               StrokeDashArray="3 2" StrokeThickness="1"
+                                                               Fill="Transparent" />
+                                                    <TextBlock Text="не привязан" FontSize="11"
+                                                               Foreground="{DynamicResource Brush.TextSoft}"
+                                                               HorizontalAlignment="Center"
+                                                               VerticalAlignment="Center" />
+                                                </Grid>
+                                            </Grid>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </Grid>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>
