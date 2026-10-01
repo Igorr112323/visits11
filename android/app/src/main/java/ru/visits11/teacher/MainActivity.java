@@ -1,26 +1,16 @@
 package ru.visits11.teacher;
 
-import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
-import android.content.pm.PackageManager;
-import android.graphics.ImageFormat;
-import android.graphics.Rect;
-import android.graphics.SurfaceTexture;
-import android.graphics.YuvImage;
-import android.hardware.Camera;
 import android.os.Bundle;
 import android.os.Handler;
-import android.os.HandlerThread;
 import android.os.Looper;
 import android.os.SystemClock;
-import android.view.TextureView;
 import android.view.View;
 import android.view.WindowManager;
-import android.widget.Button;
+import android.widget.TextView;
 import android.widget.Toast;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -34,42 +24,22 @@ import java.util.Enumeration;
 import java.util.Locale;
 
 /**
- * Камера преподавателя. Сам ничего не настраивает и не вводит:
- * слушает порт 8090 и отдаёт кадры ПК (Visits11 находит телефон сам).
- * Подсказывает включить «USB-модем», когда телефон подключён кабелем.
+ * Телефон преподавателя: логотип КубГАУ на весь экран, экран не гаснет.
+ * Невидимо держит связь с ПК по USB (ПК сам находит телефон) — через неё
+ * NFC-сервис (TeacherCardService) пересылает отметки студентов на ПК.
+ * Нет связи с ПК — нажмите на экран, откроется тумблер «USB-модем».
  */
-public final class MainActivity extends Activity implements TextureView.SurfaceTextureListener {
+public final class MainActivity extends Activity {
 
-    private static final int REQUEST_CAMERA = 1;
     private static final int SERVER_PORT = 8090;
-    private static final long FRAME_WAIT_MS = 800;   // long-poll на /frame
-    private static final long PC_TIMEOUT_MS = 3000;  // точка гаснет, если ПК давно не спрашивал
-    private static final long ENCODE_INTERVAL_MS = 100; // не чаще ~10 кадров/с
+    private static final long FRAME_WAIT_MS = 800;   // pacing для /frame (кадров больше нет)
+    private static final long PC_TIMEOUT_MS = 3000;  // связь считается потерянной
 
-    private TextureView preview;
-    private View dot;
-    private View promptPanel;
-
-    private volatile SurfaceTexture surface;
-    private volatile int frameRotation = 90;
-    private int previewWidth;
-    private int previewHeight;
-
-    private Camera camera;
-    private int cameraId;
-    private HandlerThread cameraThread;
-    private Handler cameraHandler;
-    private boolean cameraStarted;
+    private TextView statusText;
 
     private ServerSocket serverSocket;
     private volatile boolean serverRunning;
-    private Thread serverThread;
 
-    /** последний готовый JPEG + счётчик кадров */
-    private final Object frameLock = new Object();
-    private byte[] latestJpeg;
-    private long frameSeq;
-    private long lastEncodeAt;
     private volatile long lastClientAt;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -87,37 +57,19 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        // экран не должен гаснуть во время пары
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
-        preview = findViewById(R.id.preview);
-        dot = findViewById(R.id.dot);
-        promptPanel = findViewById(R.id.promptPanel);
-        Button tetherButton = findViewById(R.id.tetherButton);
-
-        preview.setSurfaceTextureListener(this);
-        dot.setOnClickListener(v -> openTetherSettings());
-        tetherButton.setOnClickListener(v -> openTetherSettings());
+        statusText = findViewById(R.id.statusText);
+        // нет связи — по нажатию открываем экран с тумблером «USB-модем»
+        findViewById(R.id.root).setOnClickListener(v -> {
+            if (!pcConnected()) {
+                openTetherSettings();
+            }
+        });
 
         startServer();
         ui.post(statusTicker);
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        if (hasCameraPermission()) {
-            if (preview.isAvailable()) {
-                startCamera();
-            }
-        } else {
-            requestPermissions(new String[]{Manifest.permission.CAMERA}, REQUEST_CAMERA);
-        }
-    }
-
-    @Override
-    protected void onPause() {
-        super.onPause();
-        stopCamera();
     }
 
     @Override
@@ -128,31 +80,23 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         closeQuietly(serverSocket);
     }
 
-    @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != REQUEST_CAMERA) return;
-        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            if (preview.isAvailable()) {
-                startCamera();
-            }
-        } else {
-            toast("Нужен доступ к камере");
-            finish();
-        }
-    }
+    // ------------------------------------------------------------ статус связи
 
-    private boolean hasCameraPermission() {
-        return checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
+    private boolean pcConnected() {
+        return serverRunning && SystemClock.elapsedRealtime() - lastClientAt < PC_TIMEOUT_MS;
     }
-
-    // ------------------------------------------------------------ индикатор и подсказка
 
     private void updateStatus() {
-        boolean pcConnected = serverRunning
-                && SystemClock.elapsedRealtime() - lastClientAt < PC_TIMEOUT_MS;
-        dot.setBackgroundResource(pcConnected ? R.drawable.dot_green : R.drawable.dot_red);
-        promptPanel.setVisibility(pcConnected || isUsbTethered() ? View.GONE : View.VISIBLE);
+        if (pcConnected()) {
+            statusText.setText("ПК подключён");
+            statusText.setTextColor(0xFF2E7D32);
+        } else if (isUsbTethered()) {
+            statusText.setText("Кабель подключён — запустите Visits11 на ПК");
+            statusText.setTextColor(0xFF8A8A8A);
+        } else {
+            statusText.setText("Нет связи с ПК — нажмите, чтобы включить USB-модем");
+            statusText.setTextColor(0xFFB34A4A);
+        }
     }
 
     /** Экраны с тумблером USB-модема на разных прошивках (пробуем по порядку). */
@@ -163,7 +107,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
     };
 
     /**
-     * Открывает сразу экран с тумблером «USB-модем» — искать ничего не нужно.
+     * Открывает сразу экран с тумблером «USB-модем».
      * Включить его за пользователя Android запрещает даже системным приложениям,
      * поэтому единственный переключатель делает сам пользователь.
      */
@@ -211,15 +155,14 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         return false;
     }
 
-    // ------------------------------------------------------------ HTTP-сервер кадров
+    // ------------------------------------------------------------ связь с ПК
 
     private void startServer() {
         if (serverRunning) {
             return;
         }
         serverRunning = true;
-        serverThread = new Thread(this::serverLoop, "FrameServer");
-        serverThread.start();
+        new Thread(this::serverLoop, "PcLink").start();
     }
 
     private void serverLoop() {
@@ -263,23 +206,21 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
                 return;
             }
             String method = parts[0];
-            String target = parts[1];
-            String path = target;
-            String query = "";
-            int queryAt = target.indexOf('?');
+            String path = parts[1];
+            int queryAt = path.indexOf('?');
             if (queryAt >= 0) {
-                path = target.substring(0, queryAt);
-                query = target.substring(queryAt + 1);
+                path = path.substring(0, queryAt);
             }
 
             if ("/info".equals(path)) {
                 respond(client, "200 OK", "application/json",
-                        "{\"app\":\"visits11-camera\"}".getBytes(StandardCharsets.US_ASCII), 0, 0);
+                        "{\"app\":\"visits11-camera\"}".getBytes(StandardCharsets.US_ASCII));
             } else if ("/frame".equals(path) && "GET".equals(method)) {
-                serveFrame(client, query);
+                // кадров больше нет: немного ждём, чтобы ПК не крутил запросы вхолостую
+                Thread.sleep(FRAME_WAIT_MS);
+                respond(client, "204 No Content", "text/plain", new byte[0]);
             } else {
-                respond(client, "404 Not Found", "text/plain",
-                        new byte[0], 0, 0);
+                respond(client, "404 Not Found", "text/plain", new byte[0]);
             }
         } catch (Throwable ignored) {
         } finally {
@@ -287,51 +228,7 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         }
     }
 
-    /** Отдаёт новый кадр (или ждёт его до FRAME_WAIT_MS); нет кадра — 204. */
-    private void serveFrame(Socket client, String query) {
-        long since = parseSince(query);
-
-        byte[] jpeg = null;
-        long seq = 0;
-        long deadline = SystemClock.elapsedRealtime() + FRAME_WAIT_MS;
-        synchronized (frameLock) {
-            while (frameSeq == since) {
-                long left = deadline - SystemClock.elapsedRealtime();
-                if (left <= 0) {
-                    break;
-                }
-                try {
-                    frameLock.wait(left);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return;
-                }
-            }
-            if (frameSeq != since) {
-                jpeg = latestJpeg;
-                seq = frameSeq;
-            }
-        }
-
-        if (jpeg == null) {
-            respond(client, "204 No Content", "text/plain", new byte[0], 0, 0);
-        } else {
-            respond(client, "200 OK", "image/jpeg", jpeg, seq, frameRotation);
-        }
-    }
-
-    private static long parseSince(String query) {
-        for (String pair : query.split("&")) {
-            int eq = pair.indexOf('=');
-            if (eq > 0 && "since".equals(pair.substring(0, eq))) {
-                try {
-                    return Long.parseLong(pair.substring(eq + 1));
-                } catch (NumberFormatException ignored) {
-                }
-            }
-        }
-        return 0;
-    }
+    // ------------------------------------------------------------ утилиты
 
     /** Читает заголовки до \r\n\r\n целиком. */
     private static String readHeaders(InputStream input) throws IOException {
@@ -368,14 +265,11 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         return null;
     }
 
-    private static void respond(Socket client, String status, String contentType,
-                                byte[] body, long seq, int rotation) {
+    private static void respond(Socket client, String status, String contentType, byte[] body) {
         try {
             byte[] head = ("HTTP/1.1 " + status + "\r\n"
                     + "Content-Type: " + contentType + "\r\n"
                     + "Content-Length: " + body.length + "\r\n"
-                    + (seq > 0 ? "X-Seq: " + seq + "\r\n" : "")
-                    + (rotation > 0 ? "X-Rot: " + rotation + "\r\n" : "")
                     + "Connection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII);
             // заголовки и тело — ОДНИМ пакетом, чтобы клиент не потерял половину
             byte[] packet = new byte[head.length + body.length];
@@ -388,209 +282,16 @@ public final class MainActivity extends Activity implements TextureView.SurfaceT
         }
     }
 
-    // ------------------------------------------------------------ камера
-
-    @Override
-    public void onSurfaceTextureAvailable(SurfaceTexture surfaceTexture, int width, int height) {
-        surface = surfaceTexture;
-        if (hasCameraPermission()) {
-            startCamera();
-        }
-    }
-
-    @Override
-    public void onSurfaceTextureSizeChanged(SurfaceTexture surfaceTexture, int width, int height) {
-        surface = surfaceTexture;
-        fitPreviewAspect();
-    }
-
-    @Override
-    public boolean onSurfaceTextureDestroyed(SurfaceTexture surfaceTexture) {
-        surface = null;
-        stopCamera();
-        return true;
-    }
-
-    @Override
-    public void onSurfaceTextureUpdated(SurfaceTexture surfaceTexture) {
-    }
-
-    private void startCamera() {
-        if (cameraStarted) {
-            return;
-        }
-        cameraStarted = true;
-        cameraThread = new HandlerThread("Camera");
-        cameraThread.start();
-        cameraHandler = new Handler(cameraThread.getLooper());
-        cameraHandler.post(this::openCameraInternal);
-    }
-
-    private void openCameraInternal() {
-        cameraId = findBackCamera();
-        try {
-            camera = Camera.open(cameraId);
-        } catch (Exception e) {
-            camera = null;
-            toast("Не удалось открыть камеру");
-            return;
-        }
-        try {
-            Camera.Parameters params = camera.getParameters();
-
-            // максимальное разрешение не больше 1280x720
-            Camera.Size best = null;
-            for (Camera.Size size : params.getSupportedPreviewSizes()) {
-                if (size.width <= 1280 && size.height <= 720) {
-                    if (best == null || size.width * size.height > best.width * best.height) {
-                        best = size;
-                    }
-                }
-            }
-            if (best == null) {
-                best = params.getSupportedPreviewSizes().get(0);
-            }
-            params.setPreviewSize(best.width, best.height);
-            params.setPreviewFormat(ImageFormat.NV21);
-            camera.setParameters(params);
-
-            Camera.CameraInfo info = new Camera.CameraInfo();
-            Camera.getCameraInfo(cameraId, info);
-            frameRotation = info.orientation;
-            previewWidth = best.width;
-            previewHeight = best.height;
-
-            camera.setDisplayOrientation(90);
-            runOnUiThread(this::fitPreviewAspect);
-
-            if (surface != null) {
-                camera.setPreviewTexture(surface);
-            }
-            int bufferBits = ImageFormat.getBitsPerPixel(ImageFormat.NV21);
-            int bufferSize = best.width * best.height * bufferBits / 8;
-            camera.addCallbackBuffer(new byte[bufferSize]);
-            camera.setPreviewCallbackWithBuffer(this::onPreviewFrame);
-            camera.startPreview();
-        } catch (Exception e) {
-            toast("Ошибка камеры");
-            releaseCameraQuietly(camera);
-            camera = null;
-        }
-    }
-
-    /** Камера отдает NV21 → сжимаем в JPEG (не чаще 10 раз/с), ПК заберёт свежий. */
-    private void onPreviewFrame(byte[] data, Camera c) {
-        long now = SystemClock.elapsedRealtime();
-        if (now - lastEncodeAt >= ENCODE_INTERVAL_MS && previewWidth > 0) {
-            lastEncodeAt = now;
+    private static void closeQuietly(Socket socket) {
+        if (socket != null) {
             try {
-                YuvImage yuv = new YuvImage(data, ImageFormat.NV21, previewWidth, previewHeight, null);
-                ByteArrayOutputStream out = new ByteArrayOutputStream(48 * 1024);
-                yuv.compressToJpeg(new Rect(0, 0, previewWidth, previewHeight), 70, out);
-                byte[] jpeg = out.toByteArray();
-                synchronized (frameLock) {
-                    latestJpeg = jpeg;
-                    frameSeq++;
-                    frameLock.notifyAll();
-                }
-            } catch (Throwable ignored) {
+                socket.close();
+            } catch (IOException ignored) {
             }
         }
-        if (c != null) {
-            c.addCallbackBuffer(data);
-        }
     }
-
-    private void stopCamera() {
-        if (!cameraStarted) {
-            return;
-        }
-        cameraStarted = false;
-        final Camera current = camera;
-        camera = null;
-        if (cameraHandler != null) {
-            cameraHandler.post(() -> releaseCameraQuietly(current));
-        } else {
-            releaseCameraQuietly(current);
-        }
-        if (cameraThread != null) {
-            cameraThread.quitSafely();
-            cameraThread = null;
-            cameraHandler = null;
-        }
-    }
-
-    private static void releaseCameraQuietly(Camera camera) {
-        if (camera == null) {
-            return;
-        }
-        try {
-            camera.setPreviewCallbackWithBuffer(null);
-        } catch (Throwable ignored) {
-        }
-        try {
-            camera.stopPreview();
-        } catch (Throwable ignored) {
-        }
-        try {
-            camera.release();
-        } catch (Throwable ignored) {
-        }
-    }
-
-    private int findBackCamera() {
-        int count = Camera.getNumberOfCameras();
-        Camera.CameraInfo info = new Camera.CameraInfo();
-        for (int i = 0; i < count; i++) {
-            Camera.getCameraInfo(i, info);
-            if (info.facing == Camera.CameraInfo.CAMERA_FACING_BACK) {
-                return i;
-            }
-        }
-        return 0;
-    }
-
-    /** Превью с сохранением пропорций (камера повёрнута на 90°). */
-    private void fitPreviewAspect() {
-        if (previewWidth <= 0 || previewHeight <= 0) {
-            return;
-        }
-        View root = (View) preview.getParent();
-        int containerWidth = root.getWidth();
-        int containerHeight = root.getHeight();
-        if (containerWidth <= 0 || containerHeight <= 0) {
-            return;
-        }
-        float targetAspect = previewHeight / (float) previewWidth;
-        int width;
-        int height;
-        if (containerWidth / (float) containerHeight > targetAspect) {
-            height = containerHeight;
-            width = Math.round(height * targetAspect);
-        } else {
-            width = containerWidth;
-            height = Math.round(width / targetAspect);
-        }
-        android.widget.FrameLayout.LayoutParams params =
-                (android.widget.FrameLayout.LayoutParams) preview.getLayoutParams();
-        params.width = width;
-        params.height = height;
-        preview.setLayoutParams(params);
-    }
-
-    // ------------------------------------------------------------ утилиты
 
     private void toast(String message) {
-        runOnUiThread(() -> Toast.makeText(this, message, Toast.LENGTH_SHORT).show());
-    }
-
-    private static void closeQuietly(java.io.Closeable closeable) {
-        if (closeable == null) {
-            return;
-        }
-        try {
-            closeable.close();
-        } catch (IOException ignored) {
-        }
+        ui.post(() -> Toast.makeText(this, message, Toast.LENGTH_LONG).show());
     }
 }

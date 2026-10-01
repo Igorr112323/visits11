@@ -1,58 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/root"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg">
+    android:background="#FFFFFF">
 
-    <TextureView
-        android:id="@+id/preview"
+    <!-- логотип КубГАУ на весь экран -->
+    <ImageView
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:layout_gravity="center" />
+        android:padding="24dp"
+        android:scaleType="fitCenter"
+        android:src="@drawable/logo" />
 
-    <!-- индикатор связи с ПК: клик — открыть настройки USB-модема -->
-    <View
-        android:id="@+id/dot"
-        android:layout_width="16dp"
-        android:layout_height="16dp"
-        android:layout_gravity="top|end"
-        android:layout_marginTop="22dp"
-        android:layout_marginEnd="22dp"
-        android:background="@drawable/dot_red" />
-
-    <!-- подсказка: показывается, пока не включён USB-модем и ПК не подключился -->
-    <LinearLayout
-        android:id="@+id/promptPanel"
+    <!-- маленькая строка статуса внизу: связь с ПК -->
+    <TextView
+        android:id="@+id/statusText"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_gravity="center"
-        android:background="@drawable/card_bg"
-        android:orientation="vertical"
-        android:paddingStart="24dp"
-        android:paddingEnd="24dp"
-        android:paddingTop="26dp"
-        android:paddingBottom="24dp"
-        android:visibility="gone">
-
-        <TextView
-            android:layout_width="280dp"
-            android:layout_height="wrap_content"
-            android:gravity="center"
-            android:text="Подключите телефон кабелем к ПК и включите «USB-модем»"
-            android:textColor="@color/text"
-            android:textSize="15sp" />
-
-        <Button
-            android:id="@+id/tetherButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:background="@drawable/button_bg"
-            android:stateListAnimator="@null"
-            android:text="Включить USB-модем"
-            android:textAllCaps="false"
-            android:textColor="#FFFFFF"
-            android:textSize="15sp" />
-    </LinearLayout>
-
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="28dp"
+        android:fontFamily="sans-serif-medium"
+        android:textSize="13sp"
+        android:text="Нет связи с ПК — нажмите, чтобы включить USB-модем"
+        android:textColor="#FFB34A4A" />
 </FrameLayout>
