@@ -54,6 +54,20 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
     private readonly DispatcherTimer _streamWatchdog;
     private string _lessonStartedAt = string.Empty;
 
+    // ------------------------------------------------------------- QR-коды студентов
+
+    /// <summary>Магия-версия полезной нагрузки QR (внутри шифрования).</summary>
+    private static readonly byte[] QrMagic = { 0x56, 0x31, 0x31, 0x41 }; // "V11A"
+
+    /// <summary>Ключ шифрования QR — новый на каждую перекличку.</summary>
+    private byte[] _qrKey = RandomNumberGenerator.GetBytes(32);
+
+    /// <summary>Идентификатор переклички — QR с прошлого занятия не сработает.</summary>
+    private byte[] _rollcallId = RandomNumberGenerator.GetBytes(8);
+
+    private volatile bool _qrDecoding;
+    private long _lastQrDecodeAt;
+
     public LessonViewModel(DatabaseService database, ToastService toasts, PhoneServer server, CameraLink camera)
     {
         _database = database;
@@ -71,17 +85,100 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
             HasStream = false;
         };
 
-        // сервер спрашивает нас о перекличке и передаёт отметки/кадры видео
-        _server.IsRollcallActive = () => RollcallState == StateActive;
-        _server.GetGroupName = () => SelectedGroup?.Name ?? "";
-        _server.GetStudents = () => Rows
-            .Select(r => new StudentDto(r.StudentId, r.FullName, r.IsPresent))
-            .ToList();
-        _server.MarkStudent = MarkStudentInternal;
-        _server.CheckInByPhone = CheckInByPhoneInternal;
+        // сервер спрашивает нас про вход студентов и просит свежий QR для показа
+        _server.Login = LoginInternal;
+        _server.GetQrPng = BuildQrPng;
         _camera.FrameReceived += OnFrame;
 
         ReloadGroups();
+    }
+
+    /// <summary>Вход студента в приложении (логин/пароль из базы).</summary>
+    private (bool Ok, string Name, int StudentId) LoginInternal(string login, string password)
+    {
+        var student = _database.FindByLogin(login);
+        if (student is null || student.Password != password)
+        {
+            return (false, string.Empty, 0);
+        }
+        return (true, student.FullName, student.Id);
+    }
+
+    /// <summary>PNG текущего QR студента; null — перекличка не активна.</summary>
+    private byte[]? BuildQrPng(int studentId)
+    {
+        if (RollcallState != StateActive) return null;
+
+        var payload = BuildQrPayload(studentId);
+        var encrypted = EncryptQrPayload(payload);
+
+        var generator = new QRCodeGenerator();
+        var data = generator.CreateQrCode(encrypted, QRCodeGenerator.ECCLevel.M);
+        var qr = new PngByteQRCode(data);
+        return qr.GetGraphic(12);
+    }
+
+    /// <summary>Полезная нагрузка: магия + id переклички + студент + 5-секундное окно + нонс.</summary>
+    private byte[] BuildQrPayload(int studentId)
+    {
+        var payload = new byte[28];
+        QrMagic.CopyTo(payload, 0);
+        _rollcallId.CopyTo(payload, 4);
+        BitConverter.GetBytes(studentId).CopyTo(payload, 12);
+        BitConverter.GetBytes(CurrentQrWindow()).CopyTo(payload, 16);
+        RandomNumberGenerator.GetBytes(payload.AsSpan(24, 4));
+        return payload;
+    }
+
+    private static long CurrentQrWindow()
+        => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 5000;
+
+    /// <summary>AES-CBC: [IV 16 байт][шифротекст]; снаружи нечитаемо.</summary>
+    private byte[] EncryptQrPayload(byte[] payload)
+    {
+        using var aes = Aes.Create();
+        aes.Key = _qrKey;
+        aes.Mode = CipherMode.CBC;
+        aes.GenerateIV();
+        using var encryptor = aes.CreateEncryptor();
+        var cipher = encryptor.TransformFinalBlock(payload, 0, payload.Length);
+        var result = new byte[16 + cipher.Length];
+        aes.IV.CopyTo(result, 0);
+        cipher.CopyTo(result, 16);
+        return result;
+    }
+
+    /// <summary>Расшифровка и проверка отсканированного QR: id студента или null.</summary>
+    private int? DecryptQrPayload(byte[] raw)
+    {
+        try
+        {
+            if (raw.Length != 48) return null; // 16 (IV) + 32 (данные)
+            using var aes = Aes.Create();
+            aes.Key = _qrKey;
+            aes.IV = raw[..16];
+            using var decryptor = aes.CreateDecryptor();
+            var payload = decryptor.TransformFinalBlock(raw, 16, raw.Length - 16);
+            if (payload.Length != 28) return null;
+            for (var i = 0; i < 4; i++)
+            {
+                if (payload[i] != QrMagic[i]) return null;
+            }
+            for (var i = 0; i < 8; i++)
+            {
+                if (payload[4 + i] != _rollcallId[i]) return null;
+            }
+            var studentId = BitConverter.ToInt32(payload, 12);
+            var window = BitConverter.ToInt64(payload, 16);
+            var current = CurrentQrWindow();
+            // QR живёт ~10 секунд: текущее или предыдущее окно
+            if (window < current - 1 || window > current + 1) return null;
+            return studentId;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     // ------------------------------------------------------------------ группа
@@ -160,6 +257,53 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         if (!HasStream) HasStream = true;
         _streamWatchdog.Stop();
         _streamWatchdog.Start();
+
+        TryScanQr();
+    }
+
+    /// <summary>
+    /// Ищет QR студента в кадре (не чаще 4 раз/с, вне потока UI).
+    /// Нашли валидный — отмечаем студента.
+    /// </summary>
+    private void TryScanQr()
+    {
+        if (RollcallState != StateActive || _qrDecoding) return;
+        if (StreamFrame is not BitmapSource frame) return;
+
+        var now = Environment.TickCount64;
+        if (now - _lastQrDecodeAt < 250) return;
+        _lastQrDecodeAt = now;
+        _qrDecoding = true;
+
+        Task.Run(() =>
+        {
+            try
+            {
+                var raw = QrScanner.Scan(frame);
+                if (raw is null) return;
+
+                var studentId = DecryptQrPayload(raw);
+                if (studentId is int id)
+                {
+                    Application.Current?.Dispatcher.BeginInvoke(() => MarkScanned(id));
+                }
+            }
+            finally
+            {
+                _qrDecoding = false;
+            }
+        });
+    }
+
+    /// <summary>Отметка студента, чей QR попал в камеру преподавателя.</summary>
+    private void MarkScanned(int studentId)
+    {
+        if (RollcallState != StateActive) return;
+        var row = Rows.FirstOrDefault(r => r.StudentId == studentId);
+        if (row is null || row.IsPresent) return;
+
+        MarkRow(row);
+        _toasts.Success("Отмечен", row.FullName);
     }
 
     // ---------------------------------------------------------------- QR-код
@@ -231,34 +375,16 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         }
         _lessonStartedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
 
-        // QR-код со ссылкой для отметки
+        // новый ключ шифрования и ID переклички: QR прошлых занятий не сработают
+        _qrKey = RandomNumberGenerator.GetBytes(32);
+        _rollcallId = RandomNumberGenerator.GetBytes(8);
+
+        // QR-код подключения на панели камеры
         QrUrl = _server.Url;
         QrImage = _server.IsRunning ? MakeQr(QrUrl) : null;
 
         RecalcStats();
         RollcallState = StateActive;
-    }
-
-    /// <summary>Отметка студента со страницы (по выбору имени). Приходит с телефона.</summary>
-    private MarkResult MarkStudentInternal(int studentId)
-    {
-        if (RollcallState != StateActive) return MarkResult.Fail;
-        var row = Rows.FirstOrDefault(r => r.StudentId == studentId);
-        if (row is null) return MarkResult.Fail;
-
-        if (!row.IsPresent) MarkRow(row);
-        return new MarkResult(true, row.FullName, row.PhoneId);
-    }
-
-    /// <summary>Автоматическая отметка по сохранённому на телефоне ID.</summary>
-    private MarkResult CheckInByPhoneInternal(string phoneId)
-    {
-        if (RollcallState != StateActive || string.IsNullOrEmpty(phoneId)) return MarkResult.Fail;
-        var row = Rows.FirstOrDefault(r => r.PhoneId == phoneId);
-        if (row is null) return MarkResult.Fail;
-
-        if (!row.IsPresent) MarkRow(row);
-        return new MarkResult(true, row.FullName, row.PhoneId);
     }
 
     private void MarkRow(StudentRow row)

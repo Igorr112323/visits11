@@ -28,26 +28,33 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build release APK
+      - name: Build release APKs (камера преподавателя + студент)
         working-directory: android
         run: gradle assembleRelease --no-daemon
 
-      - name: Upload APK artifact
+      - name: Upload teacher APK artifact
         uses: actions/upload-artifact@v7
         with:
           name: Visits11-Teacher-apk
           path: android/app/build/outputs/apk/release/app-release.apk
 
-      - name: Publish APK to release v1.0.0
+      - name: Upload student APK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Visits11-Student-apk
+          path: android/student/build/outputs/apk/release/student-release.apk
+
+      - name: Publish APKs to release v1.0.0
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cp android/app/build/outputs/apk/release/app-release.apk Visits11-Teacher.apk
+          cp android/student/build/outputs/apk/release/student-release.apk Visits11-Student.apk
           if gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release upload v1.0.0 Visits11-Teacher.apk --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload v1.0.0 Visits11-Teacher.apk Visits11-Student.apk --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release create v1.0.0 Visits11-Teacher.apk \
+            gh release create v1.0.0 Visits11-Teacher.apk Visits11-Student.apk \
               --title "Visits11 v1.0.0" \
-              --notes "Учёт посещаемости — офлайн. Exe для ПК и APK камеры преподавателя." \
+              --notes "Учёт посещаемости — офлайн. Exe для ПК, APK камеры преподавателя и APK студента." \
               --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY"
           fi

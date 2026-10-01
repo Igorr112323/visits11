@@ -125,7 +125,7 @@
                         <Image Source="{Binding QrImage}" Width="172" Height="172"
                                RenderOptions.BitmapScalingMode="NearestNeighbor" />
                     </Border>
-                    <TextBlock Text="Отсканируйте QR-код, чтобы отметиться"
+                    <TextBlock Text="Студенты: покажите QR-код из приложения"
                                TextAlignment="Center" FontSize="13"
                                FontFamily="{StaticResource Font.SemiBold}"
                                Foreground="{DynamicResource Brush.Camera.Text}"

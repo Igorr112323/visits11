@@ -1,40 +1,41 @@
+using System.Collections.Concurrent;
 using System.IO;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Windows;
 
 namespace Visits11.Services;
 
-public sealed record StudentDto(int Id, string Name, bool Marked);
-
-public sealed record MarkResult(bool Ok, string? Name = null, string? PhoneId = null)
-{
-    public static readonly MarkResult Fail = new(false);
-}
-
 /// <summary>
-/// Встроенный сервер (порт 8090–8099):
-///  • GET / — страница отметки для студентов (по QR-коду);
-///  • GET /api/checkin?phone=ID — автоматическая отметка по сохранённому ID телефона;
-///  • GET /api/mark?student=ID — отметка выбранного студента (генерирует ID телефона).
+/// Встроенный сервер (порт 8090–8099) для приложений студентов:
+///  • GET  /api/ping — опознавательный ответ (автопоиск ПК в сети);
+///  • POST /api/login — вход по логину/паролю, выдаёт токен сессии;
+///  • GET  /api/qr?token= — PNG с текущим QR студента (сам ПК генерирует
+///    зашифрованный код каждые 5 секунд, время телефона не используется).
+/// QR содержит зашифрованные AES данные (логин занятого студента, окно
+/// времени, ID переклички, нонс) — по скриншоту нельзя понять, кто внутри,
+/// и через ~10 секунд код перестаёт действовать.
 /// </summary>
 public sealed class PhoneServer : IDisposable
 {
     private TcpListener? _listener;
     private CancellationTokenSource? _cts;
+    private readonly ConcurrentDictionary<string, int> _sessions = new();
 
     public int Port { get; private set; }
     public bool IsRunning { get; private set; }
     public string Url => $"http://{DetectLanAddress()}:{Port}/";
 
-    /// <summary>Поставщики данных и обработчики отметок (вызываются в потоке UI).</summary>
-    public Func<bool> IsRollcallActive { get; set; } = () => false;
-    public Func<string> GetGroupName { get; set; } = () => "";
-    public Func<List<StudentDto>> GetStudents { get; set; } = () => new();
-    public Func<int, MarkResult> MarkStudent { get; set; } = _ => MarkResult.Fail;
-    public Func<string, MarkResult> CheckInByPhone { get; set; } = _ => MarkResult.Fail;
+    /// <summary>Проверка логина/пароля (в потоке UI): (успех, имя, id студента).</summary>
+    public Func<string, string, (bool Ok, string Name, int StudentId)> Login { get; set; } =
+        (_, _) => (false, "", 0);
+
+    /// <summary>PNG текущего QR студента; null — перекличка не активна.</summary>
+    public Func<int, byte[]?> GetQrPng { get; set; } = _ => null;
 
     public void Start()
     {
@@ -112,28 +113,23 @@ public sealed class PhoneServer : IDisposable
 
                 switch (request.Path)
                 {
-                    case "/api/checkin":
-                    {
-                        var phone = GetQueryParam(request.Query, "phone");
-                        var result = OnUi(() => CheckInByPhone(phone));
-                        RespondJson(stream, result);
+                    case "/api/ping":
+                        Respond(stream, "200 OK", "application/json",
+                            Encoding.UTF8.GetBytes("{\"app\":\"visits11-server\"}"));
                         break;
-                    }
 
-                    case "/api/mark":
-                    {
-                        var idText = GetQueryParam(request.Query, "student");
-                        var result = int.TryParse(idText, out var studentId)
-                            ? OnUi(() => MarkStudent(studentId))
-                            : MarkResult.Fail;
-                        RespondJson(stream, result);
+                    case "/api/login" when request.Method == "POST":
+                        HandleLogin(stream, request.Body);
                         break;
-                    }
+
+                    case "/api/qr":
+                        HandleQr(stream, GetQueryParam(request.Query, "token"));
+                        break;
 
                     case "/":
-                    case "/checkin":
                     case "/index.html":
-                        Respond(stream, "200 OK", "text/html; charset=utf-8", Encoding.UTF8.GetBytes(BuildPage()));
+                        Respond(stream, "200 OK", "text/html; charset=utf-8",
+                            Encoding.UTF8.GetBytes(InfoPage));
                         break;
 
                     case "/favicon.ico":
@@ -149,6 +145,68 @@ public sealed class PhoneServer : IDisposable
         catch
         {
             // соединение оборвано — игнорируем
+        }
+    }
+
+    private void HandleLogin(NetworkStream stream, byte[]? body)
+    {
+        string login = "";
+        string password = "";
+        try
+        {
+            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(body ?? Array.Empty<byte>()));
+            if (doc.RootElement.TryGetProperty("login", out var loginValue) &&
+                loginValue.ValueKind == JsonValueKind.String)
+            {
+                login = loginValue.GetString() ?? "";
+            }
+            if (doc.RootElement.TryGetProperty("password", out var passwordValue) &&
+                passwordValue.ValueKind == JsonValueKind.String)
+            {
+                password = passwordValue.GetString() ?? "";
+            }
+        }
+        catch (JsonException)
+        {
+            // повреждённый запрос — просто отказ
+        }
+
+        var result = OnUi(() => Login(login, password));
+        if (result.Ok)
+        {
+            var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(16));
+            _sessions[token] = result.StudentId;
+            RespondJson(stream, new Dictionary<string, object?>
+            {
+                ["ok"] = true,
+                ["name"] = result.Name,
+                ["token"] = token,
+            });
+        }
+        else
+        {
+            RespondJson(stream, new Dictionary<string, object?> { ["ok"] = false });
+        }
+    }
+
+    private void HandleQr(NetworkStream stream, string token)
+    {
+        if (!_sessions.TryGetValue(token, out var studentId))
+        {
+            Respond(stream, "401 Unauthorized", "application/json",
+                Encoding.UTF8.GetBytes("{\"ok\":false}"));
+            return;
+        }
+
+        var png = OnUi(() => GetQrPng(studentId));
+        if (png is null || png.Length == 0)
+        {
+            // перекличка не активна
+            Respond(stream, "204 No Content", "text/plain", Array.Empty<byte>());
+        }
+        else
+        {
+            Respond(stream, "200 OK", "image/png", png);
         }
     }
 
@@ -184,12 +242,12 @@ public sealed class PhoneServer : IDisposable
                 {
                     var headerText = Encoding.UTF8.GetString(bytes, 0, headerEnd);
                     if (!TryParseHeader(headerText, out request, out contentLength)) return request;
-                    if (contentLength > 15_000_000) return null;
+                    if (contentLength > 1_000_000) return null;
                 }
             }
 
             if (headerEnd >= 0 && (int)all.Length - (headerEnd + 4) >= contentLength) break;
-            if (all.Length > 15_000_000) return null;
+            if (all.Length > 1_000_000) return null;
         }
 
         if (request is null || headerEnd < 0) return request;
@@ -278,66 +336,12 @@ public sealed class PhoneServer : IDisposable
         stream.Flush();
     }
 
-    private static void RespondJson(NetworkStream stream, MarkResult result)
+    private static void RespondJson(NetworkStream stream, Dictionary<string, object?> payload)
     {
-        var json = "{\"ok\":" + (result.Ok ? "true" : "false") +
-                   ",\"name\":" + JsonString(result.Name) +
-                   ",\"phoneId\":" + JsonString(result.PhoneId) + "}";
-        Respond(stream, "200 OK", "application/json", Encoding.UTF8.GetBytes(json));
+        Respond(stream, "200 OK", "application/json", JsonSerializer.SerializeToUtf8Bytes(payload));
     }
 
-    private static string JsonString(string? value)
-        => value is null ? "null" : "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
-
-    // ------------------------------------------------------------- страница
-
-    private string BuildPage()
-    {
-        if (!OnUi(() => IsRollcallActive())) return InactivePage;
-
-        var group = OnUi(() => GetGroupName());
-        var students = OnUi(() => GetStudents());
-
-        var list = string.Join(",", students.Select(s =>
-            "{\"id\":" + s.Id + ",\"name\":" + JsonString(s.Name) + ",\"done\":" + (s.Marked ? "true" : "false") + "}"));
-
-        return ActivePageTemplate
-            .Replace("__GROUP__", WebUtility.HtmlEncode(group))
-            .Replace("__STUDENTS__", list);
-    }
-
-    private const string ActivePageTemplate = @"<!doctype html>
-<html lang='ru'><head><meta charset='utf-8'>
-<meta name='viewport' content='width=device-width,initial-scale=1'>
-<title>Отметка</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:#0a0d1a;color:#f0f2fa;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px}
-.card{width:100%;max-width:420px;background:#141827;border:1px solid #2a3150;border-radius:20px;padding:22px}
-h1{font-size:17px;font-weight:700}
-.sub{color:#9099b8;font-size:13px;margin:4px 0 16px}
-ul{list-style:none;display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow:auto}
-ul button{width:100%;text-align:left;padding:13px 14px;border-radius:12px;border:1px solid #2a3150;background:#1c2136;color:#f0f2fa;font-size:15px}
-ul button:active{background:#6366f1;border-color:#6366f1}
-ul button.done{opacity:.4}
-.ok{display:none;text-align:center;padding:14px 0}
-.mark{width:64px;height:64px;border-radius:50%;background:rgba(52,211,153,.15);color:#34d399;font-size:34px;line-height:64px;margin:0 auto 14px}
-.ok b{font-size:16px}
-.ok small{display:block;color:#9099b8;margin-top:8px;font-size:13px}
-</style></head><body><div class='card'>
-<div id='main'><h1>Отметка посещаемости</h1><p class='sub'>Группа: __GROUP__</p><ul id='list'></ul></div>
-<div id='ok' class='ok'><div class='mark'>&#10003;</div><b id='okName'></b><small>Вы отмечены &mdash; можно закрыть страницу.</small></div>
-</div>
-<script>
-var LIST=__STUDENTS__;
-function showOk(n){document.getElementById('main').style.display='none';document.getElementById('ok').style.display='block';document.getElementById('okName').textContent=n;}
-function render(){var ul=document.getElementById('list');LIST.forEach(function(s){var li=document.createElement('li');var b=document.createElement('button');b.textContent=s.done?s.name+' \u2713':s.name;if(s.done){b.className='done';}else{b.onclick=function(){fetch('/api/mark?student='+s.id).then(function(r){return r.json()}).then(function(d){if(d.ok){if(d.phoneId){localStorage.setItem('v11phone',d.phoneId);}showOk(d.name);}});};}li.appendChild(b);ul.appendChild(li);});}
-var saved=localStorage.getItem('v11phone');
-if(saved){fetch('/api/checkin?phone='+encodeURIComponent(saved)).then(function(r){return r.json()}).then(function(d){if(d.ok){showOk(d.name);}else{render();}}).catch(function(){render();});}
-else{render();}
-</script></body></html>";
-
-    private const string InactivePage = @"<!doctype html>
+    private const string InfoPage = @"<!doctype html>
 <html lang='ru'><head><meta charset='utf-8'>
 <meta name='viewport' content='width=device-width,initial-scale=1'>
 <title>Отметка</title>
@@ -346,7 +350,7 @@ body{font-family:system-ui,sans-serif;background:#0a0d1a;color:#f0f2fa;min-heigh
 .card{background:#141827;border:1px solid #2a3150;border-radius:20px;padding:28px 34px;text-align:center}
 h1{font-size:16px;font-weight:700}
 p{color:#9099b8;font-size:13px;margin-top:6px}
-</style></head><body><div class='card'><h1>Перекличка не активна</h1><p>Обновите страницу, когда преподаватель начнёт перекличку.</p></div></body></html>";
+</style></head><body><div class='card'><h1>Отметка посещаемости</h1><p>Установите приложение «Visits11 Студент» и войдите по логину и паролю.</p></div></body></html>";
 
     // ------------------------------------------------------------- утилиты
 

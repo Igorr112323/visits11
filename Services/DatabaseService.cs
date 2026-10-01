@@ -152,13 +152,32 @@ public sealed class DatabaseService
         return list;
     }
 
+    /// <summary>Студент по логину (для входа в приложении студента) или null.</summary>
+    public Student? FindByLogin(string login)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Id, GroupId, FullName, Login, Password, PhoneId FROM Students WHERE Login = @login LIMIT 1";
+        command.Parameters.AddWithValue("@login", login);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return null;
+        return new Student
+        {
+            Id = reader.GetInt32(0),
+            GroupId = reader.GetInt32(1),
+            FullName = reader.GetString(2),
+            Login = reader.GetString(3),
+            Password = reader.GetString(4),
+            PhoneId = reader.IsDBNull(5) ? null : reader.GetString(5),
+        };
+    }
+
     public bool LoginExists(string login)
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
         command.CommandText = "SELECT COUNT(*) FROM Students WHERE Login = @login";
-        command.Parameters.AddWithValue("@login", login);
-        return Convert.ToInt64(command.ExecuteScalar()) > 0;
+        command.Parameters.AddWithValue("@login", login);        return Convert.ToInt64(command.ExecuteScalar()) > 0;
     }
 
     public void AddStudent(Student student)
