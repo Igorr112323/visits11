@@ -291,6 +291,15 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private static void closeQuietly(ServerSocket socket) {
+        if (socket != null) {
+            try {
+                socket.close();
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
     private void toast(String message) {
         ui.post(() -> Toast.makeText(this, message, Toast.LENGTH_LONG).show());
     }
