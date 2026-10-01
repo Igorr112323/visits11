@@ -6,9 +6,13 @@ import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.nfc.NfcAdapter;
+import android.nfc.Tag;
+import android.nfc.tech.IsoDep;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
@@ -37,18 +41,19 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Приложение студента: первый запуск — логин и пароль, дальше только QR-код.
- * QR генерирует ПК каждые 5 секунд — время телефона не используется,
- * поэтому спешащие/отстающие часы не ломают отметку. Снимок экрана бесполезен:
- * через ~10 секунд код перестаёт действовать.
+ * Приложение студента: первый запуск — логин и пароль, дальше открываешь
+ * приложение, прикладываешь телефон к телефону преподавателя — отметка ставится.
+ * NFC не нужен ни Wi-Fi, ни интернет. Телефонам без NFC — фолбэк Wi-Fi+QR:
+ * код генерирует ПК каждые 5 секунд, снимок экрана бесполезен (~10 секунд жизни).
  */
-public final class MainActivity extends Activity {
+public final class MainActivity extends Activity implements NfcAdapter.ReaderCallback {
 
     private static final String PREFS = "visits11student";
     private static final String KEY_LOGIN = "login";
     private static final String KEY_PASSWORD = "password";
     private static final String KEY_HOST = "host";
     private static final String KEY_TOKEN = "token";
+    private static final byte[] NFC_AID = {(byte) 0xF0, 0x39, 0x11, 0x01, 0x02, 0x03, 0x04};
     private static final int PORT = 8090;
     private static final long POLL_MS = 5000;
 
@@ -175,6 +180,143 @@ public final class MainActivity extends Activity {
         running = false;
         wake();
         loopThread = null;
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (!useNfc) {
+            return;
+        }
+        try {
+            NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
+            if (adapter != null) {
+                adapter.enableReaderMode(this, this,
+                        NfcAdapter.FLAG_READER_NFC_A | NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK, null);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (!useNfc) {
+            return;
+        }
+        try {
+            NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
+            if (adapter != null) {
+                adapter.disableReaderMode(this);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** Приложили телефон к телефону преподавателя: обмен и отметка. */
+    @Override
+    public void onTagDiscovered(Tag tag) {
+        IsoDep isoDep = IsoDep.get(tag);
+        if (isoDep == null) {
+            return;
+        }
+        try {
+            isoDep.connect();
+            isoDep.setTimeout(5000);
+
+            // выбор приложения телефона преподавателя
+            byte[] select = new byte[5 + NFC_AID.length];
+            select[1] = (byte) 0xA4;
+            select[2] = 0x04;
+            select[4] = (byte) NFC_AID.length;
+            System.arraycopy(NFC_AID, 0, select, 5, NFC_AID.length);
+            if (!apduOk(isoDep.transceive(select))) {
+                return;
+            }
+
+            SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+            String login = prefs.getString(KEY_LOGIN, null);
+            String password = prefs.getString(KEY_PASSWORD, null);
+            if (login == null || password == null) {
+                return;
+            }
+
+            for (int attempt = 0; attempt < 2; attempt++) {
+                String token = prefs.getString(KEY_TOKEN, null);
+                byte[] identity = token != null
+                        ? nfcCommand((byte) 2, token)
+                        : nfcCommand((byte) 1, login + "\n" + password);
+                byte[] answer = isoDep.transceive(identity);
+                if (!apduOk(answer) || answer.length < 3) {
+                    ui.post(() -> setStatus("Не получилось, попробуйте ещё раз"));
+                    return;
+                }
+                int result = answer[0] & 0xFF;
+                String value = new String(answer, 1, answer.length - 3, StandardCharsets.UTF_8);
+
+                if (result == 0 && !value.isEmpty()) {
+                    // вход выполнен — сохраняем токен, отметка уже ушла на ПК
+                    prefs.edit().putString(KEY_TOKEN, value).apply();
+                    vibrate();
+                    ui.post(() -> setStatus("Готово! Вы отмечены"));
+                    return;
+                }
+                if (result == 1) {
+                    vibrate();
+                    ui.post(() -> setStatus(value.isEmpty() ? "Вы отмечены" : "Вы отмечены — " + value));
+                    return;
+                }
+                if (result == 3) {
+                    // сессия устарела — этим же касанием перелогинимся
+                    prefs.edit().remove(KEY_TOKEN).apply();
+                    continue;
+                }
+                if (result == 2) {
+                    ui.post(() -> {
+                        setStatus("Неверный логин или пароль");
+                        loginPanel.setVisibility(View.VISIBLE);
+                    });
+                    return;
+                }
+                // 4: перекличка не идёт или ПК недоступен
+                ui.post(() -> setStatus("Не получилось, попробуйте ещё раз"));
+                return;
+            }
+        } catch (Throwable ignored) {
+            ui.post(() -> setStatus("Не получилось, попробуйте ещё раз"));
+        } finally {
+            try {
+                isoDep.close();
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
+    /** APDU «вот кто я»: [type][данные]. */
+    private static byte[] nfcCommand(byte type, String data) {
+        byte[] bytes = data.getBytes(StandardCharsets.UTF_8);
+        byte[] apdu = new byte[6 + bytes.length];
+        apdu[1] = 0x10;
+        apdu[4] = (byte) (1 + bytes.length);
+        apdu[5] = type;
+        System.arraycopy(bytes, 0, apdu, 6, bytes.length);
+        return apdu;
+    }
+
+    private static boolean apduOk(byte[] response) {
+        return response != null && response.length >= 2
+                && (response[response.length - 2] & 0xFF) == 0x90
+                && (response[response.length - 1] & 0xFF) == 0x00;
+    }
+
+    private void vibrate() {
+        try {
+            Vibrator vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+            if (vibrator != null) {
+                vibrator.vibrate(VibrationEffect.createOneShot(120, VibrationEffect.DEFAULT_AMPLITUDE));
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     private void wake() {
