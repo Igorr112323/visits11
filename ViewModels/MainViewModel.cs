@@ -24,6 +24,7 @@ public sealed class MainViewModel : ObservableObject
         Lesson = new LessonViewModel(database, toasts, server, camera);
         Students = new StudentsViewModel(database, toasts, auth, word, this);
         Journal = new JournalViewModel(database, toasts, word);
+        Download = new DownloadViewModel(server, toasts);
 
         ToggleThemeCommand = new RelayCommand(_ => _theme.Toggle());
         _theme.ThemeChanged += () => OnPropertyChanged(nameof(IsDarkTheme));
@@ -34,6 +35,7 @@ public sealed class MainViewModel : ObservableObject
     public LessonViewModel Lesson { get; }
     public StudentsViewModel Students { get; }
     public JournalViewModel Journal { get; }
+    public DownloadViewModel Download { get; }
 
     public ToastService Toasts { get; }
 
@@ -54,6 +56,7 @@ public sealed class MainViewModel : ObservableObject
                 OnPropertyChanged(nameof(TabLessons));
                 OnPropertyChanged(nameof(TabStudents));
                 OnPropertyChanged(nameof(TabJournal));
+                OnPropertyChanged(nameof(TabDownload));
                 (_currentTab as ITabViewModel)?.OnActivated();
             }
         }
@@ -75,6 +78,12 @@ public sealed class MainViewModel : ObservableObject
     {
         get => ReferenceEquals(CurrentTab, Journal);
         set { if (value) CurrentTab = Journal; }
+    }
+
+    public bool TabDownload
+    {
+        get => ReferenceEquals(CurrentTab, Download);
+        set { if (value) CurrentTab = Download; }
     }
 
     // ------------------------------------------------------------- модальные
