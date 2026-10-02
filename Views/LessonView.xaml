@@ -64,9 +64,13 @@
                                    Foreground="{DynamicResource Brush.Accent}"
                                    TextTrimming="CharacterEllipsis" />
                     </Border>
+                    <!-- QR адреса: навести камеру iPhone -->
+                    <Image Margin="0,8,0,0" Width="140" Height="140" HorizontalAlignment="Left"
+                           Source="{Binding StudentQr}"
+                           RenderOptions.BitmapScalingMode="NearestNeighbor" />
                     <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" FontSize="11"
                                Foreground="{DynamicResource Brush.TextSoft}"
-                               Text="Safari → мастер: сертификат → «На экран „Домой“». Дальше работает офлайн." />
+                               Text="Наведите камеру iPhone на код → мастер установки: сертификат → «На экран „Домой“». Дальше работает офлайн." />
                 </StackPanel>
 
                 <!-- статистика -->

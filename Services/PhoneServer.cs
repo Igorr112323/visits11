@@ -23,9 +23,9 @@ namespace Visits11.Services;
 ///    — статика PWA студента для iPhone (папка web/student; если папки рядом
 ///    с exe нет — те же файлы отдаются из встроенных ресурсов сборки);
 ///  • GET  /visits11.cer — сертификат сервера для установки на iPhone.
-/// HTTPS: если рядом есть certs/cert.pem и certs/key.pem, тот же порт принимает
-/// и HTTPS (SslStream), и обычный HTTP — их различает первый байт соединения.
-/// Без сертификата сервер работает только по HTTP, как раньше. HTTPS нужен
+/// HTTPS: тот же порт принимает и HTTPS (SslStream), и обычный HTTP — их различает
+/// первый байт соединения. Сертификат берётся из certs/cert.pem + certs/key.pem рядом с
+/// exe, а если его нет — выпускается автоматически при первом запуске. Не вышло — только HTTP. HTTPS нужен
 /// iPhone для Service Worker (офлайн-режим приложения).
 /// QR содержит зашифрованные AES данные (логин занятого студента, окно
 /// времени, ID переклички, нонс) — по скриншоту нельзя понять, кто внутри,
@@ -238,34 +238,127 @@ public sealed class PhoneServer : IDisposable
     // ------------------------------------------------------------- HTTPS
 
     /// <summary>
-    /// Ищет certs/cert.pem + certs/key.pem рядом с exe и на несколько уровней выше
-    /// (работает и при запуске через dotnet run). Нет файлов или они повреждены — null,
-    /// сервер продолжает работать по HTTP.
+    /// Сертификат для HTTPS: certs/cert.pem + certs/key.pem рядом с exe (и на несколько
+    /// уровней выше — работает и при запуске через dotnet run). Если файлов нет — программа
+    /// сама выпускает самоподписанный сертификат на 10 лет и кладёт его в папку certs
+    /// рядом с exe. Не получилось — null, сервер остаётся на обычном HTTP.
     /// </summary>
     private static X509Certificate2? LoadCertificate()
     {
         try
         {
-            string? folder = AppContext.BaseDirectory;
-            for (var depth = 0; depth < 8 && !string.IsNullOrEmpty(folder); depth++)
+            var existing = FindCertificateFiles();
+            if (existing is null)
             {
-                var certPath = Path.Combine(folder, "certs", "cert.pem");
-                var keyPath = Path.Combine(folder, "certs", "key.pem");
-                if (File.Exists(certPath) && File.Exists(keyPath))
-                {
-                    using var pem = X509Certificate2.CreateFromPemFile(certPath, keyPath);
-                    // Windows (SChannel) не принимает ключ, загруженный из PEM «в памяти»:
-                    // переупаковываем сертификат с ключом через PFX
-                    return new X509Certificate2(pem.Export(X509ContentType.Pfx));
-                }
-                folder = Path.GetDirectoryName(folder.TrimEnd(Path.DirectorySeparatorChar));
+                var folder = Path.Combine(ExeFolder(), "certs");
+                if (!GenerateCertificateFiles(folder)) return null;
+                existing = (Path.Combine(folder, "cert.pem"), Path.Combine(folder, "key.pem"));
             }
+
+            using var pem = X509Certificate2.CreateFromPemFile(existing.Value.Cert, existing.Value.Key);
+            // Windows (SChannel) не принимает ключ, загруженный из PEM «в памяти»:
+            // переупаковываем сертификат с ключом через PFX
+            return new X509Certificate2(pem.Export(X509ContentType.Pfx));
         }
         catch
         {
             // сертификат не читается — остаёмся на обычном HTTP
+            return null;
+        }
+    }
+
+    /// <summary>Папка с exe (для single-file — не временная папка распаковки).</summary>
+    private static string ExeFolder()
+    {
+        try
+        {
+            var processPath = Environment.ProcessPath;
+            var folder = string.IsNullOrEmpty(processPath) ? null : Path.GetDirectoryName(processPath);
+            if (!string.IsNullOrEmpty(folder)) return folder;
+        }
+        catch
+        {
+            // берём базовую папку
+        }
+        return AppContext.BaseDirectory;
+    }
+
+    private static (string Cert, string Key)? FindCertificateFiles()
+    {
+        foreach (var start in new[] { ExeFolder(), AppContext.BaseDirectory })
+        {
+            string? folder = start;
+            for (var depth = 0; depth < 8 && !string.IsNullOrEmpty(folder); depth++)
+            {
+                var certPath = Path.Combine(folder, "certs", "cert.pem");
+                var keyPath = Path.Combine(folder, "certs", "key.pem");
+                if (File.Exists(certPath) && File.Exists(keyPath)) return (certPath, keyPath);
+                folder = Path.GetDirectoryName(folder.TrimEnd(Path.DirectorySeparatorChar));
+            }
         }
         return null;
+    }
+
+    /// <summary>
+    /// Выпускает самоподписанный сертификат на 10 лет (то же, что делает scripts/generate-cert):
+    /// имена visits11.local / localhost / имя ПК и IP-адреса ПК в локальных сетях.
+    /// </summary>
+    private static bool GenerateCertificateFiles(string folder)
+    {
+        try
+        {
+            using var rsa = RSA.Create(2048);
+            var request = new CertificateRequest(
+                "CN=visits11.local, O=KubGAU Visits11", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+
+            var names = new SubjectAlternativeNameBuilder();
+            names.AddDnsName("visits11.local");
+            names.AddDnsName("localhost");
+            var machine = Environment.MachineName.ToLowerInvariant();
+            if (machine.Length > 0 && machine.All(c => char.IsAsciiLetterOrDigit(c) || c == '-'))
+            {
+                names.AddDnsName(machine);
+                names.AddDnsName(machine + ".local");
+            }
+
+            var addresses = new HashSet<string> { "127.0.0.1", "192.168.137.1" };
+            foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+            {
+                foreach (var unicast in nic.GetIPProperties().UnicastAddresses)
+                {
+                    if (unicast.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                    var text = unicast.Address.ToString();
+                    if (text.StartsWith("169.254.", StringComparison.Ordinal)) continue;
+                    addresses.Add(text);
+                }
+            }
+            foreach (var address in addresses)
+            {
+                names.AddIpAddress(IPAddress.Parse(address));
+            }
+
+            request.CertificateExtensions.Add(names.Build());
+            request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+            request.CertificateExtensions.Add(new X509KeyUsageExtension(
+                X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment | X509KeyUsageFlags.KeyCertSign,
+                true));
+            request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(
+                new OidCollection { new Oid("1.3.6.1.5.5.7.3.1") }, false)); // serverAuth
+            request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
+
+            using var certificate = request.CreateSelfSigned(
+                DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(3650));
+
+            Directory.CreateDirectory(folder);
+            File.WriteAllText(Path.Combine(folder, "cert.pem"), certificate.ExportCertificatePem());
+            File.WriteAllText(Path.Combine(folder, "key.pem"), rsa.ExportPkcs8PrivateKeyPem());
+            return true;
+        }
+        catch
+        {
+            // нет прав на запись рядом с exe и т. п. — работаем без HTTPS
+            return false;
+        }
     }
 
     /// <summary>

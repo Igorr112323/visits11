@@ -160,6 +160,32 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
     /// </summary>
     public string StudentUrl => _server.Url + "setup";
 
+    private string? _studentQrUrl;
+    private ImageSource? _studentQr;
+
+    /// <summary>QR-код адреса для iPhone: навести камеру — откроется страница-мастер.</summary>
+    public ImageSource? StudentQr
+    {
+        get
+        {
+            var url = StudentUrl;
+            if (_studentQr is null || _studentQrUrl != url)
+            {
+                try
+                {
+                    var data = new QRCodeGenerator().CreateQrCode(url, QRCodeGenerator.ECCLevel.M);
+                    _studentQr = DecodeImage(new PngByteQRCode(data).GetGraphic(8), 0);
+                    _studentQrUrl = url;
+                }
+                catch
+                {
+                    _studentQr = null;
+                }
+            }
+            return _studentQr;
+        }
+    }
+
     public RelayCommand CopyStudentUrlCommand { get; }
 
     private void CopyStudentUrl()

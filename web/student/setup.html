@@ -538,8 +538,8 @@ function drawQr(image, text) {
         : '<span class="badge-ok">На ПК есть сертификат.</span> Пройдите шаги 1–5 ниже — после них приложение будет работать офлайн.';
     } else {
       tlsNote.innerHTML = '<span class="warn">На ПК нет сертификата.</span> Приложение откроется, но <b>без офлайн-режима</b>. ' +
-        'Запустите на ПК <code>scripts/generate-cert</code>, положите папку <code>certs</code> рядом с exe ' +
-        'и перезапустите программу — потом пройдите шаги ниже.';
+        'Закройте и снова запустите программу на ПК — сертификат создаётся сам (папка <code>certs</code> рядом с exe). ' +
+        'Если не создался (нет прав на запись) — запустите <code>scripts/generate-cert</code> и положите <code>certs</code> рядом с exe.';
     }
   }, function () {
     tlsNote.textContent = "Не удалось связаться с ПК.";
