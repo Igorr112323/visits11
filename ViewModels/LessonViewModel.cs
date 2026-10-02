@@ -86,6 +86,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         _camera = camera;
 
         StartStopCommand = new RelayCommand(_ => StartOrStop(), _ => RollcallState != StateFinished);
+        CopyStudentUrlCommand = new RelayCommand(_ => CopyStudentUrl());
         TogglePresentCommand = new RelayCommand(
             row => TogglePresent((StudentRow)row!), _ => RollcallState == StateActive);
         _database.DataChanged += OnDataChanged;
@@ -151,6 +152,27 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         }
 
         return (true, false, student.FullName, student.Id);
+    }
+
+    /// <summary>
+    /// Адрес приложения студента для iPhone: открыть в Safari и добавить на
+    /// экран «Домой» (страница-мастер с QR-кодом и картинками).
+    /// </summary>
+    public string StudentUrl => _server.Url + "setup";
+
+    public RelayCommand CopyStudentUrlCommand { get; }
+
+    private void CopyStudentUrl()
+    {
+        try
+        {
+            Clipboard.SetText(StudentUrl);
+            _toasts.Info("Адрес для iPhone скопирован", StudentUrl);
+        }
+        catch
+        {
+            _toasts.Error("Не удалось скопировать", StudentUrl);
+        }
     }
 
     /// <summary>PNG текущего QR студента; null — перекличка не активна.</summary>

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0A0D1A">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="КубГАУ">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="format-detection" content="telephone=no">
+<meta name="description" content="Отметка посещаемости КубГАУ: работает только в локальной сети, без интернета.">
+<meta name="color-scheme" content="dark light">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="icon" href="icons/favicon.ico" sizes="any">
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="style.css">
+<title>КубГАУ · Отметка</title>
+</head>
+<body>
+
+<!-- всплывающие уведомления (внутренние баннеры — работают всегда) -->
+<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+
+<!-- индикатор связи с ПК в углу экрана -->
+<button class="pc-status" id="pcStatus" type="button">
+  <span class="pc-dot" id="pcDot" aria-hidden="true"></span>
+  <span class="pc-text" id="pcText">Поиск ПК…</span>
+</button>
+
+<main class="app" id="app">
+
+  <!-- ==================== экран входа ==================== -->
+  <section class="screen" id="screenLogin" hidden>
+    <img class="logo" src="icons/icon-192.png" alt="" width="88" height="88">
+    <h1 class="app-title">КубГАУ · Отметка</h1>
+    <p class="app-subtitle">Логин и пароль выдаёт преподаватель.<br>Вход сохранится — вводить нужно один раз.</p>
+
+    <form class="card" id="loginForm" novalidate>
+      <label class="field">
+        <span class="field-label">Логин</span>
+        <input class="input" id="loginInput" name="login" type="text" inputmode="text"
+               autocomplete="username" autocapitalize="none" autocorrect="off"
+               spellcheck="false" enterkeyhint="next" placeholder="ivanov">
+      </label>
+
+      <label class="field">
+        <span class="field-label">Пароль</span>
+        <input class="input" id="passwordInput" name="password" type="password"
+               autocomplete="current-password" enterkeyhint="go" placeholder="••••••">
+      </label>
+
+      <button class="btn btn-primary" id="loginButton" type="submit">Войти</button>
+    </form>
+
+    <p class="footnote" id="loginHint">ПК и телефон должны быть в одной сети Wi-Fi. Интернет не нужен.</p>
+  </section>
+
+  <!-- ==================== экран отметки ==================== -->
+  <section class="screen" id="screenMark" hidden>
+    <img class="logo" src="icons/icon-192.png" alt="" width="72" height="72">
+    <p class="hello" id="helloText">Здравствуйте</p>
+
+    <button class="mark-button" id="markButton" type="button">
+      <span class="mark-ring" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="44" height="44" aria-hidden="true">
+          <path d="M4.5 12.6l4.7 4.7L19.5 7" fill="none" stroke="currentColor"
+                stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </span>
+      <span class="mark-label">Отметиться</span>
+    </button>
+
+    <p class="rollcall" id="rollcallBadge" hidden></p>
+    <p class="footnote" id="markHint">Нажмите кнопку, когда преподаватель начнёт перекличку.</p>
+
+    <div class="qr-card" id="qrCard" hidden>
+      <p class="qr-title">Запасной способ</p>
+      <p class="qr-text">Покажите этот код камере преподавателя — он отметит вас вручную.</p>
+      <img class="qr-image" id="qrImage" alt="Код для камеры преподавателя" width="180" height="180">
+    </div>
+
+    <button class="link" id="logoutButton" type="button">Сменить студента</button>
+  </section>
+
+  <!-- ==================== экран успеха ==================== -->
+  <section class="screen screen-success" id="screenSuccess" hidden>
+    <div class="success-check" id="successCheck" aria-hidden="true">
+      <svg viewBox="0 0 48 48" width="96" height="96" aria-hidden="true">
+        <path class="success-path" d="M11 25.5l9 9 17.5-20" fill="none" stroke="currentColor"
+              stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <h2 class="success-title" id="successTitle">Вы отмечены</h2>
+    <p class="success-name" id="successName"></p>
+  </section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
