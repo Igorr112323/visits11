@@ -6,3 +6,4 @@ publish/
 *.suo
 attendance.db
 settings.json
+image-search/
