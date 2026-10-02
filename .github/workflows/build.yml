@@ -50,7 +50,7 @@ jobs:
           # убираем старые имена файлов — оставляем только актуальные
           gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/v1.0.0" --jq '.assets[] | (.id|tostring) + "\t" + .name' | ForEach-Object {
             $parts = $_ -split "`t", 2
-            $keep = @("KubGAU-Journal.exe", "KubGAU-Teacher.apk", "KubGAU-Student.apk", "Visits11-Student-iOS-unsigned.ipa")
+            $keep = @("KubGAU-Journal.exe", "KubGAU-Teacher.apk", "KubGAU-Student.apk", "KubGAU-Student-iOS.ipa")
             if ($keep -notcontains $parts[1]) {
               gh api -X DELETE "repos/$env:GITHUB_REPOSITORY/releases/assets/$($parts[0])" *> $null
             }

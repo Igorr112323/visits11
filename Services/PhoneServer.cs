@@ -15,10 +15,7 @@ namespace Visits11.Services;
 ///  • GET  /api/ping — опознавательный ответ (автопоиск ПК в сети);
 ///  • POST /api/login — вход по логину/паролю, выдаёт токен сессии;
 ///  • GET  /api/qr?token= — PNG с текущим QR студента (сам ПК генерирует
-///    зашифрованный код каждые 5 секунд, время телефона не используется);
-///  • GET  /, /setup, /app.js, /style.css, /manifest.json, /fonts/*, /icons/*
-///    — статика PWA студента для iPhone (папка web/student; если папки рядом
-///    с exe нет — те же файлы отдаются из встроенных ресурсов сборки).
+///    зашифрованный код каждые 5 секунд, время телефона не используется).
 /// QR содержит зашифрованные AES данные (логин занятого студента, окно
 /// времени, ID переклички, нонс) — по скриншоту нельзя понять, кто внутри,
 /// и через ~10 секунд код перестаёт действовать.
@@ -151,46 +148,16 @@ public sealed class PhoneServer : IDisposable
 
                     case "/":
                     case "/index.html":
-                        HandleStatic(stream, "index.html");
+                        Respond(stream, "200 OK", "text/html; charset=utf-8",
+                            Encoding.UTF8.GetBytes(InfoPage));
                         break;
 
-                    case "/setup":
-                    case "/setup.html":
-                        HandleStatic(stream, "setup.html");
-                        break;
-
-                    case "/app.js":
-                        HandleStatic(stream, "app.js");
-                        break;
-
-                    case "/style.css":
-                        HandleStatic(stream, "style.css");
-                        break;
-
-                    case "/manifest.json":
-                        HandleStatic(stream, "manifest.json");
-                        break;
-
-                    // iOS сам просит иконку по этому адресу
                     case "/favicon.ico":
-                        HandleStatic(stream, "icons/favicon.ico");
-                        break;
-
-                    case "/apple-touch-icon.png":
-                    case "/apple-touch-icon-precomposed.png":
-                        HandleStatic(stream, "icons/apple-touch-icon.png");
+                        Respond(stream, "204 No Content", "text/plain", Array.Empty<byte>());
                         break;
 
                     default:
-                        if (request.Path.StartsWith("/fonts/", StringComparison.Ordinal) ||
-                            request.Path.StartsWith("/icons/", StringComparison.Ordinal))
-                        {
-                            HandleStatic(stream, request.Path.TrimStart('/'));
-                        }
-                        else
-                        {
-                            Respond(stream, "404 Not Found", "text/plain", Encoding.UTF8.GetBytes("not found"));
-                        }
+                        Respond(stream, "404 Not Found", "text/plain", Encoding.UTF8.GetBytes("not found"));
                         break;
                 }
             }
@@ -327,145 +294,6 @@ public sealed class PhoneServer : IDisposable
         });
     }
 
-    // ------------------------------------------------------------- статика PWA
-
-    private static readonly Lazy<string?> WebRoot = new(FindWebRoot);
-    private static readonly Lazy<Dictionary<string, byte[]>> EmbeddedWeb = new(LoadEmbeddedWeb);
-
-    /// <summary>
-    /// Папка web/student с файлами PWA студента: ищем рядом с exe и на
-    /// несколько уровней выше (это работает и при запуске через dotnet run).
-    /// </summary>
-    private static string? FindWebRoot()
-    {
-        try
-        {
-            string? folder = AppContext.BaseDirectory;
-            for (var depth = 0; depth < 8 && !string.IsNullOrEmpty(folder); depth++)
-            {
-                var candidate = Path.Combine(folder, "web", "student");
-                if (File.Exists(Path.Combine(candidate, "index.html"))) return candidate;
-                folder = Path.GetDirectoryName(folder.TrimEnd(Path.DirectorySeparatorChar));
-            }
-        }
-        catch
-        {
-            // нет доступа к папке — останутся встроенные копии файлов
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// Встроенные копии PWA (см. EmbeddedResource в Visits11.csproj) — нужны,
-    /// чтобы одиночный exe раздавал приложение даже без папки web рядом.
-    /// </summary>
-    private static Dictionary<string, byte[]> LoadEmbeddedWeb()
-    {
-        var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
-        try
-        {
-            var assembly = typeof(PhoneServer).Assembly;
-            foreach (var name in assembly.GetManifestResourceNames())
-            {
-                var normalized = name.Replace('/', '.').Replace('\\', '.');
-                var marker = normalized.IndexOf(".Web.", StringComparison.OrdinalIgnoreCase);
-                if (marker < 0) continue;
-
-                using var resource = assembly.GetManifestResourceStream(name);
-                if (resource is null) continue;
-                using var buffer = new MemoryStream();
-                resource.CopyTo(buffer);
-                var bytes = buffer.ToArray();
-
-                // регистрируем имя и все его «хвосты»: Student.icons.icon.png → .icons.icon.png
-                var parts = normalized[(marker + 5)..].Split('.', StringSplitOptions.RemoveEmptyEntries);
-                for (var start = 0; start < parts.Length; start++)
-                {
-                    files.TryAdd("." + string.Join('.', parts[start..]), bytes);
-                }
-            }
-        }
-        catch
-        {
-            // встроенных файлов нет — сервер продолжит работать как раньше
-        }
-        return files;
-    }
-
-    /// <summary>Отдаёт файл PWA: сначала с диска (удобно править), затем встроенный.</summary>
-    private static void HandleStatic(NetworkStream stream, string relativePath)
-    {
-        var safe = NormalizeRelativePath(relativePath);
-        if (safe is null)
-        {
-            Respond(stream, "404 Not Found", "text/plain", Encoding.UTF8.GetBytes("not found"));
-            return;
-        }
-
-        var bytes = ReadStaticFromDisk(safe) ?? ReadStaticFromAssembly(safe);
-        if (bytes is null)
-        {
-            if (safe == "index.html")
-            {
-                // файлов PWA рядом нет — показываем прежнюю страницу-подсказку
-                Respond(stream, "200 OK", "text/html; charset=utf-8", Encoding.UTF8.GetBytes(InfoPage));
-                return;
-            }
-            Respond(stream, "404 Not Found", "text/plain", Encoding.UTF8.GetBytes("not found"));
-            return;
-        }
-
-        Respond(stream, "200 OK", StaticContentType(safe), bytes, revalidate: true);
-    }
-
-    /// <summary>Никаких «..» и абсолютных путей — только файлы внутри web/student.</summary>
-    private static string? NormalizeRelativePath(string path)
-    {
-        if (string.IsNullOrEmpty(path)) return null;
-        var normalized = path.Replace('\\', '/').TrimStart('/');
-        if (normalized.Length == 0 || normalized.Length > 200) return null;
-        if (normalized.Contains("..", StringComparison.Ordinal)) return null;
-        if (normalized.Contains(':') || normalized.Contains('\0')) return null;
-        return normalized;
-    }
-
-    private static byte[]? ReadStaticFromDisk(string relativePath)
-    {
-        try
-        {
-            var root = WebRoot.Value;
-            if (root is null) return null;
-            var full = Path.GetFullPath(Path.Combine(root, relativePath));
-            if (!full.StartsWith(Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase)) return null;
-            return File.Exists(full) ? File.ReadAllBytes(full) : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static byte[]? ReadStaticFromAssembly(string relativePath)
-    {
-        var key = "." + relativePath.Replace('/', '.').Replace('\\', '.');
-        return EmbeddedWeb.Value.TryGetValue(key, out var bytes) ? bytes : null;
-    }
-
-    private static string StaticContentType(string relativePath) => Path.GetExtension(relativePath).ToLowerInvariant() switch
-    {
-        ".html" => "text/html; charset=utf-8",
-        ".js" => "application/javascript; charset=utf-8",
-        ".css" => "text/css; charset=utf-8",
-        ".json" => "application/manifest+json; charset=utf-8",
-        ".woff2" => "font/woff2",
-        ".woff" => "font/woff",
-        ".png" => "image/png",
-        ".ico" => "image/x-icon",
-        ".svg" => "image/svg+xml",
-        ".txt" => "text/plain; charset=utf-8",
-        _ => "application/octet-stream",
-    };
-
     // ------------------------------------------------------------- HTTP-парсер
 
     private sealed class HttpRequest
@@ -579,20 +407,14 @@ public sealed class PhoneServer : IDisposable
 
     // ------------------------------------------------------------- ответы
 
-    /// <param name="revalidate">
-    /// true для статики PWA: браузер каждый раз спрашивает сервер (no-cache),
-    /// но может переиспользовать файл — важно, чтобы обновление приложения
-    /// на ПК подхватывалось без «застрявшей» старой версии.
-    /// </param>
-    private static void Respond(NetworkStream stream, string status, string contentType, byte[] body,
-        bool revalidate = false)
+    private static void Respond(NetworkStream stream, string status, string contentType, byte[] body)
     {
         var head = Encoding.ASCII.GetBytes(
             $"HTTP/1.1 {status}\r\n" +
             $"Content-Type: {contentType}\r\n" +
             $"Content-Length: {body.Length}\r\n" +
             "Connection: close\r\n" +
-            $"Cache-Control: {(revalidate ? "no-cache" : "no-store")}\r\n\r\n");
+            "Cache-Control: no-store\r\n\r\n");
         stream.Write(head, 0, head.Length);
         stream.Write(body, 0, body.Length);
         stream.Flush();
