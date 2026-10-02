@@ -22,6 +22,7 @@ public sealed class GroupItemViewModel : ObservableObject
 
 public sealed class StudentTableItem
 {
+    public int Id { get; init; }
     public int Number { get; init; }
     public string FullName { get; init; } = string.Empty;
     public string Login { get; init; } = string.Empty;
@@ -53,6 +54,8 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
         ImportWordCommand = new RelayCommand(_ => ImportFromWord());
         ExportWordCommand = new RelayCommand(_ => ExportToWord(), _ => SelectedGroup is not null && Students.Count > 0);
         CopyTextCommand = new RelayCommand(param => CopyToClipboard(param as string));
+        DeleteStudentCommand = new RelayCommand(param => DeleteStudentDialog(param as StudentTableItem));
+        DeleteGroupCommand = new RelayCommand(_ => DeleteGroupDialog(), _ => SelectedGroup is not null);
         SelectGroupCommand = new RelayCommand(param =>
         {
             if (param is GroupItemViewModel group) SelectedGroup = group;
@@ -93,6 +96,8 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
     public RelayCommand ExportWordCommand { get; }
     public RelayCommand CopyTextCommand { get; }
     public RelayCommand SelectGroupCommand { get; }
+    public RelayCommand DeleteStudentCommand { get; }
+    public RelayCommand DeleteGroupCommand { get; }
 
     // --------------------------------------------------------------- студенты
 
@@ -124,6 +129,44 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
                 }
                 _database.AddGroup(name);
                 _toasts.Success("Группа создана", name);
+                return true;
+            },
+        });
+    }
+
+    private void DeleteStudentDialog(StudentTableItem? student)
+    {
+        if (student is null || SelectedGroup is null) return;
+
+        _main.ShowModal(new ModalViewModel
+        {
+            Title = "Удалить студента?",
+            Message = $"«{student.FullName}» будет удалён вместе со всеми его отметками.",
+            ConfirmText = "Удалить",
+            OnConfirm = _ =>
+            {
+                _database.DeleteStudent(student.Id);
+                _toasts.Success("Студент удалён", student.FullName);
+                return true;
+            },
+        });
+    }
+
+    private void DeleteGroupDialog()
+    {
+        if (SelectedGroup is null) return;
+        var group = SelectedGroup;
+
+        _main.ShowModal(new ModalViewModel
+        {
+            Title = "Удалить группу?",
+            Message = $"Вместе с группой «{group.Name}» будут удалены все её студенты, занятия и отметки.",
+            ConfirmText = "Удалить",
+            OnConfirm = _ =>
+            {
+                _database.DeleteGroup(group.Id);
+                SelectedGroup = null;
+                _toasts.Success("Группа удалена", group.Name);
                 return true;
             },
         });
@@ -364,6 +407,7 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
         {
             Students.Add(new StudentTableItem
             {
+                Id = student.Id,
                 Number = number++,
                 FullName = student.FullName,
                 Login = student.Login,

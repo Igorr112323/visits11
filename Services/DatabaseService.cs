@@ -123,6 +123,29 @@ public sealed class DatabaseService
         return command.ExecuteScalar() is long value ? (int)value : null;
     }
 
+    /// <summary>Удаляет студента вместе с его отметками и сессией телефона.</summary>
+    public void DeleteStudent(int studentId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM Sessions WHERE StudentId = @id; DELETE FROM Students WHERE Id = @id";
+        command.Parameters.AddWithValue("@id", studentId);
+        command.ExecuteNonQuery();
+        RaiseDataChanged();
+    }
+
+    /// <summary>Удаляет группу вместе со студентами, занятиями и отметками.</summary>
+    public void DeleteGroup(int groupId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText =
+            "DELETE FROM Sessions WHERE StudentId IN (SELECT Id FROM Students WHERE GroupId = @id); DELETE FROM Groups WHERE Id = @id";
+        command.Parameters.AddWithValue("@id", groupId);
+        command.ExecuteNonQuery();
+        RaiseDataChanged();
+    }
+
     /// <summary>Имя студента по id (для подсказок).</summary>
     public string? GetStudentName(int studentId)
     {

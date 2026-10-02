@@ -1,9 +1,11 @@
 package ru.visits11.teacher;
 
 import android.nfc.cardemulation.HostApduService;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.os.VibratorManager;
 
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -196,11 +198,18 @@ public final class TeacherCardService extends HostApduService {
         return response;
     }
 
+    /** Заметная двойная вибрация — отметка прошла. */
     private void vibrate() {
         try {
-            Vibrator vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
-            if (vibrator != null) {
-                vibrator.vibrate(VibrationEffect.createOneShot(120, VibrationEffect.DEFAULT_AMPLITUDE));
+            Vibrator vibrator;
+            if (Build.VERSION.SDK_INT >= 31) {
+                VibratorManager manager = (VibratorManager) getSystemService(VIBRATOR_MANAGER_SERVICE);
+                vibrator = manager != null ? manager.getDefaultVibrator() : null;
+            } else {
+                vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+            }
+            if (vibrator != null && vibrator.hasVibrator()) {
+                vibrator.vibrate(VibrationEffect.createWaveform(new long[]{0, 90, 70, 90}, -1));
             }
         } catch (Throwable ignored) {
         }

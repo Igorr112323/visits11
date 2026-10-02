@@ -9,11 +9,13 @@ import android.graphics.BitmapFactory;
 import android.nfc.NfcAdapter;
 import android.nfc.Tag;
 import android.nfc.tech.IsoDep;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.provider.Settings;
 import android.view.View;
 import android.view.WindowManager;
@@ -338,11 +340,18 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
                 && (response[response.length - 1] & 0xFF) == 0x00;
     }
 
+    /** Заметная двойная вибрация — отметка прошла. */
     private void vibrate() {
         try {
-            Vibrator vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
-            if (vibrator != null) {
-                vibrator.vibrate(VibrationEffect.createOneShot(120, VibrationEffect.DEFAULT_AMPLITUDE));
+            Vibrator vibrator;
+            if (Build.VERSION.SDK_INT >= 31) {
+                VibratorManager manager = (VibratorManager) getSystemService(VIBRATOR_MANAGER_SERVICE);
+                vibrator = manager != null ? manager.getDefaultVibrator() : null;
+            } else {
+                vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+            }
+            if (vibrator != null && vibrator.hasVibrator()) {
+                vibrator.vibrate(VibrationEffect.createWaveform(new long[]{0, 90, 70, 90}, -1));
             }
         } catch (Throwable ignored) {
         }
