@@ -396,8 +396,13 @@ public sealed class PhoneServer : IDisposable
     private static void HandleStatic(NetworkStream stream, string relativePath)
     {
         var safe = NormalizeRelativePath(relativePath);
-        var bytes = safe is null ? null : ReadStaticFromDisk(safe) ?? ReadStaticFromAssembly(safe);
+        if (safe is null)
+        {
+            Respond(stream, "404 Not Found", "text/plain", Encoding.UTF8.GetBytes("not found"));
+            return;
+        }
 
+        var bytes = ReadStaticFromDisk(safe) ?? ReadStaticFromAssembly(safe);
         if (bytes is null)
         {
             if (safe == "index.html")
