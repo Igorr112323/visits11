@@ -534,12 +534,13 @@ p{color:#9099b8;font-size:13px;margin-top:6px}
             if (token.Length > 0 && _sessions.TryGetValue(token, out var studentId))
             {
                 var mark = OnUi(() => MarkStudent(studentId, device));
-                if (!mark.DeviceBlocked)
+                if (mark.DeviceBlocked) return RelayJson(5, string.Empty, id);
+                if (!mark.Ok)
                 {
-                    if (!mark.Ok) OnUi(() => { NfcMarkFailed?.Invoke(); return true; });
-                    return mark.Ok ? RelayJson(1, mark.Name, id) : RelayJson(4, string.Empty, id);
+                    OnUi(() => { NfcMarkFailed?.Invoke(); return true; });
+                    return RelayJson(4, string.Empty, id);
                 }
-                // токен чужой — кто студент, подскажет привязанный телефон
+                return RelayJson(1, mark.Name, id);
             }
 
             // токен ПК незнаком (например, ПК перезапускали или меняли базу),

@@ -7,7 +7,7 @@
 
 
     <application
-        android:label="Visits11 Преподаватель"
+        android:label="КубГАУ Преподаватель"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/AppTheme"

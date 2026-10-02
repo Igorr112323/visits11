@@ -6,7 +6,7 @@
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <application
-        android:label="Visits11 Студент"
+        android:label="КубГАУ Студент"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/AppTheme"

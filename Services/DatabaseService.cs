@@ -123,6 +123,16 @@ public sealed class DatabaseService
         return command.ExecuteScalar() is long value ? (int)value : null;
     }
 
+    /// <summary>Имя студента по id (для подсказок).</summary>
+    public string? GetStudentName(int studentId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT FullName FROM Students WHERE Id = @id";
+        command.Parameters.AddWithValue("@id", studentId);
+        return command.ExecuteScalar() as string;
+    }
+
     /// <summary>Токены сессий студентов — переживают перезапуск приложения.</summary>
     public Dictionary<string, int> LoadSessions()
     {

@@ -4,7 +4,7 @@
         xmlns:vm="clr-namespace:Visits11.ViewModels"
         xmlns:views="clr-namespace:Visits11.Views"
         xmlns:services="clr-namespace:Visits11.Services"
-        Title="Посещаемость"
+        Title="Журнал КубГАУ"
         Width="1280" Height="800"
         MinWidth="1160" MinHeight="720"
         WindowStartupLocation="CenterScreen"

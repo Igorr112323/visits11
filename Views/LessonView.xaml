@@ -132,7 +132,7 @@
                         </ItemsControl.ItemContainerStyle>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <Border Padding="2,11" BorderBrush="{DynamicResource Brush.Border}"
+                                <Border x:Name="Row" Padding="2,11" BorderBrush="{DynamicResource Brush.Border}"
                                         BorderThickness="0,0,0,1" Cursor="Hand">
                                     <Border.InputBindings>
                                         <MouseBinding Gesture="LeftClick"
@@ -144,6 +144,7 @@
                                             <ColumnDefinition Width="30" />
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Grid.Column="0" Text="{Binding Number}"
                                                    FontSize="12" FontFamily="{StaticResource Font.Medium}"
@@ -153,7 +154,10 @@
                                                    Style="{StaticResource Txt.Body}"
                                                    TextTrimming="CharacterEllipsis"
                                                    VerticalAlignment="Center" />
-                                        <Border x:Name="Badge" Grid.Column="2"
+                                        <TextBlock x:Name="Warn" Grid.Column="2" Text="⚠ Что-то не так"
+                                                   Visibility="Collapsed" Margin="0,0,12,0" FontSize="11"
+                                                   Foreground="#F5A623" VerticalAlignment="Center" />
+                                        <Border x:Name="Badge" Grid.Column="3"
                                                 CornerRadius="20" Padding="11,4"
                                                 Background="{DynamicResource Brush.RedSoft}"
                                                 TextElement.Foreground="{DynamicResource Brush.Red}"
@@ -197,6 +201,10 @@
                                                 </Storyboard>
                                             </BeginStoryboard>
                                         </DataTrigger.EnterActions>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding Suspicious}" Value="True">
+                                        <Setter TargetName="Row" Property="Background" Value="#1FF5A623" />
+                                        <Setter TargetName="Warn" Property="Visibility" Value="Visible" />
                                     </DataTrigger>
                                 </DataTemplate.Triggers>
                             </DataTemplate>

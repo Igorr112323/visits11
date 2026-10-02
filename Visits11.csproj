@@ -9,6 +9,7 @@
     <RootNamespace>Visits11</RootNamespace>
     <AssemblyName>Visits11</AssemblyName>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>

@@ -302,7 +302,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
                 }
                 if (result == 2) {
                     ui.post(() -> {
-                        setStatus("Неверный логин или пароль");
+                        setStatus("НЕВЕРНЫЙ ЛОГИН ИЛИ ПАРОЛЬ — введите другие и приложите телефон ещё раз");
                         loginPanel.setVisibility(View.VISIBLE);
                     });
                     return;
@@ -387,7 +387,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
                     int code = login(host, login, password);
                     if (code == LOGIN_REJECTED) {
                         token = null;
-                        setStatus("Неверный логин или пароль");
+                        setStatus("НЕВЕРНЫЙ ЛОГИН ИЛИ ПАРОЛЬ — введите другие");
                         showLogin();
                         dotRed();
                         sleepQuietly(1500);

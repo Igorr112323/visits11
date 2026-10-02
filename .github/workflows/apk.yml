@@ -48,13 +48,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp android/app/build/outputs/apk/release/app-release.apk Visits11-Teacher.apk
-          cp android/student/build/outputs/apk/release/student-release.apk Visits11-Student.apk
+          cp android/app/build/outputs/apk/release/app-release.apk "КубГАУ Преподаватель.apk"
+          cp android/student/build/outputs/apk/release/student-release.apk "КубГАУ Студент.apk"
           if gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release upload v1.0.0 Visits11-Teacher.apk Visits11-Student.apk --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload v1.0.0 "КубГАУ Преподаватель.apk" "КубГАУ Студент.apk" --clobber --repo "$GITHUB_REPOSITORY"
+            gh release delete-asset v1.0.0 Visits11-Teacher.apk --yes --repo "$GITHUB_REPOSITORY" || true
+            gh release delete-asset v1.0.0 Visits11-Student.apk --yes --repo "$GITHUB_REPOSITORY" || true
           else
-            gh release create v1.0.0 Visits11-Teacher.apk Visits11-Student.apk \
-              --title "Visits11 v1.0.0" \
-              --notes "Учёт посещаемости — офлайн. Exe для ПК, APK камеры преподавателя и APK студента." \
+            gh release create v1.0.0 "КубГАУ Преподаватель.apk" "КубГАУ Студент.apk" \
+              --title "КубГАУ · Учёт посещаемости" \
+              --notes "Журнал КубГАУ (ПК), КубГАУ Преподаватель и КубГАУ Студент — офлайн-учёт посещаемости." \
               --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY"
           fi

@@ -33,6 +33,15 @@ public sealed class StudentRow : ObservableObject
 
     public string StatusText => IsPresent ? "Есть" : "Нет";
 
+    private bool _suspicious;
+
+    /// <summary>Телефон этого студента пытались использовать для отметки другого.</summary>
+    public bool Suspicious
+    {
+        get => _suspicious;
+        set => Set(ref _suspicious, value);
+    }
+
     /// <summary>Момент отметки (для записи в БД).</summary>
     public string? MarkedAt { get; set; }
 }
@@ -121,6 +130,15 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         // вход с чужого телефона отклоняем
         if (device.Length > 0)
         {
+            // телефон уже принадлежит другому студенту (помогает «кенту») —
+            // подсвечиваем настоящего владельца в журнале и отказываем
+            var owner = _database.FindStudentIdByDevice(device);
+            if (owner is int ownerId && ownerId != student.Id)
+            {
+                FlagSuspicious(ownerId, student.FullName);
+                return (false, true, string.Empty, 0);
+            }
+
             var bound = _database.GetDeviceId(student.Id);
             if (bound is null)
             {
@@ -327,6 +345,14 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         // отметка с чужого телефона не проходит
         if (device.Length > 0)
         {
+            // телефон уже принадлежит другому студенту — подсвечиваем владельца
+            var owner = _database.FindStudentIdByDevice(device);
+            if (owner is int ownerId && ownerId != studentId)
+            {
+                FlagSuspicious(ownerId, row.FullName);
+                return (false, true, string.Empty);
+            }
+
             var bound = _database.GetDeviceId(studentId);
             if (bound is null)
             {
@@ -344,6 +370,19 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
             _toasts.Success("Отмечен", row.FullName);
         }
         return (true, false, row.FullName);
+    }
+
+    /// <summary>Телефон студента пытались использовать для отметки другого — подсвечиваем его строку.</summary>
+    private void FlagSuspicious(int ownerId, string attemptedName)
+    {
+        var row = Rows.FirstOrDefault(r => r.StudentId == ownerId);
+        if (row is not null)
+        {
+            row.Suspicious = true;
+        }
+        var ownerName = row?.FullName ?? _database.GetStudentName(ownerId) ?? "неизвестного студента";
+        _toasts.Error("Что-то не так",
+            $"Телефон студента {ownerName} использовали для отметки «{attemptedName}»");
     }
 
     // --------------------------------------------------------------- перекличка
