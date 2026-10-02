@@ -18,8 +18,6 @@ var ASSETS = [
   "/",
   "/index.html",
   "/app.js",
-  "/acoustic.js",
-  "/ggwave.js",
   "/style.css",
   "/manifest.json",
   "/fonts/Manrope-Regular.woff2",

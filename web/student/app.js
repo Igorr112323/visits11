@@ -44,11 +44,6 @@
   var KEY_LOGIN = "visits11.login";
   var KEY_PASSWORD = "visits11.password";
   var KEY_DEVICE = "visits11.device";
-  var KEY_TOKEN = "visits11.token";   // токен сессии для звукового режима (как KEY_TOKEN в Android NFC-режиме)
-
-  // коды ответа преподавателя в звуковом режиме — те же, что в NFC-режиме Android
-  var AC_TOKEN = 0, AC_MARKED = 1, AC_BAD_CREDENTIALS = 2, AC_RELOGIN = 3,
-      AC_UNAVAILABLE = 4, AC_DEVICE_BLOCKED = 5, AC_STALE_TAP = 6;
 
   // ------------------------------------------------------------------ элементы
 
@@ -264,17 +259,6 @@
       return 1000;
     }
 
-    // Открыто по NFC-метке телефона преподавателя (ссылка с #n=код): сети нет,
-    // отметка идёт звуком — см. acoustic.js
-    if (acousticNonce !== null) {
-      hideLogin();
-      if (acState === "ready" && statusShown !== "ready") {
-        statusShown = "ready";
-        setStatus("Нажмите на экран, чтобы отметиться");
-      }
-      return 1000;
-    }
-
     if (!hostFound) {
       setStatus("Поиск ПК…");
       hostFound = await ping();
@@ -343,124 +327,6 @@
     }
   }
 
-  // ------------------------------------------------------------------ звуковой режим
-
-  var acousticNonce = null;    // код касания из ссылки NFC-метки: #n=XXXXXXXX
-  var acState = "ready";       // ready | busy | done
-  var statusShown = "";
-
-  function readNonce() {
-    var match = /(?:^|[#&])n=([0-9a-f]{8})(?:&|$)/i.exec(window.location.hash || "");
-    return match ? match[1].toLowerCase() : null;
-  }
-
-  function applyNonce() {
-    var nonce = readNonce();
-    if (nonce !== acousticNonce) {
-      acousticNonce = nonce;
-      acState = "ready";
-      statusShown = "";
-      if (nonce !== null) loadAcoustic();
-      wake();
-    }
-  }
-
-  var acousticLoading = false;
-  function loadAcoustic() {
-    if (window.Acoustic || acousticLoading) {
-      if (window.Acoustic) window.Acoustic.preload().catch(function () { /* не страшно */ });
-      return;
-    }
-    acousticLoading = true;
-    var tag = document.createElement("script");
-    tag.src = "/acoustic.js";
-    tag.onload = function () {
-      acousticLoading = false;
-      if (window.Acoustic) window.Acoustic.preload().catch(function () { /* не страшно */ });
-    };
-    tag.onerror = function () { acousticLoading = false; };
-    document.head.appendChild(tag);
-  }
-
-  function finishAcoustic(text, state) {
-    acState = state;
-    statusShown = state === "ready" ? "ready" : text;   // step() не затирает текст результата
-    setStatus(text);
-  }
-
-  /** Порт onTagDiscovered из Android: type 2 (токен) либо type 1 (логин+пароль), ответ — те же коды. */
-  async function acousticMark(prepared) {
-    var nonce = acousticNonce;
-    var ok = await prepared;
-    if (!ok) {
-      finishAcoustic("Разрешите микрофон и нажмите на экран ещё раз", "ready");
-      return;
-    }
-    var loginValue = store.get(KEY_LOGIN);
-    var passwordValue = store.get(KEY_PASSWORD);
-    var device = deviceId();
-
-    for (var attempt = 0; attempt < 2; attempt++) {
-      var saved = store.get(KEY_TOKEN);
-      var type = saved ? "2" : "1";
-      var data = saved ? saved + "\n" + device : loginValue + "\n" + passwordValue + "\n" + device;
-
-      // сначала ультразвук, не услышали — тот же код слышимым сигналом
-      var reply = await window.Acoustic.exchange(type, "u", nonce, data, 7000);
-      if (!reply) reply = await window.Acoustic.exchange(type, "a", nonce, data, 9000);
-      if (nonce !== acousticNonce) return;   // за это время приложили заново
-
-      if (!reply) {
-        finishAcoustic("Не получилось — нажмите на экран ещё раз", "ready");
-        return;
-      }
-      if (reply.code === AC_TOKEN && reply.value) {
-        store.set(KEY_TOKEN, reply.value);
-        finishAcoustic("Готово! Вы отмечены", "done");
-        return;
-      }
-      if (reply.code === AC_MARKED) {
-        finishAcoustic(reply.value ? "Вы отмечены — " + reply.value : "Вы отмечены", "done");
-        return;
-      }
-      if (reply.code === AC_RELOGIN) {
-        try { window.localStorage.removeItem(KEY_TOKEN); } catch (e) { /* не страшно */ }
-        continue;            // сессия устарела — этим же касанием перелогинимся
-      }
-      if (reply.code === AC_DEVICE_BLOCKED) {
-        finishAcoustic("Аккаунт привязан к другому телефону", "done");
-        return;
-      }
-      if (reply.code === AC_BAD_CREDENTIALS) {
-        finishAcoustic("НЕВЕРНЫЙ ЛОГИН ИЛИ ПАРОЛЬ — введите другие и приложите телефон ещё раз", "done");
-        showLogin();
-        return;
-      }
-      if (reply.code === AC_STALE_TAP) {
-        finishAcoustic("Приложите телефон ещё раз", "done");
-        return;
-      }
-      finishAcoustic("Не получилось, попробуйте ещё раз", "ready");   // 4: перекличка не идёт или ПК недоступен
-      return;
-    }
-    finishAcoustic("Не получилось, попробуйте ещё раз", "ready");
-  }
-
-  // Звук в Safari — только после нажатия: нажатие на экран и есть «приложил».
-  document.addEventListener("click", function (event) {
-    if (acousticNonce === null || acState !== "ready") return;
-    if (!loginPanel.hidden) return;
-    if (!store.get(KEY_LOGIN) || !store.get(KEY_PASSWORD)) return;
-    if (!window.Acoustic) { loadAcoustic(); return; }
-    acState = "busy";
-    statusShown = "busy";
-    var prepared = window.Acoustic.prepare();      // синхронно, внутри нажатия
-    setStatus("Держите телефоны рядом…");
-    acousticMark(prepared);
-  });
-
-  window.addEventListener("hashchange", applyNonce);
-
   // ------------------------------------------------------------------ жизненный цикл
 
   var wakeLock = null;
@@ -518,8 +384,6 @@
     }
     store.set(KEY_LOGIN, loginValue);
     store.set(KEY_PASSWORD, passwordValue);
-    try { window.localStorage.removeItem(KEY_TOKEN); } catch (e) { /* не страшно */ }
-    if (acousticNonce !== null && acState === "done") { acState = "ready"; statusShown = ""; }
     token = null;
     try { passwordInput.blur(); loginInput.blur(); } catch (e) { /* не страшно */ }
     wake();
@@ -578,6 +442,5 @@
   // ------------------------------------------------------------------ старт
 
   deviceId();
-  applyNonce();
   if (!document.hidden) start();
 })();

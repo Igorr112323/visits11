@@ -1,9 +1,7 @@
 package ru.visits11.teacher;
 
-import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.nfc.NfcAdapter;
 import android.os.Bundle;
 import android.os.Handler;
@@ -21,7 +19,6 @@ import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.ServerSocket;
-import java.net.URLDecoder;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.Enumeration;
@@ -46,9 +43,6 @@ public final class MainActivity extends Activity {
     private volatile boolean serverRunning;
 
     private volatile long lastClientAt;
-
-    /** Звук: обмен с iPhone студента после касания NFC-метки (см. AcousticLink). */
-    private AcousticLink acoustic;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final Runnable statusTicker = new Runnable() {
@@ -87,47 +81,12 @@ public final class MainActivity extends Activity {
 
         startServer();
         ui.post(statusTicker);
-
-        acoustic = new AcousticLink(this);
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 1);
-        }
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        startAcoustic();
-    }
-
-    @Override
-    protected void onPause() {
-        super.onPause();
-        if (acoustic != null) {
-            acoustic.stop();   // микрофон в фоне Android всё равно не даст
-        }
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        startAcoustic();
-    }
-
-    private void startAcoustic() {
-        if (acoustic != null
-                && checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            acoustic.start();
-        }
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
         ui.removeCallbacks(statusTicker);
-        if (acoustic != null) {
-            acoustic.stop();
-        }
         serverRunning = false;
         closeQuietly(serverSocket);
     }
@@ -269,7 +228,6 @@ public final class MainActivity extends Activity {
             String path = parts[1];
             int queryAt = path.indexOf('?');
             if (queryAt >= 0) {
-                rememberStudentUrl(path.substring(queryAt + 1));
                 path = path.substring(0, queryAt);
             }
 
@@ -292,21 +250,6 @@ public final class MainActivity extends Activity {
         } catch (Throwable ignored) {
         } finally {
             closeQuietly(client);
-        }
-    }
-
-    /** ПК в каждом опросе присылает адрес приложения студента (?u=…) — он попадает в NFC-метку для iPhone. */
-    private static void rememberStudentUrl(String query) {
-        try {
-            for (String pair : query.split("&")) {
-                if (pair.startsWith("u=")) {
-                    String url = URLDecoder.decode(pair.substring(2), "UTF-8");
-                    if (url.startsWith("https://") || url.startsWith("http://")) {
-                        TapTags.baseUrl = url;
-                    }
-                }
-            }
-        } catch (Throwable ignored) {
         }
     }
 

@@ -31,11 +31,7 @@ public partial class App : Application
         Server = new PhoneServer();
         Server.Start();
 
-        Camera = new CameraLink(Server.Port)
-        {
-            // адрес приложения студента попадает в NFC-метку телефона преподавателя
-            StudentUrlProvider = () => Server.HttpsUrl ?? Server.Url
-        };
+        Camera = new CameraLink(Server.Port);
         Camera.Start();
 
         DispatcherUnhandledException += (_, args) =>

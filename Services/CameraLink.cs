@@ -27,12 +27,6 @@ public sealed class CameraLink : IDisposable
     /// <summary>NFC-запрос с телефона (json) → ответ (json). Блокирующий, потокобезопасный.</summary>
     public event Func<string, string>? NfcRelay;
 
-    /// <summary>
-    /// Адрес приложения студента (https://IP:8090/). Телефон преподавателя кладёт его
-    /// в NFC-метку, которую читает iPhone, — поэтому ПК сообщает его с каждым опросом.
-    /// </summary>
-    public Func<string?>? StudentUrlProvider { get; set; }
-
     /// <param name="serverPort">порт встроенного сервера — телефон передаёт его студентам для NFC-отметок.</param>
     public CameraLink(int serverPort)
     {
@@ -171,10 +165,7 @@ public sealed class CameraLink : IDisposable
         {
             try
             {
-                var studentUrl = "";
-                try { studentUrl = StudentUrlProvider?.Invoke() ?? ""; } catch { /* адрес не определился — без него */ }
-                var query = studentUrl.Length > 0 ? "&u=" + Uri.EscapeDataString(studentUrl) : "";
-                using var response = await client.GetAsync($"http://{host}:{Port}/event?wait=3000{query}", token);
+                using var response = await client.GetAsync($"http://{host}:{Port}/event?wait=3000", token);
                 if (response.StatusCode == HttpStatusCode.NoContent)
                 {
                     failures = 0;

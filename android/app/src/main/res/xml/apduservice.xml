@@ -6,7 +6,5 @@
         android:category="other"
         android:description="@string/nfc_group_desc">
         <aid-filter android:name="F0391101020304" />
-        <!-- метка NDEF Type 4: iPhone читает её сам и открывает ссылку на приложение студента -->
-        <aid-filter android:name="D2760000850101" />
     </aid-group>
 </host-apdu-service>

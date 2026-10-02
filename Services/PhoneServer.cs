@@ -187,15 +187,6 @@ public sealed class PhoneServer : IDisposable
                         HandleStatic(stream, "app.js");
                         break;
 
-                    // звук: обмен с телефоном преподавателя после касания NFC-метки
-                    case "/acoustic.js":
-                        HandleStatic(stream, "acoustic.js");
-                        break;
-
-                    case "/ggwave.js":
-                        HandleStatic(stream, "ggwave.js");
-                        break;
-
                     // Service Worker: офлайн-режим приложения студента (только по HTTPS)
                     case "/sw.js":
                         HandleStatic(stream, "sw.js");
