@@ -32,23 +32,22 @@
                           DisplayMemberPath="Name"
                           IsEnabled="{Binding IsGroupSelectorEnabled}" />
 
-                <StackPanel Grid.Row="2" Margin="0,12,0,0">
-                    <Button Command="{Binding StartStopCommand}"
-                            Content="{Binding ButtonText}">
-                        <Button.Style>
-                            <Style TargetType="Button" BasedOn="{StaticResource Btn.Primary}">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding RollcallState}" Value="Active">
-                                        <Setter Property="Background" Value="{DynamicResource Brush.Green}" />
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding RollcallState}" Value="Finished">
-                                        <Setter Property="Background" Value="{DynamicResource Brush.Red}" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Button.Style>
-                    </Button>
-                </StackPanel>
+                <Button Grid.Row="2" Margin="0,12,0,0"
+                        Command="{Binding StartStopCommand}"
+                        Content="{Binding ButtonText}">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource Btn.Primary}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding RollcallState}" Value="Active">
+                                    <Setter Property="Background" Value="{DynamicResource Brush.Green}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding RollcallState}" Value="Finished">
+                                    <Setter Property="Background" Value="{DynamicResource Brush.Red}" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
 
                 <!-- статистика -->
                 <Border Grid.Row="3" Margin="0,16,0,0" CornerRadius="16"

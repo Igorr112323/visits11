@@ -23,13 +23,4 @@
     <Resource Include="Assets\Fonts\*.ttf" />
   </ItemGroup>
 
-  <!-- PWA студента для iPhone: раздаётся встроенным сервером (web/student).
-       Файлы лежат и на диске рядом с проектом, и внутри сборки — одиночный
-       exe раздаёт приложение даже без папки web. -->
-  <ItemGroup>
-    <EmbeddedResource Include="web\student\**">
-      <LogicalName>Visits11.Web.%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
-    </EmbeddedResource>
-  </ItemGroup>
-
 </Project>

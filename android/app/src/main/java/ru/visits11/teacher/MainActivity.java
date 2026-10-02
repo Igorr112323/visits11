@@ -1,9 +1,7 @@
 package ru.visits11.teacher;
 
-import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.nfc.NfcAdapter;
 import android.os.Bundle;
 import android.os.Handler;
@@ -39,11 +37,7 @@ public final class MainActivity extends Activity {
     private static final long FRAME_WAIT_MS = 800;   // pacing для /frame (кадров больше нет)
     private static final long PC_TIMEOUT_MS = 3000;  // связь считается потерянной
 
-    private static final int CAMERA_REQUEST = 7;
-
     private TextView statusText;
-    private QrCamera camera;
-    private boolean cameraAsked;
 
     private ServerSocket serverSocket;
     private volatile boolean serverRunning;
@@ -85,35 +79,8 @@ public final class MainActivity extends Activity {
             }
         });
 
-        camera = new QrCamera(this);
         startServer();
         ui.post(statusTicker);
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            camera.start();
-        } else if (!cameraAsked) {
-            cameraAsked = true;
-            requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_REQUEST);
-        }
-    }
-
-    @Override
-    protected void onPause() {
-        super.onPause();
-        camera.stop();
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == CAMERA_REQUEST && grantResults.length > 0
-                && grantResults[0] == PackageManager.PERMISSION_GRANTED && !isFinishing()) {
-            camera.start();
-        }
     }
 
     @Override

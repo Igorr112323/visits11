@@ -2,11 +2,8 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Net;
 using System.Net.NetworkInformation;
-using System.Net.Security;
 using System.Net.Sockets;
-using System.Security.Authentication;
 using System.Security.Cryptography;
-using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
@@ -18,15 +15,7 @@ namespace Visits11.Services;
 ///  • GET  /api/ping — опознавательный ответ (автопоиск ПК в сети);
 ///  • POST /api/login — вход по логину/паролю, выдаёт токен сессии;
 ///  • GET  /api/qr?token= — PNG с текущим QR студента (сам ПК генерирует
-///    зашифрованный код каждые 5 секунд, время телефона не используется);
-///  • GET  /, /setup, /app.js, /sw.js, /style.css, /manifest.json, /fonts/*, /icons/*
-///    — статика PWA студента для iPhone (папка web/student; если папки рядом
-///    с exe нет — те же файлы отдаются из встроенных ресурсов сборки);
-///  • GET  /visits11.cer — сертификат сервера для установки на iPhone.
-/// HTTPS: тот же порт принимает и HTTPS (SslStream), и обычный HTTP — их различает
-/// первый байт соединения. Сертификат берётся из certs/cert.pem + certs/key.pem рядом с
-/// exe, а если его нет — выпускается автоматически при первом запуске. Не вышло — только HTTP. HTTPS нужен
-/// iPhone для Service Worker (офлайн-режим приложения).
+///    зашифрованный код каждые 5 секунд, время телефона не используется).
 /// QR содержит зашифрованные AES данные (логин занятого студента, окно
 /// времени, ID переклички, нонс) — по скриншоту нельзя понять, кто внутри,
 /// и через ~10 секунд код перестаёт действовать.
@@ -37,17 +26,9 @@ public sealed class PhoneServer : IDisposable
     private CancellationTokenSource? _cts;
     private readonly ConcurrentDictionary<string, int> _sessions = new();
 
-    private X509Certificate2? _certificate;
-
     public int Port { get; private set; }
     public bool IsRunning { get; private set; }
     public string Url => $"http://{DetectLanAddress()}:{Port}/";
-
-    /// <summary>Сертификат найден и загружен — порт принимает ещё и HTTPS.</summary>
-    public bool IsHttpsEnabled => _certificate is not null;
-
-    /// <summary>Адрес с HTTPS (для офлайн-режима iPhone); null — сертификата нет.</summary>
-    public string? HttpsUrl => _certificate is null ? null : $"https://{DetectLanAddress()}:{Port}/";
 
     /// <summary>Проверка логина/пароля (в потоке UI): (успех, отказ из-за устройства, имя, id студента).</summary>
     public Func<string, string, string, (bool Ok, bool DeviceBlocked, string Name, int StudentId)> Login { get; set; } =
@@ -94,8 +75,6 @@ public sealed class PhoneServer : IDisposable
 
         if (_listener is null) return;
 
-        _certificate = LoadCertificate();
-
         _cts = new CancellationTokenSource();
         IsRunning = true;
         var token = _cts.Token;
@@ -110,8 +89,6 @@ public sealed class PhoneServer : IDisposable
         _cts?.Dispose();
         _cts = null;
         _listener = null;
-        _certificate?.Dispose();
-        _certificate = null;
     }
 
     // ------------------------------------------------------------- приём данных
@@ -145,11 +122,7 @@ public sealed class PhoneServer : IDisposable
             {
                 client.ReceiveTimeout = 15000;
                 client.SendTimeout = 15000;
-
-                // HTTP или HTTPS — решает первый байт соединения
-                var opened = await OpenStreamAsync(client, token);
-                if (opened is null) return;
-                using var stream = opened;
+                var stream = client.GetStream();
 
                 var request = await ReadRequestAsync(stream, token);
                 if (request is null) return;
@@ -169,70 +142,22 @@ public sealed class PhoneServer : IDisposable
                         HandleQr(stream, GetQueryParam(request.Query, "token"));
                         break;
 
-                    case "/api/qrkey":
-                        HandleQrKey(stream, GetQueryParam(request.Query, "token"));
-                        break;
-
                     case "/api/nfc_mark" when request.Method == "POST":
                         HandleNfcMark(stream, request.Body);
                         break;
 
                     case "/":
                     case "/index.html":
-                        HandleStatic(stream, "index.html");
+                        Respond(stream, "200 OK", "text/html; charset=utf-8",
+                            Encoding.UTF8.GetBytes(InfoPage));
                         break;
 
-                    case "/setup":
-                    case "/setup.html":
-                        HandleStatic(stream, "setup.html");
-                        break;
-
-                    case "/app.js":
-                        HandleStatic(stream, "app.js");
-                        break;
-
-                    case "/qr.js":
-                        HandleStatic(stream, "qr.js");
-                        break;
-
-                    // Service Worker: офлайн-режим приложения студента (только по HTTPS)
-                    case "/sw.js":
-                        HandleStatic(stream, "sw.js");
-                        break;
-
-                    // сертификат сервера — iPhone ставит его и доверяет ему
-                    case "/visits11.cer":
-                        HandleCertificate(stream);
-                        break;
-
-                    case "/style.css":
-                        HandleStatic(stream, "style.css");
-                        break;
-
-                    case "/manifest.json":
-                        HandleStatic(stream, "manifest.json");
-                        break;
-
-                    // iOS сам просит иконку по этому адресу
                     case "/favicon.ico":
-                        HandleStatic(stream, "icons/favicon.ico");
-                        break;
-
-                    case "/apple-touch-icon.png":
-                    case "/apple-touch-icon-precomposed.png":
-                        HandleStatic(stream, "icons/apple-touch-icon.png");
+                        Respond(stream, "204 No Content", "text/plain", Array.Empty<byte>());
                         break;
 
                     default:
-                        if (request.Path.StartsWith("/fonts/", StringComparison.Ordinal) ||
-                            request.Path.StartsWith("/icons/", StringComparison.Ordinal))
-                        {
-                            HandleStatic(stream, request.Path.TrimStart('/'));
-                        }
-                        else
-                        {
-                            Respond(stream, "404 Not Found", "text/plain", Encoding.UTF8.GetBytes("not found"));
-                        }
+                        Respond(stream, "404 Not Found", "text/plain", Encoding.UTF8.GetBytes("not found"));
                         break;
                 }
             }
@@ -243,188 +168,7 @@ public sealed class PhoneServer : IDisposable
         }
     }
 
-    // ------------------------------------------------------------- HTTPS
-
-    /// <summary>
-    /// Сертификат для HTTPS: certs/cert.pem + certs/key.pem рядом с exe (и на несколько
-    /// уровней выше — работает и при запуске через dotnet run). Если файлов нет — программа
-    /// сама выпускает самоподписанный сертификат на 10 лет и кладёт его в папку certs
-    /// рядом с exe. Не получилось — null, сервер остаётся на обычном HTTP.
-    /// </summary>
-    private static X509Certificate2? LoadCertificate()
-    {
-        try
-        {
-            var existing = FindCertificateFiles();
-            if (existing is null)
-            {
-                var folder = Path.Combine(ExeFolder(), "certs");
-                if (!GenerateCertificateFiles(folder)) return null;
-                existing = (Path.Combine(folder, "cert.pem"), Path.Combine(folder, "key.pem"));
-            }
-
-            using var pem = X509Certificate2.CreateFromPemFile(existing.Value.Cert, existing.Value.Key);
-            // Windows (SChannel) не принимает ключ, загруженный из PEM «в памяти»:
-            // переупаковываем сертификат с ключом через PFX
-            return new X509Certificate2(pem.Export(X509ContentType.Pfx));
-        }
-        catch
-        {
-            // сертификат не читается — остаёмся на обычном HTTP
-            return null;
-        }
-    }
-
-    /// <summary>Папка с exe (для single-file — не временная папка распаковки).</summary>
-    internal static string ExeFolder()
-    {
-        try
-        {
-            var processPath = Environment.ProcessPath;
-            var folder = string.IsNullOrEmpty(processPath) ? null : Path.GetDirectoryName(processPath);
-            if (!string.IsNullOrEmpty(folder)) return folder;
-        }
-        catch
-        {
-            // берём базовую папку
-        }
-        return AppContext.BaseDirectory;
-    }
-
-    private static (string Cert, string Key)? FindCertificateFiles()
-    {
-        foreach (var start in new[] { ExeFolder(), AppContext.BaseDirectory })
-        {
-            string? folder = start;
-            for (var depth = 0; depth < 8 && !string.IsNullOrEmpty(folder); depth++)
-            {
-                var certPath = Path.Combine(folder, "certs", "cert.pem");
-                var keyPath = Path.Combine(folder, "certs", "key.pem");
-                if (File.Exists(certPath) && File.Exists(keyPath)) return (certPath, keyPath);
-                folder = Path.GetDirectoryName(folder.TrimEnd(Path.DirectorySeparatorChar));
-            }
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// Выпускает самоподписанный сертификат на 10 лет (то же, что делает scripts/generate-cert):
-    /// имена visits11.local / localhost / имя ПК и IP-адреса ПК в локальных сетях.
-    /// </summary>
-    private static bool GenerateCertificateFiles(string folder)
-    {
-        try
-        {
-            using var rsa = RSA.Create(2048);
-            var request = new CertificateRequest(
-                "CN=visits11.local, O=KubGAU Visits11", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
-
-            var names = new SubjectAlternativeNameBuilder();
-            names.AddDnsName("visits11.local");
-            names.AddDnsName("localhost");
-            var machine = Environment.MachineName.ToLowerInvariant();
-            if (machine.Length > 0 && machine.All(c => char.IsAsciiLetterOrDigit(c) || c == '-'))
-            {
-                names.AddDnsName(machine);
-                names.AddDnsName(machine + ".local");
-            }
-
-            var addresses = new HashSet<string> { "127.0.0.1", "192.168.137.1" };
-            foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
-            {
-                foreach (var unicast in nic.GetIPProperties().UnicastAddresses)
-                {
-                    if (unicast.Address.AddressFamily != AddressFamily.InterNetwork) continue;
-                    var text = unicast.Address.ToString();
-                    if (text.StartsWith("169.254.", StringComparison.Ordinal)) continue;
-                    addresses.Add(text);
-                }
-            }
-            foreach (var address in addresses)
-            {
-                names.AddIpAddress(IPAddress.Parse(address));
-            }
-
-            request.CertificateExtensions.Add(names.Build());
-            request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
-            request.CertificateExtensions.Add(new X509KeyUsageExtension(
-                X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment | X509KeyUsageFlags.KeyCertSign,
-                true));
-            request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(
-                new OidCollection { new Oid("1.3.6.1.5.5.7.3.1") }, false)); // serverAuth
-            request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
-
-            using var certificate = request.CreateSelfSigned(
-                DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(3650));
-
-            Directory.CreateDirectory(folder);
-            File.WriteAllText(Path.Combine(folder, "cert.pem"), certificate.ExportCertificatePem());
-            File.WriteAllText(Path.Combine(folder, "key.pem"), rsa.ExportPkcs8PrivateKeyPem());
-            return true;
-        }
-        catch
-        {
-            // нет прав на запись рядом с exe и т. п. — работаем без HTTPS
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Поток соединения: TLS (SslStream), если клиент начал с рукопожатия (байт 0x16),
-    /// иначе обычный HTTP. null — клиент ничего не прислал и закрыл соединение.
-    /// </summary>
-    private async Task<Stream?> OpenStreamAsync(TcpClient client, CancellationToken token)
-    {
-        Stream plain = client.GetStream();
-        var certificate = _certificate;
-        if (certificate is null) return plain;
-
-        // заглядываем в первый байт, не забирая его из буфера
-        var first = new byte[1];
-        int peeked;
-        using (var peekCts = CancellationTokenSource.CreateLinkedTokenSource(token))
-        {
-            peekCts.CancelAfter(TimeSpan.FromSeconds(15));
-            peeked = await client.Client.ReceiveAsync(first.AsMemory(), SocketFlags.Peek, peekCts.Token);
-        }
-        if (peeked == 0) return null;
-        if (first[0] != 0x16) return plain; // это не TLS — обычный HTTP, как раньше
-
-        var ssl = new SslStream(plain, leaveInnerStreamOpen: false);
-        try
-        {
-            using var handshakeCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-            handshakeCts.CancelAfter(TimeSpan.FromSeconds(10));
-            await ssl.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
-            {
-                ServerCertificate = certificate,
-                ClientCertificateRequired = false,
-                EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
-            }, handshakeCts.Token);
-            return ssl;
-        }
-        catch
-        {
-            ssl.Dispose();
-            throw;
-        }
-    }
-
-    /// <summary>Сертификат сервера (DER) — iPhone предложит установить его как профиль.</summary>
-    private void HandleCertificate(Stream stream)
-    {
-        var certificate = _certificate;
-        if (certificate is null)
-        {
-            Respond(stream, "404 Not Found", "text/plain; charset=utf-8", Encoding.UTF8.GetBytes(
-                "Сертификата нет. Запустите scripts/generate-cert, положите папку certs рядом с exe " +
-                "и перезапустите программу."));
-            return;
-        }
-        Respond(stream, "200 OK", "application/x-x509-ca-cert", certificate.Export(X509ContentType.Cert));
-    }
-
-    private void HandleLogin(Stream stream, byte[]? body)
+    private void HandleLogin(NetworkStream stream, byte[]? body)
     {
         string login = "";
         string password = "";
@@ -479,7 +223,7 @@ public sealed class PhoneServer : IDisposable
         }
     }
 
-    private void HandleQr(Stream stream, string token)
+    private void HandleQr(NetworkStream stream, string token)
     {
         if (!_sessions.TryGetValue(token, out var studentId))
         {
@@ -500,25 +244,8 @@ public sealed class PhoneServer : IDisposable
         }
     }
 
-    private void HandleQrKey(Stream stream, string token)
-    {
-        if (!_sessions.TryGetValue(token, out var studentId))
-        {
-            Respond(stream, "401 Unauthorized", "application/json",
-                Encoding.UTF8.GetBytes("{\"ok\":false}"));
-            return;
-        }
-
-        RespondJson(stream, new Dictionary<string, object?>
-        {
-            ["ok"] = true,
-            ["id"] = studentId,
-            ["key"] = Convert.ToHexString(QrKeys.ForStudent(studentId)).ToLowerInvariant()
-        });
-    }
-
     /// <summary>Отметка «телефон к телефону»: телефон преподавателя пересылает токен студента.</summary>
-    private void HandleNfcMark(Stream stream, byte[]? body)
+    private void HandleNfcMark(NetworkStream stream, byte[]? body)
     {
         string token = "";
         string device = "";
@@ -567,145 +294,6 @@ public sealed class PhoneServer : IDisposable
         });
     }
 
-    // ------------------------------------------------------------- статика PWA
-
-    private static readonly Lazy<string?> WebRoot = new(FindWebRoot);
-    private static readonly Lazy<Dictionary<string, byte[]>> EmbeddedWeb = new(LoadEmbeddedWeb);
-
-    /// <summary>
-    /// Папка web/student с файлами PWA студента: ищем рядом с exe и на
-    /// несколько уровней выше (это работает и при запуске через dotnet run).
-    /// </summary>
-    private static string? FindWebRoot()
-    {
-        try
-        {
-            string? folder = AppContext.BaseDirectory;
-            for (var depth = 0; depth < 8 && !string.IsNullOrEmpty(folder); depth++)
-            {
-                var candidate = Path.Combine(folder, "web", "student");
-                if (File.Exists(Path.Combine(candidate, "index.html"))) return candidate;
-                folder = Path.GetDirectoryName(folder.TrimEnd(Path.DirectorySeparatorChar));
-            }
-        }
-        catch
-        {
-            // нет доступа к папке — останутся встроенные копии файлов
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// Встроенные копии PWA (см. EmbeddedResource в Visits11.csproj) — нужны,
-    /// чтобы одиночный exe раздавал приложение даже без папки web рядом.
-    /// </summary>
-    private static Dictionary<string, byte[]> LoadEmbeddedWeb()
-    {
-        var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
-        try
-        {
-            var assembly = typeof(PhoneServer).Assembly;
-            foreach (var name in assembly.GetManifestResourceNames())
-            {
-                var normalized = name.Replace('/', '.').Replace('\\', '.');
-                var marker = normalized.IndexOf(".Web.", StringComparison.OrdinalIgnoreCase);
-                if (marker < 0) continue;
-
-                using var resource = assembly.GetManifestResourceStream(name);
-                if (resource is null) continue;
-                using var buffer = new MemoryStream();
-                resource.CopyTo(buffer);
-                var bytes = buffer.ToArray();
-
-                // регистрируем имя и все его «хвосты»: Student.icons.icon.png → .icons.icon.png
-                var parts = normalized[(marker + 5)..].Split('.', StringSplitOptions.RemoveEmptyEntries);
-                for (var start = 0; start < parts.Length; start++)
-                {
-                    files.TryAdd("." + string.Join('.', parts[start..]), bytes);
-                }
-            }
-        }
-        catch
-        {
-            // встроенных файлов нет — сервер продолжит работать как раньше
-        }
-        return files;
-    }
-
-    /// <summary>Отдаёт файл PWA: сначала с диска (удобно править), затем встроенный.</summary>
-    private static void HandleStatic(Stream stream, string relativePath)
-    {
-        var safe = NormalizeRelativePath(relativePath);
-        if (safe is null)
-        {
-            Respond(stream, "404 Not Found", "text/plain", Encoding.UTF8.GetBytes("not found"));
-            return;
-        }
-
-        var bytes = ReadStaticFromDisk(safe) ?? ReadStaticFromAssembly(safe);
-        if (bytes is null)
-        {
-            if (safe == "index.html")
-            {
-                // файлов PWA рядом нет — показываем прежнюю страницу-подсказку
-                Respond(stream, "200 OK", "text/html; charset=utf-8", Encoding.UTF8.GetBytes(InfoPage));
-                return;
-            }
-            Respond(stream, "404 Not Found", "text/plain", Encoding.UTF8.GetBytes("not found"));
-            return;
-        }
-
-        Respond(stream, "200 OK", StaticContentType(safe), bytes, revalidate: true);
-    }
-
-    /// <summary>Никаких «..» и абсолютных путей — только файлы внутри web/student.</summary>
-    private static string? NormalizeRelativePath(string path)
-    {
-        if (string.IsNullOrEmpty(path)) return null;
-        var normalized = path.Replace('\\', '/').TrimStart('/');
-        if (normalized.Length == 0 || normalized.Length > 200) return null;
-        if (normalized.Contains("..", StringComparison.Ordinal)) return null;
-        if (normalized.Contains(':') || normalized.Contains('\0')) return null;
-        return normalized;
-    }
-
-    private static byte[]? ReadStaticFromDisk(string relativePath)
-    {
-        try
-        {
-            var root = WebRoot.Value;
-            if (root is null) return null;
-            var full = Path.GetFullPath(Path.Combine(root, relativePath));
-            if (!full.StartsWith(Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase)) return null;
-            return File.Exists(full) ? File.ReadAllBytes(full) : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static byte[]? ReadStaticFromAssembly(string relativePath)
-    {
-        var key = "." + relativePath.Replace('/', '.').Replace('\\', '.');
-        return EmbeddedWeb.Value.TryGetValue(key, out var bytes) ? bytes : null;
-    }
-
-    private static string StaticContentType(string relativePath) => Path.GetExtension(relativePath).ToLowerInvariant() switch
-    {
-        ".html" => "text/html; charset=utf-8",
-        ".js" => "application/javascript; charset=utf-8",
-        ".css" => "text/css; charset=utf-8",
-        ".json" => "application/manifest+json; charset=utf-8",
-        ".woff2" => "font/woff2",
-        ".woff" => "font/woff",
-        ".png" => "image/png",
-        ".ico" => "image/x-icon",
-        ".svg" => "image/svg+xml",
-        ".txt" => "text/plain; charset=utf-8",
-        _ => "application/octet-stream",
-    };
-
     // ------------------------------------------------------------- HTTP-парсер
 
     private sealed class HttpRequest
@@ -716,7 +304,7 @@ public sealed class PhoneServer : IDisposable
         public byte[]? Body;
     }
 
-    private static async Task<HttpRequest?> ReadRequestAsync(Stream stream, CancellationToken token)
+    private static async Task<HttpRequest?> ReadRequestAsync(NetworkStream stream, CancellationToken token)
     {
         var buffer = new byte[32 * 1024];
         var all = new MemoryStream();
@@ -819,26 +407,20 @@ public sealed class PhoneServer : IDisposable
 
     // ------------------------------------------------------------- ответы
 
-    /// <param name="revalidate">
-    /// true для статики PWA: браузер каждый раз спрашивает сервер (no-cache),
-    /// но может переиспользовать файл — важно, чтобы обновление приложения
-    /// на ПК подхватывалось без «застрявшей» старой версии.
-    /// </param>
-    private static void Respond(Stream stream, string status, string contentType, byte[] body,
-        bool revalidate = false)
+    private static void Respond(NetworkStream stream, string status, string contentType, byte[] body)
     {
         var head = Encoding.ASCII.GetBytes(
             $"HTTP/1.1 {status}\r\n" +
             $"Content-Type: {contentType}\r\n" +
             $"Content-Length: {body.Length}\r\n" +
             "Connection: close\r\n" +
-            $"Cache-Control: {(revalidate ? "no-cache" : "no-store")}\r\n\r\n");
+            "Cache-Control: no-store\r\n\r\n");
         stream.Write(head, 0, head.Length);
         stream.Write(body, 0, body.Length);
         stream.Flush();
     }
 
-    private static void RespondJson(Stream stream, Dictionary<string, object?> payload)
+    private static void RespondJson(NetworkStream stream, Dictionary<string, object?> payload)
     {
         Respond(stream, "200 OK", "application/json", JsonSerializer.SerializeToUtf8Bytes(payload));
     }
@@ -883,7 +465,7 @@ p{color:#9099b8;font-size:13px;margin-top:6px}
     {
         int type = 0;
         long id = 0;
-        string login = "", password = "", token = "", device = "", qr = "";
+        string login = "", password = "", token = "", device = "";
         try
         {
             using var doc = JsonDocument.Parse(json);
@@ -908,11 +490,6 @@ p{color:#9099b8;font-size:13px;margin-top:6px}
             {
                 token = tokenValue.GetString() ?? "";
             }
-            if (root.TryGetProperty("qr", out var qrValue) &&
-                qrValue.ValueKind == JsonValueKind.String)
-            {
-                qr = qrValue.GetString() ?? "";
-            }
             if (root.TryGetProperty("device", out var deviceValue) &&
                 deviceValue.ValueKind == JsonValueKind.String)
             {
@@ -927,16 +504,6 @@ p{color:#9099b8;font-size:13px;margin-top:6px}
         catch (JsonException)
         {
             return "{\"code\":4}";
-        }
-
-        if (type == 3)
-        {
-            var scanned = QrKeys.Verify(Encoding.ASCII.GetBytes(qr));
-            if (scanned is not int scannedId) return RelayJson(4, string.Empty, id);
-            var scannedMark = OnUi(() => MarkStudent(scannedId, string.Empty));
-            return scannedMark.Ok
-                ? RelayJson(1, scannedMark.Name, id)
-                : RelayJson(4, string.Empty, id);
         }
 
         if (type == 1)

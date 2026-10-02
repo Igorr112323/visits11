@@ -75,9 +75,6 @@
         <DataTemplate DataType="{x:Type vm:JournalViewModel}">
             <views:JournalView />
         </DataTemplate>
-        <DataTemplate DataType="{x:Type vm:DownloadViewModel}">
-            <views:DownloadView />
-        </DataTemplate>
 
         <!-- ============================================== МОДАЛЬНОЕ ОКНО == -->
 
@@ -303,13 +300,7 @@
                                      GroupName="Tabs"
                                      Tag="{StaticResource Icon.Book}"
                                      Content="Журнал"
-                                     IsChecked="{Binding TabJournal, Mode=TwoWay}"
-                                     Margin="0,0,6,0" />
-                        <RadioButton Style="{StaticResource Widget.TabToggle}"
-                                     GroupName="Tabs"
-                                     Tag="{StaticResource Icon.Import}"
-                                     Content="QR для скачивания"
-                                     IsChecked="{Binding TabDownload, Mode=TwoWay}" />
+                                     IsChecked="{Binding TabJournal, Mode=TwoWay}" />
                     </StackPanel>
 
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
