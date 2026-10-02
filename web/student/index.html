@@ -2,101 +2,52 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="theme-color" content="#0A0D1A">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="КубГАУ">
+<meta name="apple-mobile-web-app-title" content="КубГАУ Студент">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="format-detection" content="telephone=no">
-<meta name="description" content="Отметка посещаемости КубГАУ: работает только в локальной сети, без интернета.">
-<meta name="color-scheme" content="dark light">
+<meta name="color-scheme" content="dark">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="icon" href="icons/favicon.ico" sizes="any">
 <link rel="manifest" href="manifest.json">
 <link rel="stylesheet" href="style.css">
-<title>КубГАУ · Отметка</title>
+<title>КубГАУ Студент</title>
 </head>
 <body>
 
-<!-- всплывающие уведомления (внутренние баннеры — работают всегда) -->
-<div class="toasts" id="toasts" role="status" aria-live="polite"></div>
+<!-- Разметка повторяет android/student/res/layout/activity_main.xml:
+     логотип · QR на весь экран · статус · карточка входа · точка связи с ПК -->
 
-<!-- индикатор связи с ПК в углу экрана -->
-<button class="pc-status" id="pcStatus" type="button">
-  <span class="pc-dot" id="pcDot" aria-hidden="true"></span>
-  <span class="pc-text" id="pcText">Поиск ПК…</span>
-</button>
+<!-- логотип КубГАУ -->
+<img class="logo" src="icons/logo.png" alt="КубГАУ" width="110" height="110">
 
-<main class="app" id="app">
+<div class="stage">
+  <!-- QR-код (обновляется с ПК каждые 5 секунд) -->
+  <img class="qr" id="qrView" alt="QR" width="300" height="300" hidden>
 
-  <!-- ==================== экран входа ==================== -->
-  <section class="screen" id="screenLogin" hidden>
-    <img class="logo" src="icons/icon-192.png" alt="" width="88" height="88">
-    <h1 class="app-title">КубГАУ · Отметка</h1>
-    <p class="app-subtitle">Логин и пароль выдаёт преподаватель.<br>Вход сохранится — вводить нужно один раз.</p>
+  <!-- вход при первом запуске -->
+  <div class="card" id="loginPanel" hidden>
+    <input class="input" id="loginInput" type="text" placeholder="Логин"
+           autocomplete="off" autocapitalize="none" autocorrect="off"
+           spellcheck="false" enterkeyhint="next">
+    <input class="input input-next" id="passwordInput" type="password" placeholder="Пароль"
+           autocomplete="off" enterkeyhint="done">
+    <button class="button" id="loginButton" type="button">Войти</button>
+  </div>
 
-    <form class="card" id="loginForm" novalidate>
-      <label class="field">
-        <span class="field-label">Логин</span>
-        <input class="input" id="loginInput" name="login" type="text" inputmode="text"
-               autocomplete="username" autocapitalize="none" autocorrect="off"
-               spellcheck="false" enterkeyhint="next" placeholder="ivanov">
-      </label>
+  <!-- статус, когда QR показать нельзя -->
+  <div class="status" id="statusText" hidden></div>
+</div>
 
-      <label class="field">
-        <span class="field-label">Пароль</span>
-        <input class="input" id="passwordInput" name="password" type="password"
-               autocomplete="current-password" enterkeyhint="go" placeholder="••••••">
-      </label>
+<!-- индикатор связи с ПК -->
+<div class="dot" id="dot"></div>
 
-      <button class="btn btn-primary" id="loginButton" type="submit">Войти</button>
-    </form>
-
-    <p class="footnote" id="loginHint">ПК и телефон должны быть в одной сети Wi-Fi. Интернет не нужен.</p>
-  </section>
-
-  <!-- ==================== экран отметки ==================== -->
-  <section class="screen" id="screenMark" hidden>
-    <img class="logo" src="icons/icon-192.png" alt="" width="72" height="72">
-    <p class="hello" id="helloText">Здравствуйте</p>
-
-    <button class="mark-button" id="markButton" type="button">
-      <span class="mark-ring" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="44" height="44" aria-hidden="true">
-          <path d="M4.5 12.6l4.7 4.7L19.5 7" fill="none" stroke="currentColor"
-                stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </span>
-      <span class="mark-label">Отметиться</span>
-    </button>
-
-    <p class="rollcall" id="rollcallBadge" hidden></p>
-    <p class="footnote" id="markHint">Нажмите кнопку, когда преподаватель начнёт перекличку.</p>
-
-    <div class="qr-card" id="qrCard" hidden>
-      <p class="qr-title">Запасной способ</p>
-      <p class="qr-text">Покажите этот код камере преподавателя — он отметит вас вручную.</p>
-      <img class="qr-image" id="qrImage" alt="Код для камеры преподавателя" width="180" height="180">
-    </div>
-
-    <button class="link" id="logoutButton" type="button">Сменить студента</button>
-  </section>
-
-  <!-- ==================== экран успеха ==================== -->
-  <section class="screen screen-success" id="screenSuccess" hidden>
-    <div class="success-check" id="successCheck" aria-hidden="true">
-      <svg viewBox="0 0 48 48" width="96" height="96" aria-hidden="true">
-        <path class="success-path" d="M11 25.5l9 9 17.5-20" fill="none" stroke="currentColor"
-              stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-    </div>
-    <h2 class="success-title" id="successTitle">Вы отмечены</h2>
-    <p class="success-name" id="successName"></p>
-  </section>
-
-</main>
+<!-- всплывающая подсказка, как Toast в Android -->
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="app.js"></script>
 </body>

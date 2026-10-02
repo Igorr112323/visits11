@@ -2,8 +2,11 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Net;
 using System.Net.NetworkInformation;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Authentication;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
@@ -16,9 +19,14 @@ namespace Visits11.Services;
 ///  • POST /api/login — вход по логину/паролю, выдаёт токен сессии;
 ///  • GET  /api/qr?token= — PNG с текущим QR студента (сам ПК генерирует
 ///    зашифрованный код каждые 5 секунд, время телефона не используется);
-///  • GET  /, /setup, /app.js, /style.css, /manifest.json, /fonts/*, /icons/*
+///  • GET  /, /setup, /app.js, /sw.js, /style.css, /manifest.json, /fonts/*, /icons/*
 ///    — статика PWA студента для iPhone (папка web/student; если папки рядом
-///    с exe нет — те же файлы отдаются из встроенных ресурсов сборки).
+///    с exe нет — те же файлы отдаются из встроенных ресурсов сборки);
+///  • GET  /visits11.cer — сертификат сервера для установки на iPhone.
+/// HTTPS: если рядом есть certs/cert.pem и certs/key.pem, тот же порт принимает
+/// и HTTPS (SslStream), и обычный HTTP — их различает первый байт соединения.
+/// Без сертификата сервер работает только по HTTP, как раньше. HTTPS нужен
+/// iPhone для Service Worker (офлайн-режим приложения).
 /// QR содержит зашифрованные AES данные (логин занятого студента, окно
 /// времени, ID переклички, нонс) — по скриншоту нельзя понять, кто внутри,
 /// и через ~10 секунд код перестаёт действовать.
@@ -29,9 +37,17 @@ public sealed class PhoneServer : IDisposable
     private CancellationTokenSource? _cts;
     private readonly ConcurrentDictionary<string, int> _sessions = new();
 
+    private X509Certificate2? _certificate;
+
     public int Port { get; private set; }
     public bool IsRunning { get; private set; }
     public string Url => $"http://{DetectLanAddress()}:{Port}/";
+
+    /// <summary>Сертификат найден и загружен — порт принимает ещё и HTTPS.</summary>
+    public bool IsHttpsEnabled => _certificate is not null;
+
+    /// <summary>Адрес с HTTPS (для офлайн-режима iPhone); null — сертификата нет.</summary>
+    public string? HttpsUrl => _certificate is null ? null : $"https://{DetectLanAddress()}:{Port}/";
 
     /// <summary>Проверка логина/пароля (в потоке UI): (успех, отказ из-за устройства, имя, id студента).</summary>
     public Func<string, string, string, (bool Ok, bool DeviceBlocked, string Name, int StudentId)> Login { get; set; } =
@@ -78,6 +94,8 @@ public sealed class PhoneServer : IDisposable
 
         if (_listener is null) return;
 
+        _certificate = LoadCertificate();
+
         _cts = new CancellationTokenSource();
         IsRunning = true;
         var token = _cts.Token;
@@ -92,6 +110,8 @@ public sealed class PhoneServer : IDisposable
         _cts?.Dispose();
         _cts = null;
         _listener = null;
+        _certificate?.Dispose();
+        _certificate = null;
     }
 
     // ------------------------------------------------------------- приём данных
@@ -125,7 +145,11 @@ public sealed class PhoneServer : IDisposable
             {
                 client.ReceiveTimeout = 15000;
                 client.SendTimeout = 15000;
-                var stream = client.GetStream();
+
+                // HTTP или HTTPS — решает первый байт соединения
+                var opened = await OpenStreamAsync(client, token);
+                if (opened is null) return;
+                using var stream = opened;
 
                 var request = await ReadRequestAsync(stream, token);
                 if (request is null) return;
@@ -161,6 +185,16 @@ public sealed class PhoneServer : IDisposable
 
                     case "/app.js":
                         HandleStatic(stream, "app.js");
+                        break;
+
+                    // Service Worker: офлайн-режим приложения студента (только по HTTPS)
+                    case "/sw.js":
+                        HandleStatic(stream, "sw.js");
+                        break;
+
+                    // сертификат сервера — iPhone ставит его и доверяет ему
+                    case "/visits11.cer":
+                        HandleCertificate(stream);
                         break;
 
                     case "/style.css":
@@ -201,7 +235,95 @@ public sealed class PhoneServer : IDisposable
         }
     }
 
-    private void HandleLogin(NetworkStream stream, byte[]? body)
+    // ------------------------------------------------------------- HTTPS
+
+    /// <summary>
+    /// Ищет certs/cert.pem + certs/key.pem рядом с exe и на несколько уровней выше
+    /// (работает и при запуске через dotnet run). Нет файлов или они повреждены — null,
+    /// сервер продолжает работать по HTTP.
+    /// </summary>
+    private static X509Certificate2? LoadCertificate()
+    {
+        try
+        {
+            string? folder = AppContext.BaseDirectory;
+            for (var depth = 0; depth < 8 && !string.IsNullOrEmpty(folder); depth++)
+            {
+                var certPath = Path.Combine(folder, "certs", "cert.pem");
+                var keyPath = Path.Combine(folder, "certs", "key.pem");
+                if (File.Exists(certPath) && File.Exists(keyPath))
+                {
+                    using var pem = X509Certificate2.CreateFromPemFile(certPath, keyPath);
+                    // Windows (SChannel) не принимает ключ, загруженный из PEM «в памяти»:
+                    // переупаковываем сертификат с ключом через PFX
+                    return new X509Certificate2(pem.Export(X509ContentType.Pfx));
+                }
+                folder = Path.GetDirectoryName(folder.TrimEnd(Path.DirectorySeparatorChar));
+            }
+        }
+        catch
+        {
+            // сертификат не читается — остаёмся на обычном HTTP
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Поток соединения: TLS (SslStream), если клиент начал с рукопожатия (байт 0x16),
+    /// иначе обычный HTTP. null — клиент ничего не прислал и закрыл соединение.
+    /// </summary>
+    private async Task<Stream?> OpenStreamAsync(TcpClient client, CancellationToken token)
+    {
+        Stream plain = client.GetStream();
+        var certificate = _certificate;
+        if (certificate is null) return plain;
+
+        // заглядываем в первый байт, не забирая его из буфера
+        var first = new byte[1];
+        int peeked;
+        using (var peekCts = CancellationTokenSource.CreateLinkedTokenSource(token))
+        {
+            peekCts.CancelAfter(TimeSpan.FromSeconds(15));
+            peeked = await client.Client.ReceiveAsync(first.AsMemory(), SocketFlags.Peek, peekCts.Token);
+        }
+        if (peeked == 0) return null;
+        if (first[0] != 0x16) return plain; // это не TLS — обычный HTTP, как раньше
+
+        var ssl = new SslStream(plain, leaveInnerStreamOpen: false);
+        try
+        {
+            using var handshakeCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            handshakeCts.CancelAfter(TimeSpan.FromSeconds(10));
+            await ssl.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+            {
+                ServerCertificate = certificate,
+                ClientCertificateRequired = false,
+                EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
+            }, handshakeCts.Token);
+            return ssl;
+        }
+        catch
+        {
+            ssl.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Сертификат сервера (DER) — iPhone предложит установить его как профиль.</summary>
+    private void HandleCertificate(Stream stream)
+    {
+        var certificate = _certificate;
+        if (certificate is null)
+        {
+            Respond(stream, "404 Not Found", "text/plain; charset=utf-8", Encoding.UTF8.GetBytes(
+                "Сертификата нет. Запустите scripts/generate-cert, положите папку certs рядом с exe " +
+                "и перезапустите программу."));
+            return;
+        }
+        Respond(stream, "200 OK", "application/x-x509-ca-cert", certificate.Export(X509ContentType.Cert));
+    }
+
+    private void HandleLogin(Stream stream, byte[]? body)
     {
         string login = "";
         string password = "";
@@ -256,7 +378,7 @@ public sealed class PhoneServer : IDisposable
         }
     }
 
-    private void HandleQr(NetworkStream stream, string token)
+    private void HandleQr(Stream stream, string token)
     {
         if (!_sessions.TryGetValue(token, out var studentId))
         {
@@ -278,7 +400,7 @@ public sealed class PhoneServer : IDisposable
     }
 
     /// <summary>Отметка «телефон к телефону»: телефон преподавателя пересылает токен студента.</summary>
-    private void HandleNfcMark(NetworkStream stream, byte[]? body)
+    private void HandleNfcMark(Stream stream, byte[]? body)
     {
         string token = "";
         string device = "";
@@ -393,7 +515,7 @@ public sealed class PhoneServer : IDisposable
     }
 
     /// <summary>Отдаёт файл PWA: сначала с диска (удобно править), затем встроенный.</summary>
-    private static void HandleStatic(NetworkStream stream, string relativePath)
+    private static void HandleStatic(Stream stream, string relativePath)
     {
         var safe = NormalizeRelativePath(relativePath);
         if (safe is null)
@@ -476,7 +598,7 @@ public sealed class PhoneServer : IDisposable
         public byte[]? Body;
     }
 
-    private static async Task<HttpRequest?> ReadRequestAsync(NetworkStream stream, CancellationToken token)
+    private static async Task<HttpRequest?> ReadRequestAsync(Stream stream, CancellationToken token)
     {
         var buffer = new byte[32 * 1024];
         var all = new MemoryStream();
@@ -584,7 +706,7 @@ public sealed class PhoneServer : IDisposable
     /// но может переиспользовать файл — важно, чтобы обновление приложения
     /// на ПК подхватывалось без «застрявшей» старой версии.
     /// </param>
-    private static void Respond(NetworkStream stream, string status, string contentType, byte[] body,
+    private static void Respond(Stream stream, string status, string contentType, byte[] body,
         bool revalidate = false)
     {
         var head = Encoding.ASCII.GetBytes(
@@ -598,7 +720,7 @@ public sealed class PhoneServer : IDisposable
         stream.Flush();
     }
 
-    private static void RespondJson(NetworkStream stream, Dictionary<string, object?> payload)
+    private static void RespondJson(Stream stream, Dictionary<string, object?> payload)
     {
         Respond(stream, "200 OK", "application/json", JsonSerializer.SerializeToUtf8Bytes(payload));
     }

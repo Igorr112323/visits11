@@ -7,3 +7,5 @@ publish/
 attendance.db
 settings.json
 image-search/
+
+certs/

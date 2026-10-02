@@ -66,7 +66,7 @@
                     </Border>
                     <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" FontSize="11"
                                Foreground="{DynamicResource Brush.TextSoft}"
-                               Text="Safari → «Поделиться» → «На экран „Домой“»" />
+                               Text="Safari → мастер: сертификат → «На экран „Домой“». Дальше работает офлайн." />
                 </StackPanel>
 
                 <!-- статистика -->

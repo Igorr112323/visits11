@@ -1,18 +1,24 @@
 {
-  "name": "КубГАУ · Отметка",
+  "name": "КубГАУ Студент",
   "short_name": "КубГАУ",
-  "description": "Отметка посещаемости КубГАУ: вход по логину и паролю, отметка кнопкой. Работает только в локальной сети с ПК преподавателя — без интернета, без Service Worker.",
+  "description": "Отметка посещаемости КубГАУ: вход по логину и паролю, QR для камеры преподавателя. Приложение открывается офлайн; для отметки нужен ПК преподавателя в той же сети Wi-Fi.",
   "lang": "ru",
   "dir": "ltr",
   "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "display_override": ["standalone", "fullscreen"],
+  "display_override": [
+    "standalone",
+    "fullscreen"
+  ],
   "orientation": "portrait",
   "background_color": "#0A0D1A",
   "theme_color": "#0A0D1A",
-  "categories": ["education", "productivity"],
+  "categories": [
+    "education",
+    "productivity"
+  ],
   "prefer_related_applications": false,
   "icons": [
     {
