@@ -48,25 +48,6 @@
                             </Style>
                         </Button.Style>
                     </Button>
-
-                    <!-- iPhone: приложение ставится с этой страницы (клик — скопировать адрес) -->
-                    <TextBlock Margin="0,14,0,0" Text="ТЕЛЕФОН СТУДЕНТА (IPHONE)"
-                               Style="{StaticResource Txt.Label}" />
-                    <Border Margin="0,7,0,0" Padding="10,8" CornerRadius="10" Cursor="Hand"
-                            Background="{DynamicResource Brush.Panel4}"
-                            BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
-                            ToolTip="Нажмите, чтобы скопировать адрес">
-                        <Border.InputBindings>
-                            <MouseBinding Gesture="LeftClick" Command="{Binding CopyStudentUrlCommand}" />
-                        </Border.InputBindings>
-                        <TextBlock Text="{Binding StudentUrl}" FontSize="12"
-                                   FontFamily="{StaticResource Font.SemiBold}"
-                                   Foreground="{DynamicResource Brush.Accent}"
-                                   TextTrimming="CharacterEllipsis" />
-                    </Border>
-                    <TextBlock Margin="0,6,0,0" TextWrapping="Wrap" FontSize="11"
-                               Foreground="{DynamicResource Brush.TextSoft}"
-                               Text="QR-код для iPhone — на вкладке «QR для скачивания»" />
                 </StackPanel>
 
                 <!-- статистика -->

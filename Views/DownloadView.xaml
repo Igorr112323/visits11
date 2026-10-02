@@ -11,29 +11,11 @@
 
             <TextBlock Text="QR для скачивания" Style="{StaticResource Txt.H2}"
                        HorizontalAlignment="Center" />
-            <TextBlock Margin="0,6,0,0" Style="{StaticResource Txt.Dim}"
-                       HorizontalAlignment="Center"
-                       Text="Наведите камеру iPhone — откроется установка приложения студента" />
-
             <!-- QR всегда чёрный на белом — так его читает любая камера -->
             <Border Margin="0,20,0,0" Padding="8" CornerRadius="14"
                     Background="#FFFFFF" HorizontalAlignment="Center">
                 <Image Source="{Binding Qr}" Width="280" Height="280"
                        RenderOptions.BitmapScalingMode="NearestNeighbor" />
-            </Border>
-
-            <!-- ссылка: клик — скопировать -->
-            <Border Margin="0,16,0,0" Padding="10,8" CornerRadius="10" Cursor="Hand"
-                    HorizontalAlignment="Center"
-                    Background="{DynamicResource Brush.Panel4}"
-                    BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
-                    ToolTip="Нажмите, чтобы скопировать ссылку">
-                <Border.InputBindings>
-                    <MouseBinding Gesture="LeftClick" Command="{Binding CopyUrlCommand}" />
-                </Border.InputBindings>
-                <TextBlock Text="{Binding Url}" FontSize="12"
-                           FontFamily="{StaticResource Font.SemiBold}"
-                           Foreground="{DynamicResource Brush.Accent}" />
             </Border>
         </StackPanel>
     </Border>
