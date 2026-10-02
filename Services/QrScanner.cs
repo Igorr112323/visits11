@@ -33,10 +33,7 @@ public static class QrScanner
             var pixels = new byte[width * height];
             gray.CopyPixels(pixels, width, 0);
             var result = Reader.Decode(pixels, width, height, RGBLuminanceSource.BitmapFormat.Gray8);
-            if (result is null) return null;
-            if (result.Text is { } text && text.StartsWith("V11B", StringComparison.Ordinal))
-                return System.Text.Encoding.ASCII.GetBytes(text);
-            return result.RawBytes;
+            return result?.RawBytes;
         }
         catch
         {

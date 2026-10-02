@@ -2,8 +2,6 @@ package ru.visits11.teacher;
 
 import android.content.Context;
 import android.graphics.ImageFormat;
-import android.graphics.Rect;
-import android.graphics.YuvImage;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -18,30 +16,29 @@ import android.os.HandlerThread;
 import android.os.SystemClock;
 import android.util.Size;
 
-import java.io.ByteArrayOutputStream;
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.BinaryBitmap;
+import com.google.zxing.DecodeHintType;
+import com.google.zxing.PlanarYUVLuminanceSource;
+import com.google.zxing.common.HybridBinarizer;
+import com.google.zxing.qrcode.QRCodeReader;
+
 import java.nio.ByteBuffer;
 import java.util.Collections;
+import java.util.EnumMap;
+import java.util.Map;
+import java.util.regex.Pattern;
 
-final class CameraStreamer {
+final class QrCamera {
 
-    static final class Frame {
-        final byte[] jpeg;
-        final long seq;
-        final int rotation;
-
-        Frame(byte[] jpeg, long seq, int rotation) {
-            this.jpeg = jpeg;
-            this.seq = seq;
-            this.rotation = rotation;
-        }
-    }
-
-    private static final long MIN_INTERVAL_MS = 250;
+    private static final long MIN_INTERVAL_MS = 150;
+    private static final long REPEAT_MS = 10_000;
     private static final int MAX_WIDTH = 1280;
-    private static final int JPEG_QUALITY = 70;
+    private static final int MAX_QUEUE = 20;
+    private static final Pattern PAYLOAD = Pattern.compile("^V11B[A-Za-z0-9_-]{27}$");
 
     private final Context context;
-    private final Object lock = new Object();
+    private final Map<DecodeHintType, Object> hints = new EnumMap<>(DecodeHintType.class);
 
     private HandlerThread thread;
     private Handler handler;
@@ -49,14 +46,14 @@ final class CameraStreamer {
     private CameraCaptureSession session;
     private ImageReader reader;
     private boolean running;
-    private int sensorRotation;
     private long lastFrameAt;
+    private String lastText = "";
+    private long lastTextAt;
 
-    private Frame latest;
-    private long seq = System.currentTimeMillis();
-
-    CameraStreamer(Context context) {
+    QrCamera(Context context) {
         this.context = context.getApplicationContext();
+        hints.put(DecodeHintType.TRY_HARDER, Boolean.TRUE);
+        hints.put(DecodeHintType.POSSIBLE_FORMATS, Collections.singletonList(BarcodeFormat.QR_CODE));
     }
 
     synchronized void start() {
@@ -69,12 +66,8 @@ final class CameraStreamer {
             if (id == null) {
                 return;
             }
-            CameraCharacteristics characteristics = manager.getCameraCharacteristics(id);
-            Integer orientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
-            sensorRotation = orientation == null ? 0 : orientation;
-            Size size = pickSize(characteristics);
-
-            thread = new HandlerThread("CameraStream");
+            Size size = pickSize(manager.getCameraCharacteristics(id));
+            thread = new HandlerThread("QrCamera");
             thread.start();
             handler = new Handler(thread.getLooper());
             reader = ImageReader.newInstance(size.getWidth(), size.getHeight(), ImageFormat.YUV_420_888, 2);
@@ -116,25 +109,6 @@ final class CameraStreamer {
         handler = null;
     }
 
-    Frame next(long since, long waitMs) {
-        long deadline = SystemClock.elapsedRealtime() + waitMs;
-        synchronized (lock) {
-            while (latest == null || latest.seq <= since) {
-                long left = deadline - SystemClock.elapsedRealtime();
-                if (left <= 0) {
-                    return null;
-                }
-                try {
-                    lock.wait(left);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return null;
-                }
-            }
-            return latest;
-        }
-    }
-
     private static String pickBackCamera(CameraManager manager) throws CameraAccessException {
         String[] ids = manager.getCameraIdList();
         for (String id : ids) {
@@ -168,7 +142,7 @@ final class CameraStreamer {
     private final CameraDevice.StateCallback stateCallback = new CameraDevice.StateCallback() {
         @Override
         public void onOpened(CameraDevice camera) {
-            synchronized (CameraStreamer.this) {
+            synchronized (QrCamera.this) {
                 if (!running) {
                     camera.close();
                     return;
@@ -207,7 +181,7 @@ final class CameraStreamer {
                     new CameraCaptureSession.StateCallback() {
                         @Override
                         public void onConfigured(CameraCaptureSession configured) {
-                            synchronized (CameraStreamer.this) {
+                            synchronized (QrCamera.this) {
                                 if (!running) {
                                     configured.close();
                                     return;
@@ -241,11 +215,9 @@ final class CameraStreamer {
                 return;
             }
             lastFrameAt = now;
-            byte[] jpeg = toJpeg(image);
-            synchronized (lock) {
-                seq++;
-                latest = new Frame(jpeg, seq, sensorRotation);
-                lock.notifyAll();
+            String text = decode(image);
+            if (text != null) {
+                submit(text, now);
             }
         } catch (Throwable ignored) {
         } finally {
@@ -255,35 +227,38 @@ final class CameraStreamer {
         }
     }
 
-    private static byte[] toJpeg(Image image) {
+    private String decode(Image image) {
         int width = image.getWidth();
         int height = image.getHeight();
-        Image.Plane[] planes = image.getPlanes();
-        byte[] nv21 = new byte[width * height * 3 / 2];
-
-        ByteBuffer luma = planes[0].getBuffer();
-        int lumaStride = planes[0].getRowStride();
+        Image.Plane plane = image.getPlanes()[0];
+        ByteBuffer buffer = plane.getBuffer();
+        int stride = plane.getRowStride();
+        byte[] luma = new byte[width * height];
         for (int row = 0; row < height; row++) {
-            luma.position(row * lumaStride);
-            luma.get(nv21, row * width, width);
+            buffer.position(row * stride);
+            buffer.get(luma, row * width, width);
         }
-
-        ByteBuffer cb = planes[1].getBuffer();
-        ByteBuffer cr = planes[2].getBuffer();
-        int rowStride = planes[1].getRowStride();
-        int pixelStride = planes[1].getPixelStride();
-        int offset = width * height;
-        for (int row = 0; row < height / 2; row++) {
-            for (int col = 0; col < width / 2; col++) {
-                int index = row * rowStride + col * pixelStride;
-                nv21[offset++] = cr.get(index);
-                nv21[offset++] = cb.get(index);
-            }
+        try {
+            PlanarYUVLuminanceSource luminance =
+                    new PlanarYUVLuminanceSource(luma, width, height, 0, 0, width, height, false);
+            return new QRCodeReader().decode(new BinaryBitmap(new HybridBinarizer(luminance)), hints).getText();
+        } catch (Throwable notFound) {
+            return null;
         }
+    }
 
-        ByteArrayOutputStream out = new ByteArrayOutputStream(64 * 1024);
-        new YuvImage(nv21, ImageFormat.NV21, width, height, null)
-                .compressToJpeg(new Rect(0, 0, width, height), JPEG_QUALITY, out);
-        return out.toByteArray();
+    private void submit(String text, long now) {
+        if (!PAYLOAD.matcher(text).matches()) {
+            return;
+        }
+        if (text.equals(lastText) && now - lastTextAt < REPEAT_MS) {
+            return;
+        }
+        lastText = text;
+        lastTextAt = now;
+        if (TeacherCardService.requests.size() >= MAX_QUEUE) {
+            return;
+        }
+        TeacherCardService.requests.add("{\"type\":3,\"qr\":\"" + text + "\"}");
     }
 }

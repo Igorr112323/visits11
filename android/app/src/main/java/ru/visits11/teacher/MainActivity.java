@@ -36,13 +36,13 @@ import java.util.concurrent.TimeUnit;
 public final class MainActivity extends Activity {
 
     private static final int SERVER_PORT = 8090;
-    private static final long FRAME_WAIT_MS = 800;
+    private static final long FRAME_WAIT_MS = 800;   // pacing для /frame (кадров больше нет)
     private static final long PC_TIMEOUT_MS = 3000;  // связь считается потерянной
 
     private static final int CAMERA_REQUEST = 7;
 
     private TextView statusText;
-    private CameraStreamer camera;
+    private QrCamera camera;
     private boolean cameraAsked;
 
     private ServerSocket serverSocket;
@@ -85,7 +85,7 @@ public final class MainActivity extends Activity {
             }
         });
 
-        camera = new CameraStreamer(this);
+        camera = new QrCamera(this);
         startServer();
         ui.post(statusTicker);
     }
@@ -259,10 +259,8 @@ public final class MainActivity extends Activity {
             }
             String method = parts[0];
             String path = parts[1];
-            String query = "";
             int queryAt = path.indexOf('?');
             if (queryAt >= 0) {
-                query = path.substring(queryAt + 1);
                 path = path.substring(0, queryAt);
             }
 
@@ -270,7 +268,9 @@ public final class MainActivity extends Activity {
                 respond(client, "200 OK", "application/json",
                         "{\"app\":\"visits11-camera\"}".getBytes(StandardCharsets.US_ASCII));
             } else if ("/frame".equals(path) && "GET".equals(method)) {
-                serveFrame(client, parseSince(query));
+                // кадров больше нет: немного ждём, чтобы ПК не крутил запросы вхолостую
+                Thread.sleep(FRAME_WAIT_MS);
+                respond(client, "204 No Content", "text/plain", new byte[0]);
             } else if ("/event".equals(path) && "GET".equals(method)) {
                 // ПК забирает NFC-запросы (long-poll 3 сек)
                 serveEvent(client);
@@ -284,29 +284,6 @@ public final class MainActivity extends Activity {
         } finally {
             closeQuietly(client);
         }
-    }
-
-    private void serveFrame(Socket client, long since) {
-        CameraStreamer.Frame frame = camera.next(since, FRAME_WAIT_MS);
-        if (frame == null) {
-            respond(client, "204 No Content", "text/plain", new byte[0]);
-            return;
-        }
-        respond(client, "200 OK", "image/jpeg", frame.jpeg,
-                "X-Seq: " + frame.seq + "\r\nX-Rot: " + frame.rotation + "\r\n");
-    }
-
-    private static long parseSince(String query) {
-        for (String pair : query.split("&")) {
-            if (pair.startsWith("since=")) {
-                try {
-                    return Long.parseLong(pair.substring(6));
-                } catch (NumberFormatException ignored) {
-                    return 0;
-                }
-            }
-        }
-        return 0;
     }
 
     /** Отдаёт ПК ожидающий NFC-запрос (или 204, если касаний не было). */
@@ -396,15 +373,9 @@ public final class MainActivity extends Activity {
     }
 
     private static void respond(Socket client, String status, String contentType, byte[] body) {
-        respond(client, status, contentType, body, "");
-    }
-
-    private static void respond(Socket client, String status, String contentType, byte[] body,
-                                String extraHeaders) {
         try {
             byte[] head = ("HTTP/1.1 " + status + "\r\n"
                     + "Content-Type: " + contentType + "\r\n"
-                    + extraHeaders
                     + "Content-Length: " + body.length + "\r\n"
                     + "Connection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII);
             // заголовки и тело — ОДНИМ пакетом, чтобы клиент не потерял половину

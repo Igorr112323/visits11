@@ -32,6 +32,6 @@ android {
     }
 }
 
-// приложение чисто на framework API — зависимостей нет
 dependencies {
+    implementation 'com.google.zxing:core:3.5.3'
 }

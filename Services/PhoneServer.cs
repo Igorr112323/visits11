@@ -883,7 +883,7 @@ p{color:#9099b8;font-size:13px;margin-top:6px}
     {
         int type = 0;
         long id = 0;
-        string login = "", password = "", token = "", device = "";
+        string login = "", password = "", token = "", device = "", qr = "";
         try
         {
             using var doc = JsonDocument.Parse(json);
@@ -908,6 +908,11 @@ p{color:#9099b8;font-size:13px;margin-top:6px}
             {
                 token = tokenValue.GetString() ?? "";
             }
+            if (root.TryGetProperty("qr", out var qrValue) &&
+                qrValue.ValueKind == JsonValueKind.String)
+            {
+                qr = qrValue.GetString() ?? "";
+            }
             if (root.TryGetProperty("device", out var deviceValue) &&
                 deviceValue.ValueKind == JsonValueKind.String)
             {
@@ -922,6 +927,16 @@ p{color:#9099b8;font-size:13px;margin-top:6px}
         catch (JsonException)
         {
             return "{\"code\":4}";
+        }
+
+        if (type == 3)
+        {
+            var scanned = QrKeys.Verify(Encoding.ASCII.GetBytes(qr));
+            if (scanned is not int scannedId) return RelayJson(4, string.Empty, id);
+            var scannedMark = OnUi(() => MarkStudent(scannedId, string.Empty));
+            return scannedMark.Ok
+                ? RelayJson(1, scannedMark.Name, id)
+                : RelayJson(4, string.Empty, id);
         }
 
         if (type == 1)
