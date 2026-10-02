@@ -1,0 +1,34 @@
+name: fetch-images
+
+on:
+  push:
+    branches: [arena/01a0f844-visits11]
+    paths: ['.github/workflows/fetch-images.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download images
+        run: |
+          set -e
+          curl -sSL --fail --retry 3 -o exe-logo.jpg "https://static.wixstatic.com/media/29efa5_694f61b276bb4e5d9eaec0e42d7e5bc0~mv2.jpg/v1/fill/w_1280,h_1280,al_c,q_85/%D0%BA%D1%83%D0%B1%D0%93%D0%90%D0%A3%20%D0%BB%D0%BE%D0%B3%D0%BE.jpg"
+          curl -sSL --fail --retry 3 -o apk-logo.jpg "https://fncbzr.ru/upload/medialibrary/fc9/4o3zetb4jye9c5jdrl23b1psj3oj8rc5.jpg"
+          python3 -m pip install --quiet pillow
+          python3 - <<'EOF'
+          from PIL import Image
+          for name in ("exe-logo.jpg", "apk-logo.jpg"):
+              im = Image.open(name)
+              print(name, im.format, im.size, im.mode)
+          EOF
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: branding-images
+          path: |
+            exe-logo.jpg
+            apk-logo.jpg
