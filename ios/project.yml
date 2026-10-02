@@ -1,0 +1,36 @@
+name: Visits11Student
+options:
+  bundleIdPrefix: ru.visits11
+  deploymentTarget:
+    iOS: "15.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGN_IDENTITY: ""
+targets:
+  Visits11Student:
+    type: application
+    platform: iOS
+    sources:
+      - Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ru.visits11.student
+        PRODUCT_NAME: Visits11Student
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        GENERATE_INFOPLIST_FILE: "NO"
+        INFOPLIST_FILE: Sources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Sources/Visits11Student.entitlements
+schemes:
+  Visits11Student:
+    build:
+      targets:
+        Visits11Student: all
+    run:
+      config: Debug
+    archive:
+      config: Release

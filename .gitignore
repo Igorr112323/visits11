@@ -1,0 +1,9 @@
+bin/
+obj/
+.vs/
+publish/
+*.user
+*.suo
+attendance.db
+settings.json
+image-search/

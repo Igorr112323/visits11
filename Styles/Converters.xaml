@@ -1,0 +1,11 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:local="clr-namespace:Visits11">
+
+    <local:BoolToVisibilityConverter x:Key="Conv.BoolToVis" />
+    <local:NullToVisibilityConverter x:Key="Conv.NullToVis" />
+    <local:StringToVisibilityConverter x:Key="Conv.StringToVis" />
+    <local:EqualConverter x:Key="Conv.Equal" />
+    <local:LessThanConverter x:Key="Conv.LessThan" />
+
+</ResourceDictionary>

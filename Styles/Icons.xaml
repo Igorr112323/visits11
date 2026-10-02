@@ -1,0 +1,36 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Набор контурных иконок (24x24), рисуются Path'ом со Stroke -->
+
+    <StreamGeometry x:Key="Icon.Camera">M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z M16 13a4 4 0 1 1-8 0 4 4 0 0 1 8 0z</StreamGeometry>
+
+    <StreamGeometry x:Key="Icon.Users">M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0z M23 21v-2a4 4 0 0 0-3-3.87 M16 3.13a4 4 0 0 1 0 7.75</StreamGeometry>
+
+    <StreamGeometry x:Key="Icon.Book">M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z</StreamGeometry>
+
+    <StreamGeometry x:Key="Icon.Sun">M17 12a5 5 0 1 1-10 0 5 5 0 0 1 10 0z M12 1v2 M12 21v2 M4.22 4.22l1.42 1.42 M18.36 18.36l1.42 1.42 M1 12h2 M21 12h2 M4.22 19.78l1.42-1.42 M18.36 5.64l1.42-1.42</StreamGeometry>
+
+    <StreamGeometry x:Key="Icon.Moon">M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z</StreamGeometry>
+
+    <StreamGeometry x:Key="Icon.Plus">M12 5v14 M5 12h14</StreamGeometry>
+
+    <StreamGeometry x:Key="Icon.UserPlus">M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2 M12.5 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0z M20 8v6 M23 11h-6</StreamGeometry>
+
+    <StreamGeometry x:Key="Icon.Import">M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5 M12 15V3</StreamGeometry>
+
+    <StreamGeometry x:Key="Icon.Export">M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M17 8l-5-5-5 5 M12 3v12</StreamGeometry>
+
+    <StreamGeometry x:Key="Icon.ChevronDown">M6 9l6 6 6-6</StreamGeometry>
+
+    <StreamGeometry x:Key="Icon.Check">M20 6L9 17l-5-5</StreamGeometry>
+
+    <StreamGeometry x:Key="Icon.CheckCircle">M12 21a9 9 0 1 1 0-18 9 9 0 0 1 0 18z M8.5 12.2l2.4 2.4 4.6-4.9</StreamGeometry>
+
+    <StreamGeometry x:Key="Icon.AlertCircle">M12 21a9 9 0 1 1 0-18 9 9 0 0 1 0 18z M12 8v4 M12 16v.01</StreamGeometry>
+
+    <StreamGeometry x:Key="Icon.Info">M12 21a9 9 0 1 1 0-18 9 9 0 0 1 0 18z M12 16v-4 M12 8v.01</StreamGeometry>
+
+    <StreamGeometry x:Key="Icon.X">M18 6L6 18 M6 6l12 12</StreamGeometry>
+
+</ResourceDictionary>

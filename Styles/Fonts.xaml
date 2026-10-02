@@ -1,0 +1,13 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Manrope, встроена как ресурс (SIL OFL, см. Assets/Fonts/OFL.txt) -->
+    <FontFamily x:Key="Font.Default">pack://application:,,,/Assets/Fonts/#Manrope</FontFamily>
+    <FontFamily x:Key="Font.Medium">pack://application:,,,/Assets/Fonts/#Manrope Medium</FontFamily>
+    <FontFamily x:Key="Font.SemiBold">pack://application:,,,/Assets/Fonts/#Manrope SemiBold</FontFamily>
+    <FontFamily x:Key="Font.ExtraBold">pack://application:,,,/Assets/Fonts/#Manrope ExtraBold</FontFamily>
+
+    <!-- Моноширинный для логинов/паролей/ID -->
+    <FontFamily x:Key="Font.Mono">Consolas</FontFamily>
+
+</ResourceDictionary>
