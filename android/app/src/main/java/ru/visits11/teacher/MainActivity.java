@@ -1,7 +1,9 @@
 package ru.visits11.teacher;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.nfc.NfcAdapter;
 import android.os.Bundle;
 import android.os.Handler;
@@ -34,10 +36,14 @@ import java.util.concurrent.TimeUnit;
 public final class MainActivity extends Activity {
 
     private static final int SERVER_PORT = 8090;
-    private static final long FRAME_WAIT_MS = 800;   // pacing для /frame (кадров больше нет)
+    private static final long FRAME_WAIT_MS = 800;
     private static final long PC_TIMEOUT_MS = 3000;  // связь считается потерянной
 
+    private static final int CAMERA_REQUEST = 7;
+
     private TextView statusText;
+    private CameraStreamer camera;
+    private boolean cameraAsked;
 
     private ServerSocket serverSocket;
     private volatile boolean serverRunning;
@@ -79,8 +85,35 @@ public final class MainActivity extends Activity {
             }
         });
 
+        camera = new CameraStreamer(this);
         startServer();
         ui.post(statusTicker);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            camera.start();
+        } else if (!cameraAsked) {
+            cameraAsked = true;
+            requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_REQUEST);
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        camera.stop();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == CAMERA_REQUEST && grantResults.length > 0
+                && grantResults[0] == PackageManager.PERMISSION_GRANTED && !isFinishing()) {
+            camera.start();
+        }
     }
 
     @Override
@@ -226,8 +259,10 @@ public final class MainActivity extends Activity {
             }
             String method = parts[0];
             String path = parts[1];
+            String query = "";
             int queryAt = path.indexOf('?');
             if (queryAt >= 0) {
+                query = path.substring(queryAt + 1);
                 path = path.substring(0, queryAt);
             }
 
@@ -235,9 +270,7 @@ public final class MainActivity extends Activity {
                 respond(client, "200 OK", "application/json",
                         "{\"app\":\"visits11-camera\"}".getBytes(StandardCharsets.US_ASCII));
             } else if ("/frame".equals(path) && "GET".equals(method)) {
-                // кадров больше нет: немного ждём, чтобы ПК не крутил запросы вхолостую
-                Thread.sleep(FRAME_WAIT_MS);
-                respond(client, "204 No Content", "text/plain", new byte[0]);
+                serveFrame(client, parseSince(query));
             } else if ("/event".equals(path) && "GET".equals(method)) {
                 // ПК забирает NFC-запросы (long-poll 3 сек)
                 serveEvent(client);
@@ -251,6 +284,29 @@ public final class MainActivity extends Activity {
         } finally {
             closeQuietly(client);
         }
+    }
+
+    private void serveFrame(Socket client, long since) {
+        CameraStreamer.Frame frame = camera.next(since, FRAME_WAIT_MS);
+        if (frame == null) {
+            respond(client, "204 No Content", "text/plain", new byte[0]);
+            return;
+        }
+        respond(client, "200 OK", "image/jpeg", frame.jpeg,
+                "X-Seq: " + frame.seq + "\r\nX-Rot: " + frame.rotation + "\r\n");
+    }
+
+    private static long parseSince(String query) {
+        for (String pair : query.split("&")) {
+            if (pair.startsWith("since=")) {
+                try {
+                    return Long.parseLong(pair.substring(6));
+                } catch (NumberFormatException ignored) {
+                    return 0;
+                }
+            }
+        }
+        return 0;
     }
 
     /** Отдаёт ПК ожидающий NFC-запрос (или 204, если касаний не было). */
@@ -340,9 +396,15 @@ public final class MainActivity extends Activity {
     }
 
     private static void respond(Socket client, String status, String contentType, byte[] body) {
+        respond(client, status, contentType, body, "");
+    }
+
+    private static void respond(Socket client, String status, String contentType, byte[] body,
+                                String extraHeaders) {
         try {
             byte[] head = ("HTTP/1.1 " + status + "\r\n"
                     + "Content-Type: " + contentType + "\r\n"
+                    + extraHeaders
                     + "Content-Length: " + body.length + "\r\n"
                     + "Connection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII);
             // заголовки и тело — ОДНИМ пакетом, чтобы клиент не потерял половину

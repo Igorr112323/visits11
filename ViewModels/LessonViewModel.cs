@@ -338,7 +338,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
                 var raw = QrScanner.Scan(frame);
                 if (raw is null) return;
 
-                var studentId = DecryptQrPayload(raw);
+                var studentId = QrKeys.LooksLikePayload(raw) ? QrKeys.Verify(raw) : DecryptQrPayload(raw);
                 if (studentId is int id)
                 {
                     Application.Current?.Dispatcher.BeginInvoke(() => MarkScanned(id));

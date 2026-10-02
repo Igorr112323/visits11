@@ -1,51 +1,28 @@
-/* ==========================================================================
-   КубГАУ Студент — PWA для iPhone.
-   --------------------------------------------------------------------------
-   Логика — порт android/student/MainActivity.java (режим «без NFC»: у iPhone
-   нет NFC, доступного сайтам, поэтому работает то же, что в APK на телефоне
-   без NFC — QR для камеры преподавателя):
-
-     • нет логина/пароля           → «Войдите по логину и паролю» + карточка входа
-     • ПК не отвечает (/api/ping)  → «Нет связи с ПК», красная точка
-     • POST /api/login             → токен сессии
-     • GET  /api/qr?token=         → QR на весь экран, зелёная точка; опрос раз в 5 с
-         204 → «Перекличка не начата», 401 → сразу перевходим тем же логином
-     • долгое нажатие на статус    → карточка входа (смена студента)
-
-   Адрес ПК — тот, с которого открыта страница (в Android его ищут перебором
-   подсети; сайту из браузера так нельзя). Внешних запросов нет.
-
-   Офлайн: Service Worker (sw.js) кэширует само приложение, так что экран
-   открывается без сети и без ПК. Запросы /api/* он никогда не трогает.
-   ========================================================================== */
-
 (function () {
   "use strict";
 
-  // ------------------------------------------------------------------ константы
-
-  var POLL_MS = 5000;            // MainActivity.POLL_MS
-  var NET_TIMEOUT_MS = 2500;     // таймауты HTTP как в Android
+  var POLL_MS = 5000;
+  var NET_TIMEOUT_MS = 2500;
   var LONG_PRESS_MS = 500;
-  var TOAST_MS = 2000;           // Toast.LENGTH_SHORT
+  var TOAST_MS = 2000;
   var HOST_APP = "visits11-server";
 
   var LOGIN_OK = 0;
   var LOGIN_REJECTED = 1;
   var LOGIN_NETWORK = 2;
-  var LOGIN_DEVICE = 3;          // в Android это код 5 NFC-режима: «Аккаунт привязан к другому телефону»
+  var LOGIN_DEVICE = 3;
 
   var QR_OK = 0;
-  var QR_INACTIVE = 1;           // перекличка не идёт
-  var QR_STALE = 2;              // сессия устарела — перевойдём
-  var QR_ERROR = 3;              // сети нет
+  var QR_INACTIVE = 1;
+  var QR_STALE = 2;
+  var QR_ERROR = 3;
 
-  // ключи как у Android SharedPreferences "visits11student": login / password
   var KEY_LOGIN = "visits11.login";
   var KEY_PASSWORD = "visits11.password";
   var KEY_DEVICE = "visits11.device";
-
-  // ------------------------------------------------------------------ элементы
+  var KEY_QR_ID = "visits11.qrid";
+  var KEY_QR_KEY = "visits11.qrkey";
+  var OFFLINE_TICK_MS = 500;
 
   function $(id) { return document.getElementById(id); }
 
@@ -58,18 +35,15 @@
   var dot = $("dot");
   var toastView = $("toast");
 
-  // ------------------------------------------------------------------ хранилище
-
   var store = {
     get: function (key) {
       try { return window.localStorage.getItem(key); } catch (e) { return null; }
     },
     set: function (key, value) {
-      try { window.localStorage.setItem(key, value); } catch (e) { /* приватный режим */ }
+      try { window.localStorage.setItem(key, value); } catch (e) {  }
     }
   };
 
-  /** Уникальный ID устройства: 16 hex-символов, создаётся один раз. Аккаунт привязывается к первому телефону. */
   function deviceId() {
     var saved = store.get(KEY_DEVICE);
     if (saved) return saved;
@@ -94,12 +68,9 @@
     return value;
   }
 
-  // ------------------------------------------------------------------ интерфейс
-
   var toastTimer = null;
   var lastQrUrl = null;
 
-  /** Toast.makeText(...).show() */
   function toast(message) {
     toastView.textContent = message;
     toastView.classList.add("is-shown");
@@ -109,7 +80,6 @@
     }, TOAST_MS);
   }
 
-  /** setStatus: показать текст, спрятать QR. */
   function setStatus(text) {
     statusText.textContent = text;
     statusText.hidden = false;
@@ -124,7 +94,6 @@
     loginPanel.hidden = true;
   }
 
-  /** showQr: показать код, спрятать статус и карточку входа. */
   function showQr(blob) {
     var url = window.URL.createObjectURL(blob);
     qrView.onload = function () {
@@ -137,12 +106,16 @@
     loginPanel.hidden = true;
   }
 
+  function showQrUrl(url) {
+    qrView.src = url;
+    qrView.hidden = false;
+    statusText.hidden = true;
+    loginPanel.hidden = true;
+  }
+
   function dotGreen() { dot.classList.add("is-green"); }
   function dotRed() { dot.classList.remove("is-green"); }
 
-  // ------------------------------------------------------------------ сеть
-
-  /** fetch с таймаутом: Response либо null (нет связи). */
   function request(path, options, timeoutMs) {
     return new Promise(function (resolve) {
       var done = false;
@@ -158,7 +131,7 @@
 
       var timer = setTimeout(function () {
         if (controller) {
-          try { controller.abort(); } catch (e) { /* уже завершён */ }
+          try { controller.abort(); } catch (e) {  }
         }
         finish(null);
       }, timeoutMs || NET_TIMEOUT_MS);
@@ -178,7 +151,6 @@
     });
   }
 
-  /** ping(): отвечает ли ПК приложения (в Android — перебор подсети, здесь адрес один). */
   function ping() {
     return request("/api/ping", {}, NET_TIMEOUT_MS).then(function (response) {
       if (!response || response.status !== 200) return false;
@@ -188,9 +160,8 @@
     });
   }
 
-  var token = null;      // токен сессии — только в памяти, как в Android (дальше входим тем же логином)
+  var token = null;
 
-  /** login(): LOGIN_OK / LOGIN_REJECTED / LOGIN_NETWORK / LOGIN_DEVICE. */
   function login(loginValue, passwordValue) {
     var body = JSON.stringify({ login: loginValue, password: passwordValue, device: deviceId() });
     return request("/api/login", {
@@ -212,7 +183,6 @@
     });
   }
 
-  /** fetchQr(): { code, blob }. */
   function fetchQr(session) {
     return request("/api/qr?token=" + encodeURIComponent(session), {}, NET_TIMEOUT_MS)
       .then(function (response) {
@@ -228,12 +198,49 @@
       });
   }
 
-  // ------------------------------------------------------------------ главный цикл
+  function fetchQrKey(session) {
+    return request("/api/qrkey?token=" + encodeURIComponent(session), {}, NET_TIMEOUT_MS)
+      .then(function (response) {
+        if (!response || response.status !== 200) return null;
+        return response.text().then(function (text) {
+          try {
+            var data = JSON.parse(text);
+            if (data && data.ok && data.id > 0 && /^[0-9a-f]{64}$/.test(data.key)) return data;
+          } catch (e) { return null; }
+          return null;
+        }, function () { return null; });
+      });
+  }
+
+  var shownWindow = -1;
+
+  function renderOfflineQr() {
+    var studentId = parseInt(store.get(KEY_QR_ID), 10);
+    var key = store.get(KEY_QR_KEY);
+    if (!window.V11 || !(studentId > 0) || !key) return false;
+    var now = Date.now();
+    var current = window.V11.windowOf(now);
+    if (current !== shownWindow || qrView.hidden) {
+      try {
+        showQrUrl(window.V11.svgUrl(window.V11.matrix(window.V11.payload(studentId, key, now))));
+      } catch (e) {
+        return false;
+      }
+      shownWindow = current;
+    }
+    return true;
+  }
+
+  function forgetQrKey() {
+    store.set(KEY_QR_ID, "");
+    store.set(KEY_QR_KEY, "");
+    shownWindow = -1;
+  }
 
   var running = false;
   var generation = 0;
   var wakeUp = null;
-  var hostFound = false;   // «host != null» из Android
+  var hostFound = false;
 
   function sleepQuietly(ms) {
     return new Promise(function (resolve) {
@@ -242,12 +249,10 @@
     });
   }
 
-  /** wake(): прервать ожидание — цикл сразу пойдёт дальше. */
   function wake() {
     if (wakeUp) wakeUp();
   }
 
-  /** Тело одного прохода MainActivity.loop(). Возвращает паузу перед следующим проходом (мс). */
   async function step() {
     var savedLogin = store.get(KEY_LOGIN);
     var savedPassword = store.get(KEY_PASSWORD);
@@ -257,6 +262,11 @@
       showLogin();
       dotRed();
       return 1000;
+    }
+
+    if (renderOfflineQr()) {
+      dotGreen();
+      return OFFLINE_TICK_MS;
     }
 
     if (!hostFound) {
@@ -291,9 +301,14 @@
         dotRed();
         return 2000;
       }
-      // вход выполнен: карточка входа больше не нужна (в Android она остаётся
-      // до первого QR; здесь убираем сразу, чтобы был виден статус)
+
       hideLogin();
+      var provisioned = await fetchQrKey(token);
+      if (provisioned) {
+        store.set(KEY_QR_ID, String(provisioned.id));
+        store.set(KEY_QR_KEY, provisioned.key);
+        return 50;
+      }
     }
 
     var qr = await fetchQr(token);
@@ -305,7 +320,7 @@
       dotGreen();
     } else if (qr.code === QR_STALE) {
       token = null;
-      return 250; // почти сразу перевойдём тем же логином (в Android — continue без паузы)
+      return 250;
     } else {
       hostFound = false;
       setStatus("Нет связи с ПК");
@@ -327,29 +342,25 @@
     }
   }
 
-  // ------------------------------------------------------------------ жизненный цикл
-
   var wakeLock = null;
 
-  /** FLAG_KEEP_SCREEN_ON: экран не гаснет, пока QR на виду (нужен HTTPS). */
   function holdScreen() {
     try {
       if (!("wakeLock" in navigator) || wakeLock) return;
       navigator.wakeLock.request("screen").then(function (lock) {
         wakeLock = lock;
         lock.addEventListener("release", function () { wakeLock = null; });
-      }, function () { /* не разрешили — не страшно */ });
-    } catch (e) { /* нет поддержки */ }
+      }, function () {  });
+    } catch (e) {  }
   }
 
   function releaseScreen() {
     try {
       if (wakeLock) wakeLock.release();
-    } catch (e) { /* уже отпущен */ }
+    } catch (e) {  }
     wakeLock = null;
   }
 
-  /** onStart */
   function start() {
     if (running) return;
     running = true;
@@ -358,7 +369,6 @@
     loop(generation);
   }
 
-  /** onStop */
   function stop() {
     running = false;
     generation++;
@@ -373,8 +383,6 @@
     if (!document.hidden) start();
   });
 
-  // ------------------------------------------------------------------ события
-
   loginButton.addEventListener("click", function () {
     var loginValue = loginInput.value.trim();
     var passwordValue = passwordInput.value;
@@ -385,11 +393,11 @@
     store.set(KEY_LOGIN, loginValue);
     store.set(KEY_PASSWORD, passwordValue);
     token = null;
-    try { passwordInput.blur(); loginInput.blur(); } catch (e) { /* не страшно */ }
+    forgetQrKey();
+    try { passwordInput.blur(); loginInput.blur(); } catch (e) {  }
     wake();
   });
 
-  // actionNext / actionDone
   loginInput.addEventListener("keydown", function (event) {
     if (event.key === "Enter") {
       event.preventDefault();
@@ -403,43 +411,47 @@
     }
   });
 
-  // Смена студента — только долгим нажатием на статус (чтобы не открыть случайно).
   var pressTimer = null;
   function cancelPress() {
     if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
   }
-  statusText.addEventListener("pointerdown", function () {
-    cancelPress();
-    pressTimer = setTimeout(function () {
-      pressTimer = null;
-      showLogin();
-    }, LONG_PRESS_MS);
-  });
-  ["pointerup", "pointercancel", "pointerleave", "pointermove"].forEach(function (name) {
-    statusText.addEventListener(name, cancelPress);
+  function armLongPress(element, action) {
+    element.addEventListener("pointerdown", function () {
+      cancelPress();
+      pressTimer = setTimeout(function () {
+        pressTimer = null;
+        action();
+      }, LONG_PRESS_MS);
+    });
+    ["pointerup", "pointercancel", "pointerleave", "pointermove"].forEach(function (name) {
+      element.addEventListener(name, cancelPress);
+    });
+  }
+  armLongPress(statusText, showLogin);
+  armLongPress(qrView, function () {
+    forgetQrKey();
+    qrView.hidden = true;
+    setStatus("Войдите по логину и паролю");
+    token = null;
+    showLogin();
   });
   document.addEventListener("contextmenu", function (event) {
-    if (event.target === statusText) event.preventDefault();
+    if (event.target === statusText || event.target === qrView) event.preventDefault();
   });
-  // :active на iOS работает только при наличии touch-обработчика
-  document.addEventListener("touchstart", function () { /* нужен для :active */ }, true);
 
-  // ------------------------------------------------------------------ офлайн-режим
+  document.addEventListener("touchstart", function () {  }, true);
 
-  /** Service Worker — только по HTTPS (иначе браузер его не даёт). */
   if ("serviceWorker" in navigator && window.isSecureContext) {
     window.addEventListener("load", function () {
       navigator.serviceWorker.register("/sw.js").catch(function () {
-        /* сертификат не доверенный или HTTP — работаем без офлайн-кэша */
+
       });
-      // просим систему не вытеснять данные приложения
+
       try {
         if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
-      } catch (e) { /* не страшно */ }
+      } catch (e) {  }
     });
   }
-
-  // ------------------------------------------------------------------ старт
 
   deviceId();
   if (!document.hidden) start();

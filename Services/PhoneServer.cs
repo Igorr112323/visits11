@@ -169,6 +169,10 @@ public sealed class PhoneServer : IDisposable
                         HandleQr(stream, GetQueryParam(request.Query, "token"));
                         break;
 
+                    case "/api/qrkey":
+                        HandleQrKey(stream, GetQueryParam(request.Query, "token"));
+                        break;
+
                     case "/api/nfc_mark" when request.Method == "POST":
                         HandleNfcMark(stream, request.Body);
                         break;
@@ -185,6 +189,10 @@ public sealed class PhoneServer : IDisposable
 
                     case "/app.js":
                         HandleStatic(stream, "app.js");
+                        break;
+
+                    case "/qr.js":
+                        HandleStatic(stream, "qr.js");
                         break;
 
                     // Service Worker: офлайн-режим приложения студента (только по HTTPS)
@@ -268,7 +276,7 @@ public sealed class PhoneServer : IDisposable
     }
 
     /// <summary>Папка с exe (для single-file — не временная папка распаковки).</summary>
-    private static string ExeFolder()
+    internal static string ExeFolder()
     {
         try
         {
@@ -490,6 +498,23 @@ public sealed class PhoneServer : IDisposable
         {
             Respond(stream, "200 OK", "image/png", png);
         }
+    }
+
+    private void HandleQrKey(Stream stream, string token)
+    {
+        if (!_sessions.TryGetValue(token, out var studentId))
+        {
+            Respond(stream, "401 Unauthorized", "application/json",
+                Encoding.UTF8.GetBytes("{\"ok\":false}"));
+            return;
+        }
+
+        RespondJson(stream, new Dictionary<string, object?>
+        {
+            ["ok"] = true,
+            ["id"] = studentId,
+            ["key"] = Convert.ToHexString(QrKeys.ForStudent(studentId)).ToLowerInvariant()
+        });
     }
 
     /// <summary>Отметка «телефон к телефону»: телефон преподавателя пересылает токен студента.</summary>

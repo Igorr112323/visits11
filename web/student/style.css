@@ -1,10 +1,3 @@
-/* ==========================================================================
-   КубГАУ Студент — PWA для iPhone. Внешний вид один в один с Android-приложением
-   (android/student: activity_main.xml, colors.xml, drawable/*.xml).
-   Размеры: 1 dp в Android = 1 px здесь. Тёмная тема, как в APK, без светлой.
-   Все ресурсы локальные: шрифт Manrope лежит в fonts/, логотип — в icons/.
-   ========================================================================== */
-
 @font-face {
   font-family: "Manrope"; font-style: normal; font-weight: 400; font-display: swap;
   src: url("fonts/Manrope-Regular.woff2") format("woff2");
@@ -22,7 +15,6 @@
   src: url("fonts/Manrope-Bold.woff2") format("woff2");
 }
 
-/* colors.xml */
 :root {
   --bg: #0A0D1A;
   --panel: #141827;
@@ -65,7 +57,6 @@ body {
   -webkit-touch-callout: none;
 }
 
-/* ImageView 110dp, top|center_horizontal, marginTop 40dp */
 .logo {
   position: absolute;
   top: calc(env(safe-area-inset-top, 0px) + 40px);
@@ -77,7 +68,6 @@ body {
   pointer-events: none;
 }
 
-/* всё остальное — по центру экрана (layout_gravity="center") */
 .stage {
   position: absolute;
   top: 0; right: 0; bottom: 0; left: 0;
@@ -87,7 +77,6 @@ body {
   justify-content: center;
 }
 
-/* qrView 300dp × 300dp, fitCenter */
 .qr {
   display: block;
   width: 300px;
@@ -96,7 +85,6 @@ body {
   object-fit: contain;
 }
 
-/* statusText: padding 32dp, textDim, 15sp, по центру */
 .status {
   max-width: 100%;
   padding: 32px;
@@ -105,8 +93,6 @@ body {
   text-align: center;
 }
 
-/* loginPanel: card_bg.xml — panel, радиус 20dp, рамка 1dp border;
-   padding 24 / 26 / 24 / 24 */
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -114,7 +100,6 @@ body {
   padding: 26px 24px 24px 24px;
 }
 
-/* input_bg.xml — panel2, радиус 12dp, рамка 1dp; padding 14dp; ширина 260dp */
 .input {
   display: block;
   width: 260px;
@@ -136,7 +121,6 @@ body {
 .input::placeholder { color: var(--dim); opacity: 1; }
 .input-next { margin-top: 10px; }
 
-/* button_bg.xml — accent, радиус 12dp; нажата — accentPressed; margin-top 16dp */
 .button {
   display: block;
   width: 100%;
@@ -157,7 +141,6 @@ body {
 }
 .button:active { background: var(--accent-pressed); }
 
-/* dot: 16dp, top|end, marginTop/End 22dp; dot_green.xml / dot_red.xml */
 .dot {
   position: absolute;
   top: calc(env(safe-area-inset-top, 0px) + 22px);
@@ -169,7 +152,6 @@ body {
 }
 .dot.is-green { background: var(--green); }
 
-/* Toast.LENGTH_SHORT */
 .toast {
   position: absolute;
   left: 50%;

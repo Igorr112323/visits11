@@ -1,22 +1,11 @@
-/* ==========================================================================
-   КубГАУ Студент — Service Worker (офлайн-режим).
-   --------------------------------------------------------------------------
-   При первой загрузке кладёт всё приложение в кэш «visits11-v1», дальше
-   отдаёт его из кэша — без интернета, без ПК, без сети, сколько угодно долго.
-
-   • /api/* НИКОГДА не кэшируется и не перехватывается — это живые запросы к ПК.
-   • Внешних адресов нет: перехватываются только запросы к своему origin.
-   • Обновление приложения: измените файлы и поднимите номер в CACHE
-     (visits11-v2, …) — браузер сам заметит новый sw.js, когда ПК будет доступен.
-   ========================================================================== */
-
 "use strict";
 
-var CACHE = "visits11-v1";
+var CACHE = "visits11-v2";
 
 var ASSETS = [
   "/",
   "/index.html",
+  "/qr.js",
   "/app.js",
   "/style.css",
   "/manifest.json",
@@ -31,13 +20,11 @@ var ASSETS = [
   "/icons/favicon.ico"
 ];
 
-// Установка: качаем всё разом. Если хоть один файл не скачался — установка
-// отменяется, и браузер повторит её позже (в кэше не бывает «половины» приложения).
 self.addEventListener("install", function (event) {
   event.waitUntil(
     caches.open(CACHE).then(function (cache) {
       return cache.addAll(ASSETS.map(function (url) {
-        return new Request(url, { cache: "reload" }); // мимо HTTP-кэша браузера
+        return new Request(url, { cache: "reload" });
       }));
     }).then(function () {
       return self.skipWaiting();
@@ -45,7 +32,6 @@ self.addEventListener("install", function (event) {
   );
 });
 
-// Активация: убираем кэши старых версий и берём страницы под контроль.
 self.addEventListener("activate", function (event) {
   event.waitUntil(
     caches.keys().then(function (names) {
@@ -64,13 +50,12 @@ self.addEventListener("fetch", function (event) {
   if (request.method !== "GET") return;
 
   var url = new URL(request.url);
-  if (url.origin !== self.location.origin) return;           // чужое не трогаем
-  if (url.pathname.indexOf("/api/") === 0) return;           // API — никогда не кэшируем
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.indexOf("/api/") === 0) return;
 
   event.respondWith(fromCache(request, url));
 });
 
-// Сначала кэш; чего нет в кэше — из сети; сети нет — главная страница.
 function fromCache(request, url) {
   return caches.open(CACHE).then(function (cache) {
     return cache.match(request, { ignoreSearch: true }).then(function (hit) {

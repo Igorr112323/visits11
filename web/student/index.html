@@ -19,17 +19,12 @@
 </head>
 <body>
 
-<!-- Разметка повторяет android/student/res/layout/activity_main.xml:
-     логотип · QR на весь экран · статус · карточка входа · точка связи с ПК -->
-
-<!-- логотип КубГАУ -->
 <img class="logo" src="icons/logo.png" alt="КубГАУ" width="110" height="110">
 
 <div class="stage">
-  <!-- QR-код (обновляется с ПК каждые 5 секунд) -->
+
   <img class="qr" id="qrView" alt="QR" width="300" height="300" hidden>
 
-  <!-- вход при первом запуске -->
   <div class="card" id="loginPanel" hidden>
     <input class="input" id="loginInput" type="text" placeholder="Логин"
            autocomplete="off" autocapitalize="none" autocorrect="off"
@@ -39,16 +34,14 @@
     <button class="button" id="loginButton" type="button">Войти</button>
   </div>
 
-  <!-- статус, когда QR показать нельзя -->
   <div class="status" id="statusText" hidden></div>
 </div>
 
-<!-- индикатор связи с ПК -->
 <div class="dot" id="dot"></div>
 
-<!-- всплывающая подсказка, как Toast в Android -->
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+<script src="qr.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
