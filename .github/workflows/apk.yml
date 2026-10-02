@@ -48,14 +48,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp android/app/build/outputs/apk/release/app-release.apk "КубГАУ Преподаватель.apk"
-          cp android/student/build/outputs/apk/release/student-release.apk "КубГАУ Студент.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk KubGAU-Teacher.apk
+          cp android/student/build/outputs/apk/release/student-release.apk KubGAU-Student.apk
           if gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release upload v1.0.0 "КубГАУ Преподаватель.apk" "КубГАУ Студент.apk" --clobber --repo "$GITHUB_REPOSITORY"
-            gh release delete-asset v1.0.0 Visits11-Teacher.apk --yes --repo "$GITHUB_REPOSITORY" || true
-            gh release delete-asset v1.0.0 Visits11-Student.apk --yes --repo "$GITHUB_REPOSITORY" || true
+            gh release upload v1.0.0 KubGAU-Teacher.apk KubGAU-Student.apk --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit v1.0.0 --title "КубГАУ · Учёт посещаемости" --repo "$GITHUB_REPOSITORY" || true
+            # убираем старые имена файлов — оставляем только актуальные
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/v1.0.0" \
+              --jq '.assets[] | (.id|tostring) + "\t" + .name' |
+            while IFS=$'\t' read -r asset_id asset_name; do
+              case "$asset_name" in
+                KubGAU-Journal.exe|KubGAU-Teacher.apk|KubGAU-Student.apk|Visits11-Student-iOS-unsigned.ipa) ;;
+                *) gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" || true ;;
+              esac
+            done
           else
-            gh release create v1.0.0 "КубГАУ Преподаватель.apk" "КубГАУ Студент.apk" \
+            gh release create v1.0.0 KubGAU-Teacher.apk KubGAU-Student.apk \
               --title "КубГАУ · Учёт посещаемости" \
               --notes "Журнал КубГАУ (ПК), КубГАУ Преподаватель и КубГАУ Студент — офлайн-учёт посещаемости." \
               --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY"

@@ -38,12 +38,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          Copy-Item publish/Visits11.exe "publish/Журнал КубГАУ.exe"
+          Copy-Item publish/Visits11.exe KubGAU-Journal.exe
           gh release view v1.0.0 --repo "$env:GITHUB_REPOSITORY" *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload v1.0.0 "publish/Журнал КубГАУ.exe" --clobber --repo "$env:GITHUB_REPOSITORY"
-            gh release delete-asset v1.0.0 Visits11.exe --yes --repo "$env:GITHUB_REPOSITORY" *> $null
-            $LASTEXITCODE = 0
+            gh release upload v1.0.0 KubGAU-Journal.exe --clobber --repo "$env:GITHUB_REPOSITORY"
+            if ($LASTEXITCODE -ne 0) { exit 1 }
           } else {
-            gh release create v1.0.0 "publish/Журнал КубГАУ.exe" --target "$env:GITHUB_SHA" --repo "$env:GITHUB_REPOSITORY" --title "КубГАУ · Учёт посещаемости" --notes "Журнал КубГАУ — готовый single-file .exe (Windows x64, .NET 8, self-contained). Установка не требуется — скачайте и запустите. Данные (attendance.db, settings.json) создаются рядом с файлом."
+            gh release create v1.0.0 KubGAU-Journal.exe --target "$env:GITHUB_SHA" --repo "$env:GITHUB_REPOSITORY" --title "КубГАУ · Учёт посещаемости" --notes "Журнал КубГАУ — готовый single-file .exe (Windows x64, .NET 8, self-contained). Установка не требуется — скачайте и запустите. Данные (attendance.db, settings.json) создаются рядом с файлом."
           }
+          gh release edit v1.0.0 --title "КубГАУ · Учёт посещаемости" --repo "$env:GITHUB_REPOSITORY" *> $null
+          # убираем старые имена файлов — оставляем только актуальные
+          gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/v1.0.0" --jq '.assets[] | (.id|tostring) + "\t" + .name' | ForEach-Object {
+            $parts = $_ -split "`t", 2
+            $keep = @("KubGAU-Journal.exe", "KubGAU-Teacher.apk", "KubGAU-Student.apk", "Visits11-Student-iOS-unsigned.ipa")
+            if ($keep -notcontains $parts[1]) {
+              gh api -X DELETE "repos/$env:GITHUB_REPOSITORY/releases/assets/$($parts[0])" *> $null
+            }
+          }
+          exit 0
