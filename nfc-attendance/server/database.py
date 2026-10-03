@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS terminal_taps (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id  TEXT NOT NULL,
     tap_time    TEXT NOT NULL,
-    result      TEXT,                       -- read (NFC) | ble | qr | manual
+    result      TEXT,                       -- read (NFC-касание) | ble (Bluetooth-касание)
     source      TEXT,
     device_id   TEXT,                       -- телефон, который коснулся (для сверки отметки)
     rssi        INTEGER,                    -- уровень сигнала, дБм — терминал не измеряет, приходит от клиента
