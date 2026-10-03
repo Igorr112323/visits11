@@ -57,7 +57,16 @@ jobs:
           KEYSTORE_PASSWORD: ${{ env.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ env.KEY_ALIAS }}
           KEY_PASSWORD: ${{ env.KEY_PASSWORD }}
-        run: gradle assembleRelease --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          gradle assembleRelease --no-daemon --stacktrace > build.log 2>&1 || {
+            echo "=== ошибки сборки (аннотации) ==="
+            grep -E "^e: |error:|error |Execution failed|What went wrong|Could not|Caused by" build.log \
+              | head -40 | while read -r line; do echo "::error::$line"; done
+            tail -30 build.log | while read -r line; do echo "::error::LOG: $line"; done
+            exit 1
+          }
+          tail -5 build.log
 
       - name: Collect APK
         run: |
