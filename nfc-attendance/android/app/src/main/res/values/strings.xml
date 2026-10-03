@@ -23,7 +23,6 @@
     <string name="button_create_session">Создать пару</string>
     <string name="button_start_emulation">Начать эмуляцию метки</string>
     <string name="button_stop_emulation">Остановить эмуляцию</string>
-    <string name="button_show_qr">Показать QR-код для iPhone</string>
     <string name="button_sync">Синхронизировать</string>
     <string name="button_refresh">Обновить список</string>
 
@@ -34,6 +33,23 @@
     <string name="status_idle">Эмуляция выключена</string>
     <string name="empty_present">Пока никто не отметился</string>
     <string name="no_session">Пара не создана</string>
+    <!-- BLE-метка -->
+    <string name="ble_channel_name">Метка активна</string>
+    <string name="ble_channel_desc">Телефон принимает касания студентов, пока идёт пара</string>
+    <string name="ble_notification_title">Метка КубГАУ активна</string>
+    <string name="ble_notification_text">Приложите телефон студента к этому телефону</string>
+    <string name="ble_status_off">BLE-метка выключена</string>
+    <string name="ble_last_none">Пока никто не касался</string>
+
+    <string name="label_range">Насколько близко прикладывать телефон</string>
+    <string name="range_touch">Вплотную</string>
+    <string name="range_near">Рядом</string>
+    <string name="range_wide">Свободно</string>
+    <string name="range_hint_touch">5–10 см, как NFC. Отметки из коридора невозможны</string>
+    <string name="range_hint_near">до ~0,5 м: телефон на столе рядом с терминалом</string>
+    <string name="range_hint_wide">до ~2 м. Больше шансов, что отметится кто-то из коридора</string>
+
+    <string name="permission_bluetooth">Без разрешений Bluetooth метка не сможет принимать касания</string>
     <string name="verified_yes">подтверждено касанием</string>
     <string name="verified_no">без касания</string>
 </resources>

@@ -48,9 +48,17 @@
         <string>NDEF</string>
     </array>
 
-    <!-- Камера: запасной способ отметки — сканирование QR-кода пары -->
-    <key>NSCameraUsageDescription</key>
-    <string>Камера нужна, чтобы отсканировать QR-код пары на телефоне преподавателя (если NFC недоступно).</string>
+    <!-- Bluetooth: основной канал отметки — «касание» к телефону преподавателя -->
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Bluetooth нужен, чтобы отметить вас на паре: приложите iPhone к телефону преподавателя.</string>
+    <key>NSBluetoothPeripheralUsageDescription</key>
+    <string>Bluetooth нужен, чтобы отметить вас на паре: приложите iPhone к телефону преподавателя.</string>
+
+    <!-- Фоновое сканирование: если студент свернул приложение, отметка всё равно пройдёт -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>bluetooth-central</string>
+    </array>
 
     <!-- Локальная сеть: сервер преподавателя по http://<IP ноутбука>:8000 -->
     <key>NSLocalNetworkUsageDescription</key>

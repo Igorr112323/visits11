@@ -98,6 +98,10 @@ struct HistoryView: View {
                     labeled("Преподаватель", mark.teacherId)
                     labeled("Студент", "\(mark.studentName) (\(mark.studentId))")
                     labeled("Телефон", mark.deviceId)
+                    labeled("Способ", mark.source == "nfc" ? "NFC-касание" : "Bluetooth-касание")
+                    if mark.rssi != 0 {
+                        labeled("Сигнал", "\(mark.rssi) dBm")
+                    }
                     labeled("Состояние", mark.serverMessage.isEmpty ? "ожидает" : mark.serverMessage)
                     labeled("Подтверждено касанием", mark.verified ? "да" : "нет")
                 }

@@ -2,8 +2,8 @@
 
 > **Новое:** в репозитории есть вторая, самостоятельная система —
 > [`nfc-attendance/`](nfc-attendance/README.md): локальный сервер **FastAPI**,
-> Android-терминал на **Kotlin** (эмуляция NDEF-метки через HCE) и iPhone-приложение
-> студента на **Swift/SwiftUI + CoreNFC**. Интернет не нужен, всё работает
+> Android-терминал на **Kotlin** (BLE-метка + эмуляция NDEF через HCE) и
+> iPhone-приложение студента на **Swift/SwiftUI + CoreBluetooth/CoreNFC**. Интернет не нужен, всё работает
 > в локальной сети. Документация: [сервер и запуск](nfc-attendance/README.md),
 > [схема БД](nfc-attendance/docs/DB_SCHEMA.md),
 > [установка и подпись iOS](nfc-attendance/docs/INSTALL_AND_SIGNING.md),

@@ -90,9 +90,6 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
 
-    // Генерация QR-кода (запасной путь отметки для iPhone без NFC)
-    implementation("com.google.zxing:core:3.5.3")
-
     // Корутины (Room Flow, фон-синхронизация)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 

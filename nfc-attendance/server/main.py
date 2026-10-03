@@ -99,6 +99,12 @@ class AttendanceCreate(BaseModel):
     teacher_id: Optional[str] = Field(default=None, max_length=120)
     student_name: Optional[str] = Field(default=None, max_length=200)
     source: str = Field(default="ios", max_length=20)
+    rssi: Optional[int] = Field(
+        default=None,
+        ge=-127,
+        le=0,
+        description="Уровень сигнала BLE в дБм (заполняют приложения, отметившиеся по Bluetooth)",
+    )
 
 
 class TapCreate(BaseModel):
@@ -106,6 +112,12 @@ class TapCreate(BaseModel):
     tap_time: str
     result: Optional[str] = Field(default=None, max_length=40)
     source: Optional[str] = Field(default="android", max_length=20)
+    device_id: Optional[str] = Field(
+        default=None,
+        max_length=200,
+        description="Телефон, который коснулся терминала (для BLE-касаний)",
+    )
+    rssi: Optional[int] = Field(default=None, ge=-127, le=0)
 
 
 class SessionSync(BaseModel):
@@ -291,6 +303,7 @@ def create_attendance(
         teacher_id=payload.teacher_id,
         student_name=payload.student_name,
         source=payload.source,
+        rssi=payload.rssi,
     )
     return JSONResponse(status_code=code, content=body)
 
@@ -351,7 +364,14 @@ def add_tap(
 ) -> dict[str, Any]:
     """Касание, которое видел телефон преподавателя (можно присылать по одному)."""
     check_key(x_api_key)
-    added = db.add_tap(payload.session_id, payload.tap_time, payload.result, payload.source)
+    added = db.add_tap(
+        payload.session_id,
+        payload.tap_time,
+        payload.result,
+        payload.source,
+        payload.device_id,
+        payload.rssi,
+    )
     verified = db.reverify_session(payload.session_id)
     return {"ok": True, "added": added, "marks_verified": verified}
 
@@ -364,7 +384,7 @@ def get_taps(
     check_key(x_api_key)
     with db.connect() as connection:
         rows = connection.execute(
-            """SELECT id, session_id, tap_time, result, source
+            """SELECT id, session_id, tap_time, result, source, device_id, rssi
                  FROM terminal_taps WHERE session_id = ? ORDER BY tap_time""",
             (session_id,),
         ).fetchall()

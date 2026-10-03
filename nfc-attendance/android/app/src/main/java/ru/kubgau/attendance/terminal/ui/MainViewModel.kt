@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import ru.kubgau.attendance.terminal.AttendanceApp
+import ru.kubgau.attendance.terminal.ble.BleRange
+import ru.kubgau.attendance.terminal.ble.BleTerminalService
 import ru.kubgau.attendance.terminal.data.AppDatabase
 import ru.kubgau.attendance.terminal.data.SessionEntity
 import ru.kubgau.attendance.terminal.net.PresentDto
@@ -39,6 +41,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val message: String = "",
         val syncState: String = "",
         val busy: Boolean = false,
+        val bleActive: Boolean = false,
+        val bleStatus: String = "",
+        val lastStudent: String = "",
+        val range: BleRange = BleRange.TOUCH,
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -53,6 +59,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _state.value = _state.value.copy(
             serverUrl = preferences.getString(AttendanceApp.KEY_SERVER_URL, "").orEmpty(),
             teacherId = preferences.getString(AttendanceApp.KEY_TEACHER_ID, "").orEmpty(),
+        )
+
+        // выбранный диапазон «насколько близко прикладывать телефон»
+        val storedRange = BleRange.fromName(
+            preferences.getString(KEY_RANGE, BleRange.TOUCH.name),
+        )
+        TerminalState.range = storedRange
+        _state.value = _state.value.copy(
+            range = storedRange,
+            bleActive = TerminalState.bleActive,
+            bleStatus = TerminalState.bleStatus,
         )
 
         // активная пара из прошлого запуска приложения
@@ -149,6 +166,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 .edit().putString(AttendanceApp.KEY_TEACHER_ID, session.teacherId).apply()
 
             TerminalState.startEmulation(session)
+            startBleIfPossible()
             val pushed = SyncEngine.pushSession(getApplication(), session)
 
             _state.value = _state.value.copy(
@@ -156,6 +174,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 emulating = true,
                 tapCount = 0,
                 busy = false,
+                bleActive = TerminalState.bleActive,
+                bleStatus = TerminalState.bleStatus,
                 message = buildString {
                     append("Пара создана. Метка активна — приложите телефон студента.")
                     if (!pushed) append("\nСервер недоступен: пара сохранена и уедет при синхронизации.")
@@ -175,11 +195,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         if (current.emulating) {
             TerminalState.stopEmulation()
-            _state.value = current.copy(emulating = false, message = "Эмуляция выключена")
+            BleTerminalService.stop(getApplication())
+            _state.value = current.copy(
+                emulating = false,
+                bleActive = false,
+                bleStatus = TerminalState.bleStatus,
+                message = "Эмуляция выключена",
+            )
         } else {
             TerminalState.startEmulation(session)
-            _state.value = current.copy(emulating = true, message = "Метка активна — положите телефон на стол")
+            startBleIfPossible()
+            _state.value = _state.value.copy(
+                emulating = true,
+                bleActive = TerminalState.bleActive,
+                bleStatus = TerminalState.bleStatus,
+                message = "Метка активна — приложите телефон студента к этому телефону",
+            )
         }
+    }
+
+    /** Диапазон: чем строже, тем меньше шансов отметиться из коридора. */
+    fun onRangeChanged(range: BleRange) {
+        TerminalState.range = range
+        AttendanceApp.preferences(getApplication()).edit()
+            .putString(KEY_RANGE, range.name).apply()
+        _state.value = _state.value.copy(range = range)
+        if (_state.value.emulating) {
+            // перезапускаем вещание с новой мощностью
+            BleTerminalService.stop(getApplication())
+            startBleIfPossible()
+            _state.value = _state.value.copy(
+                bleActive = TerminalState.bleActive,
+                bleStatus = TerminalState.bleStatus,
+                message = "Диапазон: ${range.label.lowercase()}",
+            )
+        }
+    }
+
+    /** Разрешения выданы — можно поднимать метку. */
+    fun onPermissionsGranted() {
+        _state.value = _state.value.copy(bleStatus = TerminalState.bleStatus)
+        if (_state.value.emulating) startBleIfPossible()
+    }
+
+    private fun startBleIfPossible() {
+        val context = getApplication<Application>()
+        BleTerminalService.start(context)
+        _state.value = _state.value.copy(
+            bleActive = TerminalState.bleActive,
+            bleStatus = TerminalState.bleStatus,
+        )
     }
 
     fun closeSession() {
@@ -188,13 +253,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val endTime = OffsetDateTime.now().withNano(0).toString()
             database.sessionDao().close(session.id, endTime)
             TerminalState.stopEmulation()
+            BleTerminalService.stop(getApplication())
             TerminalState.activeSession = null
             SyncEngine.pushClose(getApplication(), session.id)
             SyncEngine.syncAfterTap(getApplication())
             stopPolling()
             _state.value = _state.value.copy(
                 session = null, emulating = false, present = emptyList(),
-                presentCount = 0, elapsed = "", message = "Пара закрыта. Новые отметки не принимаются.",
+                presentCount = 0, elapsed = "", bleActive = false,
+                bleStatus = TerminalState.bleStatus,
+                message = "Пара закрыта. Новые отметки не принимаются.",
             )
         }
     }
@@ -222,7 +290,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val seconds = java.time.Duration.between(it, OffsetDateTime.now()).seconds.coerceAtLeast(0)
                     "%02d:%02d:%02d".format(seconds / 3600, (seconds % 3600) / 60, seconds % 60)
                 }.orEmpty()
-                _state.value = _state.value.copy(elapsed = elapsed, tapCount = TerminalState.tapCount)
+                _state.value = _state.value.copy(
+                    elapsed = elapsed,
+                    tapCount = TerminalState.tapCount,
+                    bleActive = TerminalState.bleActive,
+                    bleStatus = TerminalState.bleStatus,
+                    lastStudent = TerminalState.lastStudentName,
+                )
                 delay(1_000)
             }
         }
@@ -274,6 +348,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             teacherId = teacherInput ?: current.teacherId,
             minutes = minutesInput ?: current.minutes,
         )
+    }
+
+    private companion object {
+        const val KEY_RANGE = "ble_range"
     }
 
     private fun normalizeUrl(raw: String): String {

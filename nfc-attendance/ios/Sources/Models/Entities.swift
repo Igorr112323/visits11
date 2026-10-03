@@ -24,6 +24,8 @@ public final class Mark: NSManagedObject {
     @NSManaged public var syncStateRaw: Int16
     @NSManaged public var serverMessage: String
     @NSManaged public var verified: Bool
+    @NSManaged public var source: String       // ble (касание по Bluetooth) | nfc
+    @NSManaged public var rssi: Int16          // уровень сигнала, дБм; 0 — неизвестно
 
     var syncState: MarkSyncState {
         get { MarkSyncState(rawValue: syncStateRaw) ?? .pending }

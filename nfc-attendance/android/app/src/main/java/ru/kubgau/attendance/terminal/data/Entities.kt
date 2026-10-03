@@ -34,8 +34,10 @@ data class SessionEntity(
 data class TapEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val sessionId: String,
-    val tapTime: String,            // ISO-8601, момент чтения метки
-    val result: String = "read",    // read | error
+    val tapTime: String,            // ISO-8601, момент касания (часы терминала)
+    val result: String = "read",    // read (NFC) | ble
+    val deviceId: String? = null,   // телефон студента (для BLE-касаний)
+    val rssi: Int? = null,          // уровень сигнала в дБм — по нему сервер отсекает «коридор»
     val synced: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
 )

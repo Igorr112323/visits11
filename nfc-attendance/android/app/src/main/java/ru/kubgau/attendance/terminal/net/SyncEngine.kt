@@ -129,7 +129,14 @@ object SyncEngine {
                         )
                     },
                     taps = taps.map { tap ->
-                        SyncTap(tap.sessionId, tap.tapTime, tap.result, "android")
+                        SyncTap(
+                            sessionId = tap.sessionId,
+                            tapTime = tap.tapTime,
+                            result = tap.result,
+                            source = "android",
+                            deviceId = tap.deviceId,
+                            rssi = tap.rssi,
+                        )
                     },
                 ),
             )

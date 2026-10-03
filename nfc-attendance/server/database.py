@@ -31,6 +31,10 @@ DB_PATH = os.environ.get(
 # считаться подтверждённой преподавателем (± секунд).
 TAP_WINDOW_SECONDS = int(os.environ.get("TAP_WINDOW_SECONDS", "20"))
 
+# Ниже этого уровня сигнала (дБм) отметка считается неподтверждённой, даже если
+# пришло касание: значит, студент был далеко (коридор, соседняя аудитория).
+WEAK_RSSI_FLOOR = int(os.environ.get("WEAK_RSSI_FLOOR", "-80"))
+
 # Сколько живёт сессия по умолчанию (минут) и максимум.
 DEFAULT_SESSION_MINUTES = int(os.environ.get("SESSION_MINUTES", "120"))
 
@@ -70,6 +74,7 @@ CREATE TABLE IF NOT EXISTS attendance (
     teacher_id  TEXT,
     source      TEXT,
     verified    INTEGER NOT NULL DEFAULT 0,
+    rssi        INTEGER,                    -- уровень сигнала BLE, дБм (для разбора спорных отметок)
     created_at  TEXT NOT NULL,
     UNIQUE (session_id, student_id),
     FOREIGN KEY (student_id) REFERENCES students (id) ON DELETE CASCADE,
@@ -80,10 +85,11 @@ CREATE TABLE IF NOT EXISTS terminal_taps (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id  TEXT NOT NULL,
     tap_time    TEXT NOT NULL,
-    result      TEXT,
+    result      TEXT,                       -- read (NFC) | ble | qr | manual
     source      TEXT,
-    created_at  TEXT NOT NULL,
-    UNIQUE (session_id, tap_time)
+    device_id   TEXT,                       -- телефон, который коснулся (для сверки отметки)
+    rssi        INTEGER,                    -- уровень сигнала, дБм — терминал не измеряет, приходит от клиента
+    created_at  TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS rejected_marks (
@@ -99,6 +105,10 @@ CREATE TABLE IF NOT EXISTS rejected_marks (
 CREATE INDEX IF NOT EXISTS idx_attendance_session ON attendance (session_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_student ON attendance (student_id);
 CREATE INDEX IF NOT EXISTS idx_taps_session ON terminal_taps (session_id);
+-- Уникальность касаний: одна и та же пара+время+устройство. Устройство в индексе,
+-- потому что два студента могут коснуться в одну и ту же секунду.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_taps_unique
+    ON terminal_taps (session_id, tap_time, COALESCE(device_id, ''));
 """
 
 # ------------------------------------------------------------------ утилиты времени
@@ -140,9 +150,60 @@ def connect() -> sqlite3.Connection:
 
 
 def init() -> None:
-    """Создаёт схему (вызывается на старте сервера)."""
+    """Создаёт схему и дотягивает старые базы до текущей версии."""
     with connect() as connection:
         connection.executescript(SCHEMA)
+    _migrate()
+
+
+def _columns(connection: sqlite3.Connection, table: str) -> set[str]:
+    return {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
+
+
+def _migrate() -> None:
+    """
+    Приводит базу к текущей схеме (SQLite не умеет ADD COLUMN IF NOT EXISTS).
+
+    Что делает:
+      1. добавляет колонки, появившиеся в новых версиях (RSSI и device_id);
+      2. пересобирает terminal_taps, если в ней осталась старая уникальность
+         (session_id, tap_time): она мешала двум студентам коснуться в одну секунду.
+    """
+    with connect() as connection:
+        for table, columns in {
+            "attendance": [("rssi", "INTEGER")],
+            "terminal_taps": [("device_id", "TEXT"), ("rssi", "INTEGER")],
+        }.items():
+            existing = _columns(connection, table)
+            for name, type_name in columns:
+                if name not in existing:
+                    connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {type_name}")
+
+        row = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='terminal_taps'",
+        ).fetchone()
+        table_sql = (row["sql"] or "") if row else ""
+        if "UNIQUE" in table_sql.upper():
+            connection.executescript("""
+                ALTER TABLE terminal_taps RENAME TO terminal_taps_legacy;
+                CREATE TABLE terminal_taps (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id  TEXT NOT NULL,
+                    tap_time    TEXT NOT NULL,
+                    result      TEXT,
+                    source      TEXT,
+                    device_id   TEXT,
+                    rssi        INTEGER,
+                    created_at  TEXT NOT NULL
+                );
+                INSERT INTO terminal_taps (id, session_id, tap_time, result, source, created_at)
+                    SELECT id, session_id, tap_time, result, source, created_at
+                      FROM terminal_taps_legacy;
+                DROP TABLE terminal_taps_legacy;
+                CREATE INDEX IF NOT EXISTS idx_taps_session ON terminal_taps (session_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_taps_unique
+                    ON terminal_taps (session_id, tap_time, COALESCE(device_id, ''));
+            """)
 
 
 def rows_to_dicts(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
@@ -317,20 +378,34 @@ def _log_rejection(
     )
 
 
-def is_verified_by_terminal(session_id: str, timestamp: str) -> bool:
-    """Было ли касание на телефоне преподавателя рядом по времени с отметкой."""
+def is_verified_by_terminal(
+    session_id: str,
+    timestamp: str,
+    device_id: Optional[str] = None,
+) -> bool:
+    """
+    Было ли касание на телефоне преподавателя рядом по времени с отметкой.
+
+    Если у касания записан device_id (BLE-касание), он должен совпасть с телефоном
+    студента: иначе отметка с другого телефона не подтверждается.
+    """
     moment = parse_iso(timestamp)
     if moment is None:
         return False
     window = timedelta(seconds=TAP_WINDOW_SECONDS)
     with connect() as connection:
         rows = connection.execute(
-            "SELECT tap_time FROM terminal_taps WHERE session_id = ?", (session_id,)
+            "SELECT tap_time, device_id FROM terminal_taps WHERE session_id = ?",
+            (session_id,),
         ).fetchall()
     for row in rows:
         tap = parse_iso(row["tap_time"])
-        if tap is not None and abs(tap - moment) <= window:
-            return True
+        if tap is None or abs(tap - moment) > window:
+            continue
+        tap_device = row["device_id"]
+        if device_id and tap_device and tap_device != device_id:
+            continue  # касался другой телефон
+        return True
     return False
 
 
@@ -343,6 +418,7 @@ def add_attendance(
     teacher_id: Optional[str] = None,
     student_name: Optional[str] = None,
     source: str = "ios",
+    rssi: Optional[int] = None,
 ) -> tuple[int, dict[str, Any]]:
     """
     Принимает отметку студента. Возвращает (HTTP-код, тело ответа).
@@ -366,6 +442,7 @@ def add_attendance(
             "subject": subject,
             "teacher_id": teacher_id,
             "source": source,
+            "rssi": rssi,
         }
     )
 
@@ -442,17 +519,20 @@ def add_attendance(
                      "detail": "Этот телефон привязан к другому студенту. Отметка заблокирована.",
                      "device_owner": {"id": owner["id"], "name": owner["name"]}}
 
-    # 6. сверили с касанием на телефоне преподавателя
-    verified = 1 if is_verified_by_terminal(session_id, mark_time) else 0
+    # 6. сверили с касанием на телефоне преподавателя (и с сигналом, если он известен)
+    verified = 1 if is_verified_by_terminal(session_id, mark_time, device_id) else 0
+    weak_signal = rssi is not None and rssi < WEAK_RSSI_FLOOR
+    if weak_signal:
+        verified = 0  # сигнал слишком слабый: студент был далеко от терминала
 
     with connect() as connection:
         cursor = connection.execute(
             """INSERT INTO attendance
                    (student_id, session_id, timestamp, status, device_id,
-                    subject, teacher_id, source, verified, created_at)
-               VALUES (?, ?, ?, 'present', ?, ?, ?, ?, ?, ?)""",
+                    subject, teacher_id, source, verified, rssi, created_at)
+               VALUES (?, ?, ?, 'present', ?, ?, ?, ?, ?, ?, ?)""",
             (student_id, session_id, mark_time, device_id, subject,
-             teacher_id, source, verified, now_iso()),
+             teacher_id, source, verified, rssi, now_iso()),
         )
         mark_id = cursor.lastrowid
         row = connection.execute(
@@ -462,14 +542,21 @@ def add_attendance(
     return 200, {
         "ok": True,
         "result": "accepted" if verified else "accepted_unverified",
-        "detail": ("Отметка принята и подтверждена касанием терминала."
-                   if verified else
-                   "Отметка принята, но касания терминала рядом по времени не найдено — помечена как неподтверждённая."),
+        "detail": (
+            "Отметка принята и подтверждена касанием терминала."
+            if verified else
+            ("Отметка принята, но сигнал слишком слабый: похоже, телефон был далеко "
+             "от терминала. Помечена как неподтверждённая." if weak_signal else
+             "Отметка принята, но касания терминала рядом по времени не найдено — "
+             "помечена как неподтверждённая.")
+        ),
         "student": {"id": student["id"], "name": student["name"]},
         "session": {"id": session["id"], "subject": session["subject"],
                     "teacher_id": session["teacher_id"]},
         "mark": dict(row) if row else None,
         "verified": bool(verified),
+        "weak_signal": weak_signal,
+        "rssi": rssi,
         "present_count": present_count(session_id),
     }
 
@@ -488,7 +575,7 @@ def list_attendance(session_id: str) -> list[dict[str, Any]]:
     with connect() as connection:
         rows = connection.execute(
             """SELECT a.id, a.student_id, COALESCE(s.name, a.student_id) AS student_name,
-                      a.timestamp, a.status, a.verified, a.source, a.device_id
+                      a.timestamp, a.status, a.verified, a.source, a.device_id, a.rssi
                  FROM attendance a
                  LEFT JOIN students s ON s.id = a.student_id
                 WHERE a.session_id = ?
@@ -527,14 +614,21 @@ def list_rejected(session_id: str) -> list[dict[str, Any]]:
 
 
 def add_tap(session_id: str, tap_time: str, result: Optional[str] = None,
-            source: Optional[str] = None) -> bool:
-    """Касание, которое видел телефон преподавателя (дубли игнорируются)."""
+            source: Optional[str] = None, device_id: Optional[str] = None,
+            rssi: Optional[int] = None) -> bool:
+    """
+    Касание, которое видел телефон преподавателя (дубли игнорируются).
+
+    device_id заполняется для BLE-касаний: тогда сервер сверит, что отметку
+    прислал именно тот телефон, который коснулся терминала.
+    """
     with connect() as connection:
         try:
             connection.execute(
-                """INSERT INTO terminal_taps (session_id, tap_time, result, source, created_at)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (session_id, tap_time, result, source, now_iso()),
+                """INSERT INTO terminal_taps
+                       (session_id, tap_time, result, source, device_id, rssi, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (session_id, tap_time, result, source, device_id, rssi, now_iso()),
             )
         except sqlite3.IntegrityError:
             return False
@@ -547,7 +641,7 @@ def reverify_session(session_id: str) -> int:
     for mark in list_attendance(session_id):
         if mark["verified"]:
             continue
-        if is_verified_by_terminal(session_id, mark["timestamp"]):
+        if is_verified_by_terminal(session_id, mark["timestamp"], mark.get("device_id")):
             with connect() as connection:
                 connection.execute(
                     "UPDATE attendance SET verified = 1 WHERE id = ?", (mark["id"],)
@@ -604,7 +698,15 @@ def sync_teacher(
         tap_time = str(tap.get("tap_time") or tap.get("timestamp") or "").strip()
         if not session_id or not tap_time:
             continue
-        if add_tap(session_id, tap_time, tap.get("result"), tap.get("source")):
+        rssi = tap.get("rssi")
+        if add_tap(
+            session_id,
+            tap_time,
+            tap.get("result"),
+            tap.get("source"),
+            tap.get("device_id"),
+            int(rssi) if rssi is not None else None,
+        ):
             added_taps += 1
             touched_sessions.add(session_id)
 

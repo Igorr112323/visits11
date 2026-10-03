@@ -55,17 +55,21 @@ def make_session(minutes: int = 120, session_id: str | None = None) -> dict:
 
 
 def mark(session: dict, student: str, device: str, offset_seconds: int = 0,
-         subject: str | None = None, teacher: str | None = None):
+         subject: str | None = None, teacher: str | None = None,
+         rssi: int | None = None, source: str = "ios"):
     timestamp = (db.parse_iso(db.now_iso()) + timedelta(seconds=offset_seconds))
-    return client.post("/api/attendance", json={
+    body = {
         "session_id": session["id"],
         "student_id": student,
         "device_id": device,
         "timestamp": timestamp.isoformat(timespec="seconds"),
         "subject": subject if subject is not None else session["subject"],
         "teacher_id": teacher if teacher is not None else session["teacher_id"],
-        "source": "ios",
-    })
+        "source": source,
+    }
+    if rssi is not None:
+        body["rssi"] = rssi
+    return client.post("/api/attendance", json=body)
 
 
 # ------------------------------------------------------------------ базовые тесты
@@ -265,3 +269,133 @@ def test_rejected_marks_are_logged():
     mark(session, "s013", device(), subject="Другой предмет")
     report = client.get(f"/api/attendance/{session['id']}").json()
     assert any(item["reason"] == "subject_mismatch" for item in report["rejected"])
+
+
+# ------------------------------------------------------- BLE: касание и сигнал
+
+
+def test_ble_tap_verifies_only_matching_device():
+    """Касание с device_id подтверждает отметку только этого телефона."""
+    session = make_session()
+    student_device = device()
+    other_device = device()
+
+    # терминал записал BLE-касание телефона студента
+    tap = client.post("/api/tap", json={
+        "session_id": session["id"],
+        "tap_time": db.now_iso(),
+        "result": "ble",
+        "source": "android",
+        "device_id": student_device,
+        "rssi": -52,
+    })
+    assert tap.status_code == 200
+    assert tap.json()["added"] is True
+
+    # этот же телефон — подтверждено
+    own = mark(session, "ble01", student_device)
+    assert own.json()["verified"] is True
+
+    # другой телефон в то же окно — не подтверждено
+    alien = mark(session, "ble02", other_device)
+    assert alien.json()["verified"] is False
+
+
+def test_weak_signal_mark_is_unverified():
+    """Отметка со слабым сигналом (студент в коридоре) не подтверждается."""
+    session = make_session()
+    own_device = device()
+    client.post("/api/tap", json={
+        "session_id": session["id"], "tap_time": db.now_iso(),
+        "device_id": own_device, "rssi": -88,
+    })
+
+    response = mark(session, "ble03", own_device, rssi=-88, source="ble")
+    body = response.json()
+    assert response.status_code == 200
+    assert body["weak_signal"] is True
+    assert body["verified"] is False
+    assert "слабый" in body["detail"].lower()
+
+
+def test_ble_mark_with_good_signal_and_tap_is_verified():
+    session = make_session()
+    own_device = device()
+    client.post("/api/tap", json={
+        "session_id": session["id"], "tap_time": db.now_iso(),
+        "device_id": own_device, "rssi": -48,
+    })
+    response = client.post("/api/attendance", json={
+        "session_id": session["id"],
+        "student_id": "ble04",
+        "device_id": own_device,
+        "timestamp": db.now_iso(),
+        "subject": session["subject"],
+        "teacher_id": session["teacher_id"],
+        "source": "ble",
+        "rssi": -48,
+    })
+    body = response.json()
+    assert body["verified"] is True
+    assert body["rssi"] == -48
+
+    present = client.get(f"/api/attendance/{session['id']}").json()["present"]
+    assert present[0]["rssi"] == -48
+
+
+def test_two_devices_can_tap_in_same_second():
+    """Раньше уникальность (session_id, tap_time) теряла второе касание."""
+    session = make_session()
+    tap_time = db.now_iso()  # одна и та же секунда
+    first = client.post("/api/tap", json={
+        "session_id": session["id"], "tap_time": tap_time, "device_id": device(),
+    }).json()
+    second = client.post("/api/tap", json={
+        "session_id": session["id"], "tap_time": tap_time, "device_id": device(),
+    }).json()
+    assert first["added"] is True
+    assert second["added"] is True
+
+    taps = client.get(f"/api/taps/{session['id']}").json()["taps"]
+    assert len(taps) == 2
+
+
+def test_sync_accepts_ble_taps_with_device_and_rssi():
+    session_id = str(uuid.uuid4())
+    own_device = device()
+    tap_time = db.now_iso()
+
+    client.post("/api/session", json={
+        "session_id": session_id, "subject": "Физика",
+        "teacher_id": TEACHER, "minutes": 90,
+    })
+    body = mark({"id": session_id, "subject": "Физика", "teacher_id": TEACHER},
+                "ble05", own_device,
+                rssi=-55)
+    assert body.json()["verified"] is False  # касание ещё не пришло
+
+    sync = client.post("/api/sync", json={
+        "teacher_id": TEACHER,
+        "sessions": [],
+        "taps": [{
+            "session_id": session_id, "tap_time": tap_time,
+            "result": "ble", "device_id": own_device, "rssi": -55,
+        }],
+    }).json()
+    assert sync["taps_added"] == 1
+    assert sync["marks_verified"] == 1
+
+    present = client.get(f"/api/attendance/{session_id}").json()["present"]
+    assert present[0]["verified"] == 1
+
+
+def test_rssi_validation_rejects_absurd_values():
+    session = make_session()
+    response = client.post("/api/attendance", json={
+        "session_id": session["id"],
+        "student_id": "ble06",
+        "device_id": device(),
+        "timestamp": db.now_iso(),
+        "rssi": 40,          # положительный RSSI невозможен
+    })
+    assert response.status_code == 422

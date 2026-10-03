@@ -40,9 +40,14 @@ final class AttendanceStore: ObservableObject {
 
     // ------------------------------------------------------------------ запись
 
-    /// Сохранить отметку, прочитанную с NFC-метки.
+    /// Сохранить отметку, полученную касанием (BLE) или чтением NFC.
     @discardableResult
-    func addMark(payload: SessionPayload, settings: Settings) -> Mark {
+    func addMark(
+        payload: SessionPayload,
+        settings: Settings,
+        source: String = "nfc",
+        rssi: Int? = nil
+    ) -> Mark {
         let mark = Mark(context: context)
         mark.id = UUID()
         mark.sessionId = payload.sessionId
@@ -56,6 +61,8 @@ final class AttendanceStore: ObservableObject {
         mark.syncState = .pending
         mark.serverMessage = ""
         mark.verified = false
+        mark.source = source
+        mark.rssi = Int16(rssi ?? 0)
 
         save()
         reload()

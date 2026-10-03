@@ -1,6 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- BLE-метка: телефон преподавателя вещает и принимает касания студентов -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADVERTISE"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- связь с локальным сервером преподавателя -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -12,6 +23,7 @@
 
     <uses-feature android:name="android.hardware.nfc" android:required="false" />
     <uses-feature android:name="android.hardware.nfc.hce" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
 
     <application
         android:name=".AttendanceApp"
@@ -34,14 +46,6 @@
             </intent-filter>
         </activity>
 
-        <!-- QR-код пары: показывается студентам с iPhone (там нет HCE) -->
-        <activity
-            android:name=".ui.QrActivity"
-            android:exported="false"
-            android:label="QR-код пары"
-            android:screenOrientation="portrait"
-            android:theme="@style/Theme.KubGAU" />
-
         <!--
             HCE-сервис: телефон притворяется NFC-меткой (NDEF Type 4 Tag).
             Зарегистрированы два AID:
@@ -60,6 +64,16 @@
                 android:name="android.nfc.cardemulation.host_apdu_service"
                 android:resource="@xml/apduservice" />
         </service>
+
+        <!--
+            BLE-метка: пока пара активна, телефон вещает и принимает касания
+            студентов (Bluetooth Low Energy). Работает в фоне, чтобы вещание
+            не прекращалось, пока телефон лежит на столе.
+        -->
+        <service
+            android:name=".ble.BleTerminalService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
     </application>
 

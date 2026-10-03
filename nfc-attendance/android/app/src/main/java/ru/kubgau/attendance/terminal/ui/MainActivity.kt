@@ -1,12 +1,19 @@
 package ru.kubgau.attendance.terminal.ui
 
+import android.Manifest
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.content.pm.PackageManager
 import android.nfc.NfcAdapter
+import android.os.Build
 import android.os.Bundle
 import android.text.InputType
 import android.view.View
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.core.widget.doAfterTextChanged
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -14,6 +21,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import kotlinx.coroutines.launch
 import ru.kubgau.attendance.terminal.R
+import ru.kubgau.attendance.terminal.ble.BleRange
 import ru.kubgau.attendance.terminal.databinding.ActivityMainBinding
 
 /**
@@ -29,6 +37,19 @@ class MainActivity : AppCompatActivity() {
     private val viewModel: MainViewModel by viewModels()
     private val adapter = PresentAdapter()
 
+    /** Разрешения Bluetooth (Android 12+) и уведомлений (Android 13+). */
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { results ->
+        val bluetoothGranted = results[Manifest.permission.BLUETOOTH_CONNECT] != false &&
+            results[Manifest.permission.BLUETOOTH_ADVERTISE] != false
+        if (bluetoothGranted) {
+            viewModel.onPermissionsGranted()
+        } else {
+            Toast.makeText(this, R.string.permission_bluetooth, Toast.LENGTH_LONG).show()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -41,6 +62,46 @@ class MainActivity : AppCompatActivity() {
         bindButtons()
         observeState()
         showNfcStatus()
+        showBluetoothStatus()
+        requestNeededPermissions()
+    }
+
+    /** Bluetooth-разрешения нужны только с Android 12; на старых версиях их нет. */
+    private fun requestNeededPermissions() {
+        val needed = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            listOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_ADVERTISE)
+                .forEach { permission ->
+                    if (ContextCompat.checkSelfPermission(this, permission) !=
+                        PackageManager.PERMISSION_GRANTED
+                    ) {
+                        needed += permission
+                    }
+                }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            needed += Manifest.permission.POST_NOTIFICATIONS
+        }
+        if (needed.isNotEmpty()) {
+            permissionLauncher.launch(needed.toTypedArray())
+        } else {
+            viewModel.onPermissionsGranted()
+        }
+    }
+
+    private fun showBluetoothStatus() {
+        val manager = getSystemService(BLUETOOTH_SERVICE) as? BluetoothManager
+        val adapter = manager?.adapter ?: BluetoothAdapter.getDefaultAdapter()
+        val enabled = adapter?.isEnabled == true
+        binding.bleDot.setBackgroundResource(
+            if (enabled) R.drawable.dot_green else R.drawable.dot_red,
+        )
+        if (!enabled) {
+            Toast.makeText(this, "Включите Bluetooth — по нему принимаются касания", Toast.LENGTH_LONG).show()
+        }
     }
 
     override fun onResume() {
@@ -69,9 +130,15 @@ class MainActivity : AppCompatActivity() {
         binding.createSession.setOnClickListener { viewModel.createSession() }
         binding.toggleEmulation.setOnClickListener { viewModel.toggleEmulation() }
         binding.syncNow.setOnClickListener { viewModel.syncNow() }
-        binding.showQr.setOnClickListener {
-            // QR-код читают те, у кого нет NFC: iPhone, кнопочные телефоны и т.п.
-            startActivity(android.content.Intent(this, QrActivity::class.java))
+
+        // Насколько близко прикладывать телефон (влияет на мощность BLE-вещания)
+        binding.rangeGroup.setOnCheckedChangeListener { _, checkedId ->
+            val range = when (checkedId) {
+                R.id.rangeNear -> BleRange.NEAR
+                R.id.rangeWide -> BleRange.WIDE
+                else -> BleRange.TOUCH
+            }
+            viewModel.onRangeChanged(range)
         }
         binding.refreshPresent.setOnClickListener { viewModel.refreshPresentNow() }
         binding.closeSession.setOnClickListener { viewModel.closeSession() }
@@ -124,6 +191,25 @@ class MainActivity : AppCompatActivity() {
                         } else {
                             getString(R.string.button_start_emulation)
                         }
+                    }
+
+                    binding.rangeHint.text = when (state.range) {
+                        BleRange.TOUCH -> getString(R.string.range_hint_touch)
+                        BleRange.NEAR -> getString(R.string.range_hint_near)
+                        BleRange.WIDE -> getString(R.string.range_hint_wide)
+                    }
+                    when (state.range) {
+                        BleRange.TOUCH -> binding.rangeTouch.isChecked = true
+                        BleRange.NEAR -> binding.rangeNear.isChecked = true
+                        BleRange.WIDE -> binding.rangeWide.isChecked = true
+                    }
+
+                    binding.bleStatus.text = state.bleStatus
+                    binding.bleDot.setBackgroundResource(
+                        if (state.bleActive) R.drawable.dot_green else R.drawable.dot_red,
+                    )
+                    binding.lastStudent.text = state.lastStudent.ifBlank {
+                        getString(R.string.ble_last_none)
                     }
 
                     binding.presentCount.text = state.presentCount.toString()

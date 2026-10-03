@@ -330,14 +330,84 @@
                     android:layout_marginTop="10dp"
                     android:text="@string/button_start_emulation" />
 
-                <!-- Запасной путь для iPhone: QR-код читает камера (NFC там требует платный аккаунт Apple) -->
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/showQr"
-                    style="@style/Widget.Material3.Button.OutlinedButton"
+                <!-- Насколько близко прикладывать телефон: влияет на мощность вещания -->
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:text="@string/label_range"
+                    android:textColor="@color/ink_secondary"
+                    android:textSize="12sp" />
+
+                <RadioGroup
+                    android:id="@+id/rangeGroup"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <RadioButton
+                        android:id="@+id/rangeTouch"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/range_touch" />
+
+                    <RadioButton
+                        android:id="@+id/rangeNear"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/range_near" />
+
+                    <RadioButton
+                        android:id="@+id/rangeWide"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="@string/range_wide" />
+                </RadioGroup>
+
+                <TextView
+                    android:id="@+id/rangeHint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="@string/range_hint_touch"
+                    android:textColor="@color/ink_secondary"
+                    android:textSize="12sp" />
+
+                <!-- Состояние BLE-метки: слушает ли телефон касания студентов -->
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="10dp"
-                    android:text="@string/button_show_qr" />
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <View
+                        android:id="@+id/bleDot"
+                        android:layout_width="12dp"
+                        android:layout_height="12dp"
+                        android:background="@drawable/dot_gray" />
+
+                    <TextView
+                        android:id="@+id/bleStatus"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:layout_weight="1"
+                        android:text="@string/ble_status_off"
+                        android:textColor="@color/ink"
+                        android:textSize="13sp" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/lastStudent"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/ble_last_none"
+                    android:textColor="@color/ink_secondary"
+                    android:textSize="13sp" />
 
                 <LinearLayout
                     android:layout_width="match_parent"

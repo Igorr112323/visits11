@@ -92,9 +92,11 @@ struct ApiClient {
         let teacherId: String
         let studentName: String
         let source: String
+        /// Уровень сигнала BLE (дБм). Сервер помечает слабые отметки как неподтверждённые.
+        let rssi: Int?
 
         enum CodingKeys: String, CodingKey {
-            case subject, timestamp, source
+            case subject, timestamp, source, rssi
             case sessionId = "session_id"
             case studentId = "student_id"
             case deviceId = "device_id"

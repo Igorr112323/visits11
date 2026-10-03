@@ -78,6 +78,10 @@ data class SyncTap(
     @SerializedName("tap_time") val tapTime: String,
     val result: String? = "read",
     val source: String = "android",
+    /** Телефон студента, который коснулся терминала (BLE-режим). */
+    @SerializedName("device_id") val deviceId: String? = null,
+    /** Уровень сигнала в дБм: сервер помечает слабые отметки как неподтверждённые. */
+    val rssi: Int? = null,
 )
 
 data class SyncRequest(

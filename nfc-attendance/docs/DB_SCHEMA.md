@@ -48,13 +48,14 @@ rejected_marks — журнал отказов (внешних ключей не
 | `id` | INTEGER | **PK AUTOINCREMENT** | |
 | `student_id` | TEXT | NOT NULL, FK → `students.id` ON DELETE CASCADE | кто |
 | `session_id` | TEXT | NOT NULL, FK → `sessions.id` ON DELETE CASCADE | на какой паре |
-| `timestamp` | TEXT | NOT NULL | момент чтения NFC/QR (ISO-8601) |
+| `timestamp` | TEXT | NOT NULL | момент касания (ISO-8601) |
 | `status` | TEXT | NOT NULL, default `present` | статус отметки |
 | `device_id` | TEXT | NULL | с какого телефона отмечено |
 | `subject` | TEXT | NULL | предмет из метки (для сверки) |
 | `teacher_id` | TEXT | NULL | преподаватель из метки (для сверки) |
-| `source` | TEXT | NULL | `ios` (NFC или QR) |
-| `verified` | INTEGER | NOT NULL, default 0 | 1 — рядом по времени было касание терминала |
+| `source` | TEXT | NULL | `ble` (касание по Bluetooth) или `nfc` |
+| `verified` | INTEGER | NOT NULL, default 0 | 1 — рядом по времени было касание **того же** телефона и сигнал не слабее порога |
+| `rssi` | INTEGER | NULL | уровень сигнала BLE в дБм: −48 «приложен», −88 «из коридора» |
 | `created_at` | TEXT | NOT NULL | момент записи на сервере |
 
 **Уникальность:** `UNIQUE (session_id, student_id)` — повторная отметка в ту же
@@ -66,16 +67,22 @@ rejected_marks — журнал отказов (внешних ключей не
 |---|---|---|---|
 | `id` | INTEGER | **PK AUTOINCREMENT** | |
 | `session_id` | TEXT | NOT NULL | пара |
-| `tap_time` | TEXT | NOT NULL | момент касания (ISO-8601) |
-| `result` | TEXT | NULL | `read` (NFC) или `qr` (код показан на экране) |
+| `tap_time` | TEXT | NOT NULL | момент касания по часам терминала (ISO-8601) |
+| `result` | TEXT | NULL | `read` (NFC-касание) или `ble` (Bluetooth-касание) |
 | `source` | TEXT | NULL | источник (`android`) |
+| `device_id` | TEXT | NULL | телефон студента, который коснулся (BLE) |
+| `rssi` | INTEGER | NULL | уровень сигнала в дБм (приходит от клиента) |
 | `created_at` | TEXT | NOT NULL | |
 
-**Уникальность:** `UNIQUE (session_id, tap_time)` — повторная синхронизация тех же
-касаний ничего не ломает (идемпотентность `/api/sync`).
+**Уникальность:** индекс `(session_id, tap_time, COALESCE(device_id, ''))` — повторная
+синхронизация тех же касаний ничего не ломает (идемпотентность `/api/sync`), но два
+разных студента могут коснуться в одну и ту же секунду.
 
-По этим записям сервер считает отметку подтверждённой: если отметка попала в окно
-**±`TAP_WINDOW_SECONDS`** (по умолчанию 20 секунд) от касания, `verified = 1`.
+По этим записям сервер считает отметку подтверждённой, если выполнены **оба** условия:
+отметка попала в окно **±`TAP_WINDOW_SECONDS`** (по умолчанию 20 секунд) от касания
+и телефон в касании совпадает с телефоном отметки (если он записан). Дополнительно
+отметка с `rssi` ниже `WEAK_RSSI_FLOOR` (−80 dBm) помечается как неподтверждённая:
+значит, студент приложил телефон не к терминалу, а был далеко.
 Не подтверждённые отметки перепроверяются автоматически, когда телефон
 преподавателя синхронизируется (`reverify_session`).
 
@@ -97,6 +104,8 @@ rejected_marks — журнал отказов (внешних ключей не
 CREATE INDEX idx_attendance_session ON attendance (session_id);
 CREATE INDEX idx_attendance_student ON attendance (student_id);
 CREATE INDEX idx_taps_session       ON terminal_taps (session_id);
+CREATE UNIQUE INDEX idx_taps_unique ON terminal_taps
+    (session_id, tap_time, COALESCE(device_id, ''));
 ```
 
 ---
@@ -119,8 +128,13 @@ SELECT s.id, s.name FROM students s
 SELECT created_at, student_id, device_id, reason FROM rejected_marks
  WHERE session_id = 'UUID пары' ORDER BY created_at DESC;
 
--- отметки без подтверждения касанием
-SELECT * FROM attendance WHERE session_id = 'UUID пары' AND verified = 0;
+-- отметки без подтверждения касанием (или со слабым сигналом — «из коридора»)
+SELECT student_id, timestamp, rssi, source FROM attendance
+ WHERE session_id = 'UUID пары' AND verified = 0;
+
+-- что видел терминал: телефон и уровень сигнала
+SELECT tap_time, result, device_id, rssi FROM terminal_taps
+ WHERE session_id = 'UUID пары' ORDER BY tap_time;
 ```
 
 Очистка базы (для тестов): `ATTENDANCE_DB=test.db python -c "import database; database.reset()"`.
@@ -131,5 +145,6 @@ SELECT * FROM attendance WHERE session_id = 'UUID пары' AND verified = 0;
 |---|---|---|
 | `ATTENDANCE_DB` | `server/attendance.db` | путь к файлу базы |
 | `TAP_WINDOW_SECONDS` | `20` | окно сверки отметки с касанием, секунд |
+| `WEAK_RSSI_FLOOR` | `-80` | ниже этого RSSI отметка считается неподтверждённой (дБм) |
 | `SESSION_MINUTES` | `120` | длительность пары по умолчанию, минут |
 | `API_KEY` | пусто | если задан — все `/api/*` требуют заголовок `X-Api-Key` |

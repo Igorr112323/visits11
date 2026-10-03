@@ -33,6 +33,8 @@ enum Persistence {
             attribute("syncStateRaw", .integer16AttributeType, default: 0),
             attribute("serverMessage", .stringAttributeType, default: ""),
             attribute("verified", .booleanAttributeType, default: false),
+            attribute("source", .stringAttributeType, default: "ble"),
+            attribute("rssi", .integer16AttributeType, default: 0),
         ]
 
         // ------------------------------------------------------------- Student
