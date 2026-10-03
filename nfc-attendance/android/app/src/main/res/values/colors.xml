@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="kubgau_green">#1B7A3E</color>
+    <color name="kubgau_green_dark">#10502A</color>
+    <color name="kubgau_green_light">#D7EBDC</color>
+    <color name="kubgau_accent">#F2A900</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="ink">#14161A</color>
+    <color name="ink_secondary">#5B6470</color>
+    <color name="surface">#FFFFFF</color>
+    <color name="screen_background">#F4F6F5</color>
+    <color name="danger">#B3261E</color>
+    <color name="ok_green">#1B7A3E</color>
+    <color name="dot_gray">#9AA3AE</color>
+</resources>

@@ -7,3 +7,29 @@ publish/
 attendance.db
 settings.json
 image-search/
+
+# --- Python (сервер NFC-отметок) ---
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+nfc-attendance/server/attendance.db
+nfc-attendance/server/tests/*.db
+nfc-attendance/server/*.db-wal
+nfc-attendance/server/*.db-shm
+
+# --- Android ---
+nfc-attendance/android/.gradle/
+nfc-attendance/android/build/
+nfc-attendance/android/app/build/
+nfc-attendance/android/local.properties
+*.apk
+*.aab
+
+# --- iOS ---
+nfc-attendance/ios/build/
+nfc-attendance/ios/*.log
+nfc-attendance/ios/Payload/
+nfc-attendance/ios/*.ipa
+nfc-attendance/ios/*.xcodeproj/

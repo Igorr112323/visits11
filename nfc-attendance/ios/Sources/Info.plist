@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Info.plist приложения студента.
+
+    Ключевые вещи:
+      • NFCReaderUsageDescription — обязательное пояснение, зачем читаем NFC;
+      • com.apple.developer.nfc.readersession.formats = [NDEF] — разрешает
+        NFCNDEFReaderSession (чтение NDEF-меток);
+      • NSAppTransportSecurity → NSAllowsLocalNetworking = true — иначе iOS
+        блокирует http:// к локальному серверу преподавателя;
+      • NSLocalNetworkUsageDescription — разрешение «локальная сеть» (iOS 14+).
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>ru</string>
+    <key>CFBundleDisplayName</key>
+    <string>КубГАУ Студент</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Visits11Student</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>UILaunchScreen</key>
+    <dict/>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
+
+    <!-- NFC -->
+    <key>NFCReaderUsageDescription</key>
+    <string>Чтобы отметиться на паре, приложите iPhone к телефону преподавателя — приложение прочитает NFC-метку с данными занятия.</string>
+    <key>com.apple.developer.nfc.readersession.formats</key>
+    <array>
+        <string>NDEF</string>
+    </array>
+
+    <!-- Bluetooth: основной канал отметки — «касание» к телефону преподавателя -->
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Bluetooth нужен, чтобы отметить вас на паре: приложите iPhone к телефону преподавателя.</string>
+    <key>NSBluetoothPeripheralUsageDescription</key>
+    <string>Bluetooth нужен, чтобы отметить вас на паре: приложите iPhone к телефону преподавателя.</string>
+
+    <!-- Фоновое сканирование: если студент свернул приложение, отметка всё равно пройдёт -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>bluetooth-central</string>
+    </array>
+
+    <!-- Локальная сеть: сервер преподавателя по http://<IP ноутбука>:8000 -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Приложение отправляет отметку на ноутбук преподавателя в вашей локальной сети.</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
+</dict>
+</plist>

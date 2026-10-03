@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+
+    <style name="Theme.KubGAU" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/kubgau_green</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="colorPrimaryContainer">@color/kubgau_green_light</item>
+        <item name="colorOnPrimaryContainer">@color/kubgau_green_dark</item>
+        <item name="colorSecondary">@color/kubgau_accent</item>
+        <item name="android:statusBarColor" tools:targetApi="l">@color/kubgau_green_dark</item>
+    </style>
+
+    <style name="CardTitle">
+        <item name="android:textSize">13sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:letterSpacing">0.06</item>
+    </style>
+
+    <style name="ValueText">
+        <item name="android:textSize">16sp</item>
+    </style>
+
+</resources>

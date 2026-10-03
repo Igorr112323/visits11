@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Описание HCE-сервиса: какие AID мы обслуживаем.
+
+    D2760000850101 — NDEF Type 4 Tag (NFC Forum). Именно этот AID выбирает
+                     iPhone в режиме NFCNDEFReaderSession, чтобы прочитать метку.
+    F0391101020304 — собственный AID проекта Visits11 (на случай прямого чтения
+                     приложением-считывателем).
+
+    requireDeviceUnlock="false" — метка отвечает и при выключенном экране,
+    поэтому телефон преподавателя можно просто положить на стол.
+-->
+<host-apdu-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/hce_service_desc"
+    android:requireDeviceUnlock="false">
+
+    <aid-group
+        android:category="other"
+        android:description="@string/hce_group_desc">
+        <aid-filter android:name="D2760000850101" />
+        <aid-filter android:name="F0391101020304" />
+    </aid-group>
+
+</host-apdu-service>
