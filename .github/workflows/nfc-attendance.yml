@@ -1,0 +1,150 @@
+name: NFC Attendance (Kotlin + Swift)
+
+on:
+  push:
+    paths:
+      - 'nfc-attendance/**'
+      - '.github/workflows/nfc-attendance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------- Android APK
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      # Тестовый ключ подписи. Для обновления уже установленного приложения
+      # без переустановки положите свой keystore в секреты репозитория
+      # (ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS).
+      - name: Test keystore (можно заменить своими секретами)
+        run: |
+          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/ci.jks"
+            echo "KEYSTORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+          else
+            keytool -genkeypair -v -keystore "$RUNNER_TEMP/ci.jks" \
+              -storepass kubgau-test -keypass kubgau-test \
+              -alias kubgau -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=KubGAU Test, O=KubGAU, C=RU"
+            echo "KEYSTORE_PASSWORD=kubgau-test" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=kubgau" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=kubgau-test" >> "$GITHUB_ENV"
+          fi
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/ci.jks" >> "$GITHUB_ENV"
+
+      - name: Build release APK (Kotlin, HCE)
+        working-directory: nfc-attendance/android
+        env:
+          KEYSTORE_PATH: ${{ env.KEYSTORE_PATH }}
+          KEYSTORE_PASSWORD: ${{ env.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ env.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ env.KEY_PASSWORD }}
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          cp nfc-attendance/android/app/build/outputs/apk/release/app-release.apk \
+             out/NFC-Attendance-Teacher.apk
+          ls -lh out
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NFC-Attendance-Teacher-apk
+          path: out/NFC-Attendance-Teacher.apk
+          if-no-files-found: error
+
+      - name: Publish APK to release nfc-v1.0.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view nfc-v1.0.0 --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload nfc-v1.0.0 out/NFC-Attendance-Teacher.apk --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create nfc-v1.0.0 out/NFC-Attendance-Teacher.apk \
+              --title "КубГАУ · NFC-отметки (FastAPI + Kotlin + Swift)" \
+              --notes "Локальная система отметок: сервер FastAPI, Android-терминал с эмуляцией NDEF-метки, iPhone-приложение студента. Подробности — в nfc-attendance/README.md" \
+              --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY"
+          fi
+
+  # ------------------------------------------------------------------ iOS (ipa)
+  ios:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: nfc-attendance/ios
+        run: |
+          xcodegen generate
+          # XcodeGen пишет формат Xcode 16 (objectVersion 77) — на раннере Xcode 15
+          sed -i '' 's/objectVersion = 77;/objectVersion = 56;/' Visits11Student.xcodeproj/project.pbxproj
+
+      - name: Build unsigned app (проверка компиляции)
+        working-directory: nfc-attendance/ios
+        run: |
+          set -o pipefail
+          xcodebuild -project Visits11Student.xcodeproj \
+            -scheme Visits11Student \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            clean build > build.log 2>&1 || {
+              grep -m 10 "error:" build.log | while read -r line; do echo "::error::$line"; done
+              tail -20 build.log | while read -r line; do echo "::error::$line"; done
+              exit 1
+            }
+
+      - name: Package unsigned .ipa (подпишете своим Apple ID через Sideloadly)
+        working-directory: nfc-attendance/ios
+        run: |
+          mkdir Payload
+          cp -r build/Build/Products/Release-iphoneos/Visits11Student.app Payload/
+          zip -qry NFC-Attendance-Student-unsigned.ipa Payload
+          cp NFC-Attendance-Student-unsigned.ipa ..
+          ls -lh NFC-Attendance-Student-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NFC-Attendance-Student-ipa
+          path: nfc-attendance/ios/NFC-Attendance-Student-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Publish IPA to release nfc-v1.0.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view nfc-v1.0.0 --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload nfc-v1.0.0 nfc-attendance/ios/NFC-Attendance-Student-unsigned.ipa \
+              --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create nfc-v1.0.0 nfc-attendance/ios/NFC-Attendance-Student-unsigned.ipa \
+              --title "КубГАУ · NFC-отметки (FastAPI + Kotlin + Swift)" \
+              --notes "Локальная система отметок: сервер FastAPI, Android-терминал с эмуляцией NDEF-метки, iPhone-приложение студента." \
+              --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY"
+          fi

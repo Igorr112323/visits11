@@ -1,0 +1,44 @@
+# Проект генерируется XcodeGen:  brew install xcodegen && xcodegen generate
+name: Visits11Student
+options:
+  bundleIdPrefix: ru.kubgau.attendance
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    CODE_SIGN_STYLE: Automatic
+    # Сборка без подписи (для CI). На своей машине подпись включает Xcode/Sideloadly.
+    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGN_IDENTITY: ""
+
+targets:
+  Visits11Student:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ru.kubgau.attendance.student
+        PRODUCT_NAME: Visits11Student
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"          # только iPhone
+        GENERATE_INFOPLIST_FILE: "NO"
+        INFOPLIST_FILE: Sources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Sources/Visits11Student.entitlements
+        ENABLE_USER_SCRIPT_SANDBOXING: "NO"
+        SWIFT_EMIT_LOC_STRINGS: "YES"
+
+schemes:
+  Visits11Student:
+    build:
+      targets:
+        Visits11Student: all
+    run:
+      config: Debug
+    archive:
+      config: Release

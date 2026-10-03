@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">КубГАУ Преподаватель</string>
+
+    <string name="hce_service_desc">Эмуляция NFC-метки текущей пары</string>
+    <string name="hce_group_desc">Метка пары КубГАУ</string>
+
+    <!-- заголовки разделов -->
+    <string name="section_server">Локальный сервер</string>
+    <string name="section_new_session">Новая пара</string>
+    <string name="section_current">Текущая пара</string>
+    <string name="section_present">Отметились</string>
+
+    <!-- поля -->
+    <string name="hint_server_url">http://192.168.1.10:8000</string>
+    <string name="hint_subject">Предмет, например: Информатика</string>
+    <string name="hint_group">Группа, например: ИС-21</string>
+    <string name="hint_teacher">Ваш идентификатор, например: IVANOV_II</string>
+    <string name="hint_minutes">Длительность пары, мин</string>
+
+    <!-- кнопки -->
+    <string name="button_check_server">Проверить связь</string>
+    <string name="button_create_session">Создать пару</string>
+    <string name="button_start_emulation">Начать эмуляцию метки</string>
+    <string name="button_stop_emulation">Остановить эмуляцию</string>
+    <string name="button_sync">Синхронизировать</string>
+    <string name="button_refresh">Обновить список</string>
+
+    <!-- состояния -->
+    <string name="status_offline">Сервер не найден</string>
+    <string name="status_online">Сервер отвечает</string>
+    <string name="status_emulating">Метка активна — положите телефон на стол</string>
+    <string name="status_idle">Эмуляция выключена</string>
+    <string name="empty_present">Пока никто не отметился</string>
+    <string name="no_session">Пара не создана</string>
+    <string name="verified_yes">подтверждено касанием</string>
+    <string name="verified_no">без касания</string>
+</resources>
