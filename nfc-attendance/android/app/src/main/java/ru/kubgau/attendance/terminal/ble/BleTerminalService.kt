@@ -174,7 +174,7 @@ class BleTerminalService : Service() {
         gattService.addCharacteristic(ackCharacteristic)
         service = gattService
 
-        return runCatching { gattServer?.addService(gattService) }.getOrDefault(false)
+        return runCatching { gattServer?.addService(gattService) == true }.getOrDefault(false)
     }
 
     private fun startAdvertising() {

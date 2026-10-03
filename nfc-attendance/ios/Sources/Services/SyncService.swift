@@ -42,7 +42,8 @@ final class SyncService {
                 subject: mark.subject,
                 teacherId: mark.teacherId,
                 studentName: mark.studentName,
-                source: "ios"
+                source: mark.source.isEmpty ? "ble" : mark.source,
+                rssi: mark.rssi == 0 ? nil : Int(mark.rssi)
             )
 
             do {

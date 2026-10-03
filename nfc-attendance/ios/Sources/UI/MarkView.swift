@@ -3,9 +3,9 @@ import SwiftUI
 
 /// Экран отметки: студент прикладывает iPhone к телефону преподавателя.
 ///
-/// Работают два канала одновременно, и это скрыто от студента:
-///   • Bluetooth (BLE) — основной: телефон находит метку терминала и «касается» её;
-///   • NFC — если он доступен на устройстве (требует платного аккаунта Apple).
+/// Основной канал — Bluetooth (BLE): приложение само находит метку терминала и
+/// «касается» её, без кнопок и системных окон. NFC доступен отдельной кнопкой
+/// внизу экрана (он требует платного аккаунта Apple и показывает системное окно).
 ///
 /// Что видит студент: «Приложите iPhone», через секунду — галочка и время.
 struct MarkView: View {
@@ -46,6 +46,7 @@ struct MarkView: View {
                         lastMarkCard(mark)
                     }
                     queueCard
+                    nfcRow
                 }
                 .padding(16)
             }
@@ -230,6 +231,28 @@ struct MarkView: View {
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
     }
 
+    /// Запасной канал для тех, у кого есть платный аккаунт Apple.
+    private var nfcRow: some View {
+        Group {
+            if NDEFReader.isAvailable {
+                Button {
+                    startNfc()
+                } label: {
+                    Label("Отметить по NFC", systemImage: "wave.3.forward.circle")
+                        .font(.footnote)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+            } else {
+                Text("Bluetooth-касание работает всегда — NFC на этом iPhone недоступен.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 4)
+    }
+
     // ------------------------------------------------------------------ внешний вид
 
     private var accentColor: Color {
@@ -277,11 +300,16 @@ struct MarkView: View {
         ble.onMark = handleBleMark(session:rssi:time:)
         ble.start(deviceId: DeviceIdentity.deviceId,
                   studentName: settings.studentName.isEmpty ? settings.studentId : settings.studentName)
+    }
 
-        if NDEFReader.isAvailable {
-            nfc.onPayload = handleNfcPayload(payload:)
-            nfc.start()
-        }
+    /// Запасной путь: отметка через NFC. Отдельная кнопка, потому что iOS показывает
+    /// системное окно «Приложите iPhone», и оно перекрыло бы весь экран.
+    /// Работает только с платным аккаунтом Apple (capability «NFC Tag Reading»).
+    private func startNfc() {
+        nfc.onPayload = handleNfcPayload(payload:)
+        nfc.start()
+        banner = Banner(text: "Приложите iPhone к телефону преподавателя и подержите — "
+                              + "отметку прочитает NFC.", kind: .waiting)
     }
 
     private func stopTapFlow() {
