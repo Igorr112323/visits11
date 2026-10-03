@@ -330,6 +330,15 @@
                     android:layout_marginTop="10dp"
                     android:text="@string/button_start_emulation" />
 
+                <!-- Запасной путь для iPhone: QR-код читает камера (NFC там требует платный аккаунт Apple) -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/showQr"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="@string/button_show_qr" />
+
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
