@@ -1,5 +1,6 @@
 package ru.visits11.student;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -38,12 +39,14 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
     private static final String KEY_SERVER_URL = "server_url";
     private static final String KEY_DEVICE_ID = "device_id";
     private static final byte[] NFC_AID = {(byte) 0xF0, 0x39, 0x11, 0x01, 0x02, 0x03, 0x04};
+    private static final int CAMERA_PERMISSION_REQUEST = 42;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private View loginPanel;
     private TextView statusText;
     private boolean useNfc;
     private boolean scannerOpen;
+    private boolean cameraPermissionRequestInFlight;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -73,7 +76,6 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
 
         useNfc = nfcSupported();
         updateStudentStatus();
-        if (!hasStudent()) ui.postDelayed(this::startQrScan, 450);
     }
 
     @Override
@@ -127,13 +129,39 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
 
     private void startQrScan() {
         if (scannerOpen) return;
+        if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            if (!cameraPermissionRequestInFlight) {
+                cameraPermissionRequestInFlight = true;
+                requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST);
+            }
+            return;
+        }
         scannerOpen = true;
-        IntentIntegrator scanner = new IntentIntegrator(this);
-        scanner.setDesiredBarcodeFormats(IntentIntegrator.QR_CODE);
-        scanner.setPrompt("Отсканируйте персональный QR-код КубГАУ");
-        scanner.setBeepEnabled(false);
-        scanner.setOrientationLocked(false);
-        scanner.initiateScan();
+        try {
+            IntentIntegrator scanner = new IntentIntegrator(this);
+            scanner.setDesiredBarcodeFormats(IntentIntegrator.QR_CODE);
+            scanner.setPrompt("Отсканируйте персональный QR-код КубГАУ");
+            scanner.setBeepEnabled(false);
+            scanner.setOrientationLocked(false);
+            scanner.initiateScan();
+        } catch (RuntimeException exception) {
+            scannerOpen = false;
+            loginPanel.setVisibility(View.VISIBLE);
+            toast("Не удалось открыть сканер QR-кода");
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != CAMERA_PERMISSION_REQUEST) return;
+        cameraPermissionRequestInFlight = false;
+        if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            ui.post(this::startQrScan);
+        } else {
+            loginPanel.setVisibility(View.VISIBLE);
+            toast("Разрешите доступ к камере для сканирования QR-кода");
+        }
     }
 
     private boolean saveQrPayload(String raw) {

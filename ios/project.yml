@@ -19,8 +19,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ru.visits11.student
         PRODUCT_NAME: Visits11Student
-        MARKETING_VERSION: "2.0.0"
-        CURRENT_PROJECT_VERSION: "2"
+        MARKETING_VERSION: "2.0.1"
+        CURRENT_PROJECT_VERSION: "3"
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: "NO"
         INFOPLIST_FILE: Sources/Info.plist

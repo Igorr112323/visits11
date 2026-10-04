@@ -139,8 +139,6 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="40" />
                                 <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="130" />
-                                <ColumnDefinition Width="110" />
                                 <ColumnDefinition Width="120" />
                                 <ColumnDefinition Width="58" />
                                 <ColumnDefinition Width="78" />
@@ -148,11 +146,9 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="№" Style="{StaticResource Txt.Label}" />
                             <TextBlock Grid.Column="1" Text="ФИО" Style="{StaticResource Txt.Label}" />
-                            <TextBlock Grid.Column="2" Text="Логин" Style="{StaticResource Txt.Label}" />
-                            <TextBlock Grid.Column="3" Text="Пароль" Style="{StaticResource Txt.Label}" />
-                            <TextBlock Grid.Column="4" Text="ID телефона" Style="{StaticResource Txt.Label}" />
-                            <TextBlock Grid.Column="5" Text="QR" Style="{StaticResource Txt.Label}" />
-                            <TextBlock Grid.Column="6" Text="Привязка" Style="{StaticResource Txt.Label}" />
+                            <TextBlock Grid.Column="2" Text="ID телефона" Style="{StaticResource Txt.Label}" />
+                            <TextBlock Grid.Column="3" Text="QR" Style="{StaticResource Txt.Label}" />
+                            <TextBlock Grid.Column="4" Text="Привязка" Style="{StaticResource Txt.Label}" />
                         </Grid>
                     </Border>
 
@@ -172,8 +168,6 @@
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="40" />
                                                 <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="130" />
-                                                <ColumnDefinition Width="110" />
                                                 <ColumnDefinition Width="120" />
                                                 <ColumnDefinition Width="58" />
                                                 <ColumnDefinition Width="78" />
@@ -189,20 +183,7 @@
                                                        TextTrimming="CharacterEllipsis"
                                                        VerticalAlignment="Center" />
 
-                                            <Button Grid.Column="2"
-                                                    Style="{StaticResource Btn.Chip}"
-                                                    Content="{Binding Login}"
-                                                    Command="{Binding DataContext.CopyTextCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                    CommandParameter="{Binding Login}"
-                                                    HorizontalAlignment="Left" />
-                                            <Button Grid.Column="3"
-                                                    Style="{StaticResource Btn.Chip}"
-                                                    Content="{Binding Password}"
-                                                    Command="{Binding DataContext.CopyTextCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                    CommandParameter="{Binding Password}"
-                                                    HorizontalAlignment="Left" />
-
-                                            <Grid Grid.Column="4">
+                                            <Grid Grid.Column="2">
                                                 <TextBlock Text="{Binding DeviceId}"
                                                            Style="{StaticResource Txt.Mono}"
                                                            VerticalAlignment="Center"
@@ -222,15 +203,15 @@
                                                 </Grid>
                                             </Grid>
 
-                                            <Button Grid.Column="5" Style="{StaticResource Btn.Chip}"
+                                            <Button Grid.Column="3" Style="{StaticResource Btn.Chip}"
                                                     Content="QR" Padding="7,5"
                                                     Command="{Binding DataContext.ShowQrCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                     CommandParameter="{Binding}" ToolTip="Показать QR-код студента" />
-                                            <Button Grid.Column="6" Style="{StaticResource Btn.Chip}"
+                                            <Button Grid.Column="4" Style="{StaticResource Btn.Chip}"
                                                     Content="Сбросить" Padding="6,5"
                                                     Command="{Binding DataContext.ResetDeviceCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
                                                     CommandParameter="{Binding}" ToolTip="Очистить ID зарегистрированного телефона" />
-                                            <Button Grid.Column="7"
+                                            <Button Grid.Column="5"
                                                     Style="{StaticResource Btn.Icon}"
                                                     Width="30" Height="30"
                                                     HorizontalAlignment="Center"

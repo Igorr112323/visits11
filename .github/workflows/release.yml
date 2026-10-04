@@ -1,4 +1,4 @@
-name: Validated release v2
+name: Validated release v2.0.1
 
 on:
   push:
@@ -159,7 +159,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create v2.0.0 \
+          gh release create v2.0.1 \
             release-assets/KubGAU-Server.exe \
             release-assets/KubGAU-Journal.exe \
             release-assets/KubGAU-Teacher.apk \
@@ -167,5 +167,5 @@ jobs:
             release-assets/Visits11-Student-iOS-unsigned.ipa \
             --target "$GITHUB_SHA" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "КубГАУ · Учёт посещаемости v2.0.0" \
-            --notes "Windows, Android и iOS build/test artifacts from the cross-platform QR attendance workflow. iOS IPA is unsigned; sign it with an Apple Developer account or Sideloadly before installing. BLE/NFC device flows require physical phones and are not verified by CI."
+            --title "КубГАУ · Учёт посещаемости v2.0.1" \
+            --notes "v2.0.1: Android-приложение студента остаётся на экране входа при запуске; QR-сканер открывается по кнопке, а доступ к камере запрашивается и обрабатывается явно. В релиз входят успешно собранные CI-версии Windows, Android и iOS. iOS IPA без подписи; перед установкой её нужно подписать Apple Developer Account или Sideloadly. Реальные NFC/BLE-касания требуют устройств и CI не проверяются."
