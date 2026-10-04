@@ -32,6 +32,18 @@ public sealed class DatabaseService
         return connection;
     }
 
+    private static Student ReadStudent(SqliteDataReader reader) => new()
+    {
+        Id = reader.GetInt32(0),
+        GroupId = reader.GetInt32(1),
+        FullName = reader.GetString(2),
+        Login = reader.GetString(3),
+        Password = reader.GetString(4),
+        PhoneId = reader.IsDBNull(5) ? null : reader.GetString(5),
+        DeviceId = reader.IsDBNull(6) ? null : reader.GetString(6),
+        QrId = reader.IsDBNull(7) ? string.Empty : reader.GetString(7),
+    };
+
     public void Initialize()
     {
         using var connection = Open();
@@ -51,6 +63,7 @@ public sealed class DatabaseService
               Password TEXT NOT NULL,
               PhoneId TEXT NULL,
               DeviceId TEXT NULL,
+              QrId TEXT NULL,
               FOREIGN KEY (GroupId) REFERENCES Groups(Id) ON DELETE CASCADE
             );
 
@@ -68,6 +81,8 @@ public sealed class DatabaseService
               StudentId INTEGER NOT NULL,
               Status TEXT NOT NULL,
               MarkedAt TEXT NOT NULL,
+              DeviceMismatch INTEGER NOT NULL DEFAULT 0,
+              ObservedDeviceId TEXT NULL,
               FOREIGN KEY (LessonId) REFERENCES Lessons(Id) ON DELETE CASCADE,
               FOREIGN KEY (StudentId) REFERENCES Students(Id) ON DELETE CASCADE
             );
@@ -79,16 +94,46 @@ public sealed class DatabaseService
             """;
         command.ExecuteNonQuery();
 
-        // привязка аккаунта к устройству (для старых баз — добавляем колонку)
+        TryAddColumn(connection, "ALTER TABLE Students ADD COLUMN DeviceId TEXT NULL");
+        TryAddColumn(connection, "ALTER TABLE Students ADD COLUMN QrId TEXT NULL");
+        TryAddColumn(connection, "ALTER TABLE Attendance ADD COLUMN DeviceMismatch INTEGER NOT NULL DEFAULT 0");
+        TryAddColumn(connection, "ALTER TABLE Attendance ADD COLUMN ObservedDeviceId TEXT NULL");
+
+        using (var fill = connection.CreateCommand())
+        {
+            fill.CommandText = "SELECT Id FROM Students WHERE QrId IS NULL OR TRIM(QrId) = ''";
+            var ids = new List<int>();
+            using (var reader = fill.ExecuteReader())
+            {
+                while (reader.Read()) ids.Add(reader.GetInt32(0));
+            }
+            foreach (var id in ids)
+            {
+                using var update = connection.CreateCommand();
+                update.CommandText = "UPDATE Students SET QrId = @qrId WHERE Id = @id";
+                update.Parameters.AddWithValue("@qrId", Guid.NewGuid().ToString("N"));
+                update.Parameters.AddWithValue("@id", id);
+                update.ExecuteNonQuery();
+            }
+        }
+
+        using (var index = connection.CreateCommand())
+        {
+            index.CommandText = "DELETE FROM Attendance WHERE Id NOT IN (SELECT MAX(Id) FROM Attendance GROUP BY LessonId, StudentId); CREATE UNIQUE INDEX IF NOT EXISTS IX_Students_QrId ON Students(QrId) WHERE QrId IS NOT NULL; CREATE UNIQUE INDEX IF NOT EXISTS IX_Attendance_Lesson_Student ON Attendance(LessonId, StudentId);";
+            index.ExecuteNonQuery();
+        }
+    }
+
+    private static void TryAddColumn(SqliteConnection connection, string sql)
+    {
         try
         {
-            using var alter = connection.CreateCommand();
-            alter.CommandText = "ALTER TABLE Students ADD COLUMN DeviceId TEXT NULL";
-            alter.ExecuteNonQuery();
+            using var command = connection.CreateCommand();
+            command.CommandText = sql;
+            command.ExecuteNonQuery();
         }
-        catch
+        catch (SqliteException)
         {
-            // колонка уже есть
         }
     }
 
@@ -111,6 +156,27 @@ public sealed class DatabaseService
         command.Parameters.AddWithValue("@device", deviceId);
         command.Parameters.AddWithValue("@id", studentId);
         command.ExecuteNonQuery();
+    }
+
+    public void ResetDeviceId(int studentId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE Students SET DeviceId = NULL WHERE Id = @id";
+        command.Parameters.AddWithValue("@id", studentId);
+        command.ExecuteNonQuery();
+        RaiseDataChanged();
+    }
+
+    public Student? FindByQrId(string qrId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Id, GroupId, FullName, Login, Password, PhoneId, DeviceId, QrId FROM Students WHERE QrId = @qrId LIMIT 1";
+        command.Parameters.AddWithValue("@qrId", qrId);
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return null;
+        return ReadStudent(reader);
     }
 
     /// <summary>Студент, к чьему аккаунту привязано устройство; null — устройство неизвестно.</summary>
@@ -241,21 +307,13 @@ public sealed class DatabaseService
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Id, GroupId, FullName, Login, Password, PhoneId FROM Students WHERE GroupId = @id ORDER BY Id";
+        command.CommandText = "SELECT Id, GroupId, FullName, Login, Password, PhoneId, DeviceId, QrId FROM Students WHERE GroupId = @id ORDER BY Id";
         command.Parameters.AddWithValue("@id", groupId);
         using var reader = command.ExecuteReader();
         var list = new List<Student>();
         while (reader.Read())
         {
-            list.Add(new Student
-            {
-                Id = reader.GetInt32(0),
-                GroupId = reader.GetInt32(1),
-                FullName = reader.GetString(2),
-                Login = reader.GetString(3),
-                Password = reader.GetString(4),
-                PhoneId = reader.IsDBNull(5) ? null : reader.GetString(5),
-            });
+            list.Add(ReadStudent(reader));
         }
         return list;
     }
@@ -265,19 +323,11 @@ public sealed class DatabaseService
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Id, GroupId, FullName, Login, Password, PhoneId FROM Students WHERE Login = @login COLLATE NOCASE LIMIT 1";
+        command.CommandText = "SELECT Id, GroupId, FullName, Login, Password, PhoneId, DeviceId, QrId FROM Students WHERE Login = @login COLLATE NOCASE LIMIT 1";
         command.Parameters.AddWithValue("@login", login);
         using var reader = command.ExecuteReader();
         if (!reader.Read()) return null;
-        return new Student
-        {
-            Id = reader.GetInt32(0),
-            GroupId = reader.GetInt32(1),
-            FullName = reader.GetString(2),
-            Login = reader.GetString(3),
-            Password = reader.GetString(4),
-            PhoneId = reader.IsDBNull(5) ? null : reader.GetString(5),
-        };
+        return ReadStudent(reader);
     }
 
     public bool LoginExists(string login)
@@ -293,15 +343,17 @@ public sealed class DatabaseService
         using var connection = Open();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO Students (GroupId, FullName, Login, Password, PhoneId)
-            VALUES (@groupId, @fullName, @login, @password, @phoneId);
+            INSERT INTO Students (GroupId, FullName, Login, Password, PhoneId, QrId)
+            VALUES (@groupId, @fullName, @login, @password, @phoneId, @qrId);
             SELECT last_insert_rowid();
             """;
+        student.QrId = string.IsNullOrWhiteSpace(student.QrId) ? Guid.NewGuid().ToString("N") : student.QrId;
         command.Parameters.AddWithValue("@groupId", student.GroupId);
         command.Parameters.AddWithValue("@fullName", student.FullName);
         command.Parameters.AddWithValue("@login", student.Login);
         command.Parameters.AddWithValue("@password", student.Password);
         command.Parameters.AddWithValue("@phoneId", (object?)student.PhoneId ?? DBNull.Value);
+        command.Parameters.AddWithValue("@qrId", student.QrId);
         student.Id = Convert.ToInt32(command.ExecuteScalar());
         RaiseDataChanged();
     }
@@ -312,17 +364,20 @@ public sealed class DatabaseService
         using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO Students (GroupId, FullName, Login, Password, PhoneId)
-            VALUES (@groupId, @fullName, @login, @password, @phoneId);
+            INSERT INTO Students (GroupId, FullName, Login, Password, PhoneId, QrId)
+            VALUES (@groupId, @fullName, @login, @password, @phoneId, @qrId);
             """;
         var pGroupId = command.Parameters.Add("@groupId", SqliteType.Integer);
         var pFullName = command.Parameters.Add("@fullName", SqliteType.Text);
         var pLogin = command.Parameters.Add("@login", SqliteType.Text);
         var pPassword = command.Parameters.Add("@password", SqliteType.Text);
         var pPhoneId = command.Parameters.Add("@phoneId", SqliteType.Text);
+        var pQrId = command.Parameters.Add("@qrId", SqliteType.Text);
 
         foreach (var student in students)
         {
+            student.QrId = string.IsNullOrWhiteSpace(student.QrId) ? Guid.NewGuid().ToString("N") : student.QrId;
+            pQrId.Value = student.QrId;
             pGroupId.Value = student.GroupId;
             pFullName.Value = student.FullName;
             pLogin.Value = student.Login;
@@ -398,7 +453,7 @@ public sealed class DatabaseService
         using var connection = Open();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT s.Id, s.FullName, a.Status
+            SELECT s.Id, s.FullName, a.Status, COALESCE(a.DeviceMismatch, 0)
             FROM Students s
             LEFT JOIN Attendance a ON a.StudentId = s.Id AND a.LessonId = @lessonId
             WHERE s.GroupId = (SELECT GroupId FROM Lessons WHERE Id = @lessonId)
@@ -414,33 +469,64 @@ public sealed class DatabaseService
                 StudentId = reader.GetInt32(0),
                 FullName = reader.GetString(1),
                 Present = !reader.IsDBNull(2) && reader.GetString(2) == "present",
+                DeviceMismatch = !reader.IsDBNull(3) && reader.GetInt32(3) != 0,
             });
         }
         return list;
     }
 
-    public void AddAttendance(int lessonId, IEnumerable<(int StudentId, bool Present, string MarkedAt)> rows)
+    public int? FindLessonIdAt(DateTime localTimestamp, int groupId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT Id FROM Lessons WHERE GroupId = @groupId AND StartedAt <= @time AND (FinishedAt IS NULL OR FinishedAt >= @time) ORDER BY StartedAt DESC LIMIT 1";
+        command.Parameters.AddWithValue("@groupId", groupId);
+        command.Parameters.AddWithValue("@time", localTimestamp.ToString("yyyy-MM-dd HH:mm:ss"));
+        return command.ExecuteScalar() is long value ? (int)value : null;
+    }
+
+    public void UpsertAttendance(int lessonId, int studentId, string markedAt, bool mismatch, string? observedDeviceId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "INSERT INTO Attendance (LessonId, StudentId, Status, MarkedAt, DeviceMismatch, ObservedDeviceId) VALUES (@lessonId, @studentId, 'present', @markedAt, @mismatch, @device) ON CONFLICT(LessonId, StudentId) DO UPDATE SET Status = 'present', MarkedAt = excluded.MarkedAt, DeviceMismatch = MAX(Attendance.DeviceMismatch, excluded.DeviceMismatch), ObservedDeviceId = CASE WHEN excluded.DeviceMismatch = 1 THEN excluded.ObservedDeviceId ELSE Attendance.ObservedDeviceId END";
+        command.Parameters.AddWithValue("@lessonId", lessonId);
+        command.Parameters.AddWithValue("@studentId", studentId);
+        command.Parameters.AddWithValue("@markedAt", markedAt);
+        command.Parameters.AddWithValue("@mismatch", mismatch ? 1 : 0);
+        command.Parameters.AddWithValue("@device", (object?)observedDeviceId ?? DBNull.Value);
+        command.ExecuteNonQuery();
+        RaiseDataChanged();
+    }
+
+    public void AddAttendance(int lessonId, IEnumerable<(int StudentId, bool Present, string MarkedAt, bool DeviceMismatch, string? ObservedDeviceId)> rows)
     {
         using var connection = Open();
         using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO Attendance (LessonId, StudentId, Status, MarkedAt)
-            VALUES (@lessonId, @studentId, @status, @markedAt);
+            INSERT INTO Attendance (LessonId, StudentId, Status, MarkedAt, DeviceMismatch, ObservedDeviceId)
+            VALUES (@lessonId, @studentId, @status, @markedAt, @mismatch, @device)
+            ON CONFLICT(LessonId, StudentId) DO UPDATE SET Status = excluded.Status, MarkedAt = excluded.MarkedAt, DeviceMismatch = excluded.DeviceMismatch, ObservedDeviceId = excluded.ObservedDeviceId;
             """;
         var pLessonId = command.Parameters.Add("@lessonId", SqliteType.Integer);
         var pStudentId = command.Parameters.Add("@studentId", SqliteType.Integer);
         var pStatus = command.Parameters.Add("@status", SqliteType.Text);
         var pMarkedAt = command.Parameters.Add("@markedAt", SqliteType.Text);
+        var pMismatch = command.Parameters.Add("@mismatch", SqliteType.Integer);
+        var pDevice = command.Parameters.Add("@device", SqliteType.Text);
 
-        foreach (var (studentId, present, markedAt) in rows)
+        foreach (var (studentId, present, markedAt, mismatch, observedDeviceId) in rows)
         {
             pLessonId.Value = lessonId;
             pStudentId.Value = studentId;
             pStatus.Value = present ? "present" : "absent";
             pMarkedAt.Value = markedAt;
+            pMismatch.Value = mismatch ? 1 : 0;
+            pDevice.Value = (object?)observedDeviceId ?? DBNull.Value;
             command.ExecuteNonQuery();
         }
         transaction.Commit();
+        RaiseDataChanged();
     }
 }

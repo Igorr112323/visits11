@@ -204,7 +204,7 @@
                                 </ItemsControl.ItemContainerStyle>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Padding="0,10" BorderBrush="{DynamicResource Brush.Border}"
+                                        <Border x:Name="Row" Padding="0,10" BorderBrush="{DynamicResource Brush.Border}"
                                                 BorderThickness="0,0,0,1">
                                             <Grid>
                                                 <Grid.ColumnDefinitions>
@@ -216,17 +216,21 @@
                                                            FontSize="12" FontFamily="{StaticResource Font.Medium}"
                                                            Foreground="{DynamicResource Brush.TextSoft}"
                                                            VerticalAlignment="Center" />
-                                                <TextBlock Grid.Column="1" Text="{Binding FullName}"
-                                                           Style="{StaticResource Txt.Body}"
-                                                           TextTrimming="CharacterEllipsis"
-                                                           VerticalAlignment="Center" />
+                                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding FullName}"
+                                                               Style="{StaticResource Txt.Body}"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock x:Name="DeviceWarn" Text="⚠ ID телефона не совпадает с зарегистрированным"
+                                                               FontSize="10" Foreground="{DynamicResource Brush.Red}"
+                                                               Visibility="Collapsed" Margin="0,3,0,0" />
+                                                </StackPanel>
                                                 <Border Grid.Column="2" CornerRadius="20" Padding="11,4"
                                                         HorizontalAlignment="Left"
                                                         Background="{DynamicResource Brush.RedSoft}"
                                                         TextElement.Foreground="{DynamicResource Brush.Red}">
                                                     <TextBlock Text="{Binding StatusText}" Style="{StaticResource Txt.Badge}" />
                                                 </Border>
-                                                <Border Grid.Column="2" CornerRadius="20" Padding="11,4"
+                                                <Border x:Name="PresentBadge" Grid.Column="2" CornerRadius="20" Padding="11,4"
                                                         HorizontalAlignment="Left"
                                                         Background="{DynamicResource Brush.GreenSoft}"
                                                         TextElement.Foreground="{DynamicResource Brush.Green}"
@@ -235,6 +239,14 @@
                                                 </Border>
                                             </Grid>
                                         </Border>
+                                        <DataTemplate.Triggers>
+                                            <DataTrigger Binding="{Binding DeviceMismatch}" Value="True">
+                                                <Setter TargetName="Row" Property="Background" Value="#22D34D4D" />
+                                                <Setter TargetName="PresentBadge" Property="Background" Value="#33D34D4D" />
+                                                <Setter TargetName="PresentBadge" Property="TextElement.Foreground" Value="{DynamicResource Brush.Red}" />
+                                                <Setter TargetName="DeviceWarn" Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </DataTemplate.Triggers>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>

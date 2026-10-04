@@ -1,16 +1,37 @@
 package ru.visits11.teacher;
 
+import android.Manifest;
 import android.app.Activity;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothGatt;
+import android.bluetooth.BluetoothGattCallback;
+import android.bluetooth.BluetoothGattCharacteristic;
+import android.bluetooth.BluetoothGattService;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothProfile;
+import android.bluetooth.BluetoothStatusCodes;
+import android.bluetooth.le.BluetoothLeScanner;
+import android.bluetooth.le.ScanCallback;
+import android.bluetooth.le.ScanFilter;
+import android.bluetooth.le.ScanResult;
+import android.bluetooth.le.ScanSettings;
+import android.content.Context;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.nfc.NfcAdapter;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.ParcelUuid;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import org.json.JSONObject;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -21,8 +42,16 @@ import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -34,10 +63,38 @@ import java.util.concurrent.TimeUnit;
 public final class MainActivity extends Activity {
 
     private static final int SERVER_PORT = 8090;
-    private static final long FRAME_WAIT_MS = 800;   // pacing для /frame (кадров больше нет)
-    private static final long PC_TIMEOUT_MS = 3000;  // связь считается потерянной
+    private static final long FRAME_WAIT_MS = 800;
+    private static final long PC_TIMEOUT_MS = 3000;
+    private static final UUID TAP_SERVICE_ID = UUID.fromString("F0391101-0203-4000-8000-00805F9B34FB");
+    private static final UUID IDENTITY_CHARACTERISTIC_ID = UUID.fromString("F0391102-0203-4000-8000-00805F9B34FB");
+    private static final UUID MARK_CHARACTERISTIC_ID = UUID.fromString("F0391103-0203-4000-8000-00805F9B34FB");
+    private static final int BLE_PERMISSION_REQUEST = 41;
 
     private TextView statusText;
+    private BluetoothAdapter bluetoothAdapter;
+    private BluetoothLeScanner bleScanner;
+    private volatile boolean bleScanning;
+    private volatile String tapFeedback = "";
+    private volatile long tapFeedbackAt;
+    private final Set<String> connectingDevices = Collections.synchronizedSet(new HashSet<>());
+    private final Map<String, Long> lastTapByDevice = Collections.synchronizedMap(new HashMap<>());
+    private final ScanCallback scanCallback = new ScanCallback() {
+        @Override
+        public void onScanResult(int callbackType, ScanResult result) {
+            connectToStudent(result.getDevice());
+        }
+
+        @Override
+        public void onBatchScanResults(List<ScanResult> results) {
+            for (ScanResult result : results) connectToStudent(result.getDevice());
+        }
+
+        @Override
+        public void onScanFailed(int errorCode) {
+            bleScanning = false;
+            toast("BLE-сканирование не запустилось: " + errorCode);
+        }
+    };
 
     private ServerSocket serverSocket;
     private volatile boolean serverRunning;
@@ -80,6 +137,7 @@ public final class MainActivity extends Activity {
         });
 
         startServer();
+        ensureBlePermissions();
         ui.post(statusTicker);
     }
 
@@ -87,8 +145,194 @@ public final class MainActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         ui.removeCallbacks(statusTicker);
+        stopBleScan();
         serverRunning = false;
         closeQuietly(serverSocket);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        startBleScan();
+    }
+
+    @Override
+    protected void onPause() {
+        stopBleScan();
+        super.onPause();
+    }
+
+    private void ensureBlePermissions() {
+        if (Build.VERSION.SDK_INT >= 31) {
+            List<String> missing = new ArrayList<>();
+            if (checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED)
+                missing.add(Manifest.permission.BLUETOOTH_SCAN);
+            if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED)
+                missing.add(Manifest.permission.BLUETOOTH_CONNECT);
+            if (!missing.isEmpty()) requestPermissions(missing.toArray(new String[0]), BLE_PERMISSION_REQUEST);
+        } else if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, BLE_PERMISSION_REQUEST);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == BLE_PERMISSION_REQUEST) startBleScan();
+    }
+
+    private boolean blePermissionsGranted() {
+        if (Build.VERSION.SDK_INT >= 31) {
+            return checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+                    && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
+        }
+        return Build.VERSION.SDK_INT < 23
+                || checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void startBleScan() {
+        if (bleScanning || !blePermissionsGranted()) return;
+        try {
+            BluetoothManager manager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+            bluetoothAdapter = manager == null ? null : manager.getAdapter();
+            if (bluetoothAdapter == null || !bluetoothAdapter.isEnabled()) {
+                tapFeedback = "Включите Bluetooth для касания iPhone";
+                tapFeedbackAt = SystemClock.elapsedRealtime();
+                return;
+            }
+            bleScanner = bluetoothAdapter.getBluetoothLeScanner();
+            if (bleScanner == null) return;
+            ScanFilter filter = new ScanFilter.Builder().setServiceUuid(new ParcelUuid(TAP_SERVICE_ID)).build();
+            ScanSettings settings = new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build();
+            bleScanner.startScan(Collections.singletonList(filter), settings, scanCallback);
+            bleScanning = true;
+        } catch (SecurityException | IllegalStateException ignored) {
+            bleScanning = false;
+        }
+    }
+
+    private void stopBleScan() {
+        if (!bleScanning || bleScanner == null) return;
+        try {
+            bleScanner.stopScan(scanCallback);
+        } catch (SecurityException | IllegalStateException ignored) {
+        }
+        bleScanning = false;
+    }
+
+    private void connectToStudent(BluetoothDevice device) {
+        if (device == null || !blePermissionsGranted()) return;
+        String address;
+        try {
+            address = device.getAddress();
+        } catch (SecurityException ignored) {
+            return;
+        }
+        long now = SystemClock.elapsedRealtime();
+        Long last = lastTapByDevice.get(address);
+        if (connectingDevices.contains(address) || last != null && now - last < 5000) return;
+        connectingDevices.add(address);
+        lastTapByDevice.put(address, now);
+        final String[] studentName = {"Студент"};
+        try {
+            device.connectGatt(this, false, new BluetoothGattCallback() {
+                @Override
+                public void onConnectionStateChange(BluetoothGatt gatt, int status, int newState) {
+                    if (status == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
+                        if (!gatt.requestMtu(247)) gatt.discoverServices();
+                    } else if (newState == BluetoothProfile.STATE_DISCONNECTED || status != BluetoothGatt.GATT_SUCCESS) {
+                        closeGatt(gatt, address);
+                    }
+                }
+
+                @Override
+                public void onMtuChanged(BluetoothGatt gatt, int mtu, int status) {
+                    gatt.discoverServices();
+                }
+
+                @Override
+                public void onServicesDiscovered(BluetoothGatt gatt, int status) {
+                    if (status != BluetoothGatt.GATT_SUCCESS) {
+                        closeGatt(gatt, address);
+                        return;
+                    }
+                    BluetoothGattService service = gatt.getService(TAP_SERVICE_ID);
+                    BluetoothGattCharacteristic identity = service == null ? null : service.getCharacteristic(IDENTITY_CHARACTERISTIC_ID);
+                    if (identity == null || !gatt.readCharacteristic(identity)) closeGatt(gatt, address);
+                }
+
+                @Override
+                public void onCharacteristicRead(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
+                    if (characteristic.getUuid().equals(IDENTITY_CHARACTERISTIC_ID) && status == BluetoothGatt.GATT_SUCCESS) {
+                        try {
+                            JSONObject identity = new JSONObject(new String(characteristic.getValue(), StandardCharsets.UTF_8));
+                            String studentKey = identity.optString("studentKey", "");
+                            String deviceId = identity.optString("deviceId", "");
+                            studentName[0] = identity.optString("fullName", "Студент");
+                            if (!studentKey.matches("[0-9a-fA-F]{32}") || deviceId.isEmpty()) {
+                                closeGatt(gatt, address);
+                                return;
+                            }
+                            BluetoothGattService service = gatt.getService(TAP_SERVICE_ID);
+                            BluetoothGattCharacteristic mark = service == null ? null : service.getCharacteristic(MARK_CHARACTERISTIC_ID);
+                            if (mark == null || !writeMark(gatt, mark)) closeGatt(gatt, address);
+                        } catch (Exception ignored) {
+                            closeGatt(gatt, address);
+                        }
+                    }
+                }
+
+                @Override
+                public void onCharacteristicWrite(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, int status) {
+                    if (characteristic.getUuid().equals(MARK_CHARACTERISTIC_ID) && status == BluetoothGatt.GATT_SUCCESS) {
+                        completeBleTap(studentName[0]);
+                        closeGatt(gatt, address);
+                    }
+                }
+            }, BluetoothDevice.TRANSPORT_LE);
+        } catch (SecurityException | IllegalArgumentException ignored) {
+            connectingDevices.remove(address);
+        }
+    }
+
+    private boolean writeMark(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic) {
+        byte[] value = "MARK".getBytes(StandardCharsets.UTF_8);
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                return gatt.writeCharacteristic(characteristic, value, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT) == BluetoothStatusCodes.SUCCESS;
+            }
+            characteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+            characteristic.setValue(value);
+            return gatt.writeCharacteristic(characteristic);
+        } catch (SecurityException ignored) {
+            return false;
+        }
+    }
+
+    private void closeGatt(BluetoothGatt gatt, String address) {
+        try {
+            gatt.disconnect();
+            gatt.close();
+        } catch (SecurityException ignored) {
+        }
+        connectingDevices.remove(address);
+    }
+
+    private void completeBleTap(String name) {
+        tapFeedback = "BLE-касание: " + name + " — отметка принята";
+        tapFeedbackAt = SystemClock.elapsedRealtime();
+        vibrate();
+        toast("Отметка принята: " + name);
+        ui.post(this::updateStatus);
+    }
+
+    private void vibrate() {
+        try {
+            android.os.Vibrator vibrator = (android.os.Vibrator) getSystemService(VIBRATOR_SERVICE);
+            if (vibrator != null && vibrator.hasVibrator())
+                vibrator.vibrate(android.os.VibrationEffect.createWaveform(new long[]{0, 70, 50, 70}, -1));
+        } catch (Throwable ignored) {
+        }
     }
 
     // ------------------------------------------------------------ статус связи
@@ -103,11 +347,13 @@ public final class MainActivity extends Activity {
         if (adapter == null) {
             statusText.setText("NFC не поддерживается этим телефоном");
             statusText.setTextColor(0xFFB34A4A);
+            appendTapFeedback();
             return;
         }
         if (!adapter.isEnabled()) {
             statusText.setText("NFC ВЫКЛЮЧЕН — нажмите, чтобы включить");
             statusText.setTextColor(0xFFB34A4A);
+            appendTapFeedback();
             return;
         }
 
@@ -122,6 +368,12 @@ public final class MainActivity extends Activity {
             statusText.setText("Нет связи с ПК — нажмите, чтобы включить USB-модем");
             statusText.setTextColor(0xFFB34A4A);
         }
+        appendTapFeedback();
+    }
+
+    private void appendTapFeedback() {
+        if (!tapFeedback.isEmpty() && SystemClock.elapsedRealtime() - tapFeedbackAt < 5000)
+            statusText.setText(statusText.getText() + "\n" + tapFeedback);
     }
 
     private static final String[][] TETHER_SCREENS = {

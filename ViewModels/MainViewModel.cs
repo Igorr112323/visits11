@@ -1,3 +1,4 @@
+using System.Windows;
 using Visits11.Services;
 
 namespace Visits11.ViewModels;
@@ -8,6 +9,7 @@ namespace Visits11.ViewModels;
 public sealed class MainViewModel : ObservableObject
 {
     private readonly ThemeService _theme;
+    private readonly RemoteSyncService _remoteSync;
 
     public MainViewModel(
         DatabaseService database,
@@ -16,16 +18,26 @@ public sealed class MainViewModel : ObservableObject
         AuthService auth,
         WordService word,
         PhoneServer server,
-        CameraLink camera)
+        CameraLink camera,
+        RemoteSyncService remoteSync)
     {
         _theme = theme;
+        _remoteSync = remoteSync;
         Toasts = toasts;
 
         Lesson = new LessonViewModel(database, toasts, server, camera);
-        Students = new StudentsViewModel(database, toasts, auth, word, this);
+        Students = new StudentsViewModel(database, toasts, auth, word, this, remoteSync);
+        _remoteSync.ProcessMark = mark =>
+        {
+            var processed = false;
+            Application.Current.Dispatcher.Invoke(() => processed = Lesson.ApplyRemoteMark(mark));
+            return processed;
+        };
         Journal = new JournalViewModel(database, toasts, word);
 
         ToggleThemeCommand = new RelayCommand(_ => _theme.Toggle());
+        ConfigureServerCommand = new RelayCommand(_ => ConfigureServer());
+        _remoteSync.StatusChanged += () => Application.Current.Dispatcher.BeginInvoke(new Action(() => OnPropertyChanged(nameof(ServerStatusText))));
         _theme.ThemeChanged += () => OnPropertyChanged(nameof(IsDarkTheme));
 
         _currentTab = Lesson;
@@ -38,8 +50,42 @@ public sealed class MainViewModel : ObservableObject
     public ToastService Toasts { get; }
 
     public RelayCommand ToggleThemeCommand { get; }
+    public RelayCommand ConfigureServerCommand { get; }
 
+    public string ServerStatusText => _remoteSync.StatusLabel;
     public bool IsDarkTheme => _theme.IsDark;
+
+    private void ConfigureServer()
+    {
+        ShowModal(new ModalViewModel
+        {
+            Title = "Подключение к серверу",
+            Message = "Для локального теста укажите LAN-адрес из окна серверного EXE. Преподавательский журнал на этом ПК тоже сможет подключиться к нему.",
+            ShowInput = true,
+            InputLabel = "АДРЕС СЕРВЕРА",
+            Placeholder = "http://192.168.1.10:8091",
+            InputText = _remoteSync.BaseUrl,
+            ShowInput2 = true,
+            InputLabel2 = "КЛЮЧ ПРЕПОДАВАТЕЛЯ",
+            Placeholder2 = "Скопируйте в серверном EXE",
+            InputText2 = _remoteSync.SyncKey,
+            ConfirmText = "Сохранить",
+            OnConfirm = modal =>
+            {
+                try
+                {
+                    _remoteSync.Configure(modal.InputText, modal.InputText2);
+                    Toasts.Success("Сервер настроен", "Подключение проверяется в фоне.");
+                    return true;
+                }
+                catch (Exception exception)
+                {
+                    Toasts.Error("Не удалось сохранить настройки", exception.Message);
+                    return false;
+                }
+            },
+        });
+    }
 
     // ------------------------------------------------------------------ вкладкам
 

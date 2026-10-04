@@ -38,6 +38,9 @@ public sealed class PhoneServer : IDisposable
     public Func<int, string, (bool Ok, bool DeviceBlocked, string Name)> MarkStudent { get; set; } =
         (_, _) => (false, false, "");
 
+    public Func<string, string, (bool Ok, bool DeviceMismatch, string Name)> MarkStudentByQrId { get; set; } =
+        (_, _) => (false, false, "");
+
     /// <summary>PNG текущего QR студента; null — перекличка не активна.</summary>
     public Func<int, byte[]?> GetQrPng { get; set; } = _ => null;
 
@@ -465,7 +468,7 @@ p{color:#9099b8;font-size:13px;margin-top:6px}
     {
         int type = 0;
         long id = 0;
-        string login = "", password = "", token = "", device = "";
+        string login = "", password = "", token = "", device = "", studentKey = "";
         try
         {
             using var doc = JsonDocument.Parse(json);
@@ -489,6 +492,11 @@ p{color:#9099b8;font-size:13px;margin-top:6px}
                 tokenValue.ValueKind == JsonValueKind.String)
             {
                 token = tokenValue.GetString() ?? "";
+            }
+            if (root.TryGetProperty("studentKey", out var studentKeyValue) &&
+                studentKeyValue.ValueKind == JsonValueKind.String)
+            {
+                studentKey = studentKeyValue.GetString() ?? "";
             }
             if (root.TryGetProperty("device", out var deviceValue) &&
                 deviceValue.ValueKind == JsonValueKind.String)
@@ -527,6 +535,17 @@ p{color:#9099b8;font-size:13px;margin-top:6px}
                 return RelayJson(4, string.Empty, id);
             }
             return RelayJson(0, IssueToken(loginResult.StudentId), id);
+        }
+
+        if (type == 3)
+        {
+            var mark = OnUi(() => MarkStudentByQrId(studentKey, device));
+            if (!mark.Ok)
+            {
+                OnUi(() => { NfcMarkFailed?.Invoke(); return true; });
+                return RelayJson(4, string.Empty, id);
+            }
+            return RelayJson(1, mark.Name, id);
         }
 
         if (type == 2)

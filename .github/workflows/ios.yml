@@ -1,4 +1,4 @@
-name: Build iOS
+name: iOS student application
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   ios:
@@ -24,10 +24,9 @@ jobs:
         working-directory: ios
         run: |
           xcodegen generate
-          # XcodeGen пишет формат Xcode 16 (objectVersion 77), а на раннере Xcode 15 — понижаем
           sed -i '' 's/objectVersion = 77;/objectVersion = 56;/' Visits11Student.xcodeproj/project.pbxproj
 
-      - name: Build unsigned app (проверка компиляции)
+      - name: Build unsigned iOS app
         working-directory: ios
         run: |
           xcodebuild -project Visits11Student.xcodeproj \
@@ -37,40 +36,22 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             clean build > build.log 2>&1 || {
-              grep -m 5 "error:" build.log | while read -r line; do echo "::error::$line"; done
-              tail -5 build.log | while read -r line; do echo "::error::$line"; done
+              grep -m 10 "error:" build.log | while read -r line; do echo "::error::$line"; done
+              tail -20 build.log | while read -r line; do echo "::error::$line"; done
               exit 1
             }
 
-      - name: Diagnostics (схема/список)
-        if: failure()
+      - name: Package unsigned IPA
         working-directory: ios
         run: |
-          xcodebuild -project Visits11Student.xcodeproj -list 2>&1 | head -14 | while read -r line; do echo "::error::LIST: $line"; done
+          mkdir -p Payload dist
+          cp -R build/Build/Products/Release-iphoneos/Visits11Student.app Payload/
+          zip -qry dist/Visits11-Student-iOS-unsigned.ipa Payload
 
-      - name: Package unsigned .ipa (подписывается через Sideloadly своим Apple ID)
-        working-directory: ios
-        run: |
-          mkdir Payload
-          cp -r build/Build/Products/Release-iphoneos/Visits11Student.app Payload/
-          zip -qry Visits11-Student-iOS-unsigned.ipa Payload
-          cp Visits11-Student-iOS-unsigned.ipa ..
-
-      - name: Upload artifact
+      - name: Upload iOS artifact
         uses: actions/upload-artifact@v7
         with:
-          name: Visits11-Student-iOS-unsigned-ipa
-          path: Visits11-Student-iOS-unsigned.ipa
-
-      - name: Publish to release v1.0.0
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release upload v1.0.0 Visits11-Student-iOS-unsigned.ipa --clobber --repo "$GITHUB_REPOSITORY"
-          else
-            gh release create v1.0.0 Visits11-Student-iOS-unsigned.ipa \
-              --title "Visits11 v1.0.0" \
-              --notes "Учёт посещаемости — офлайн. Exe для ПК, APK преподавателя и студента, iOS-приложение студента." \
-              --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY"
-          fi
+          name: KubGAU-iOS-unsigned
+          path: ios/dist/Visits11-Student-iOS-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30

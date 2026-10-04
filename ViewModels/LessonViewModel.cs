@@ -16,7 +16,8 @@ public sealed class StudentRow : ObservableObject
     public int StudentId { get; init; }
     public int Number { get; init; }
     public string FullName { get; init; } = string.Empty;
-    public string? PhoneId { get; set; }
+    public string? DeviceId { get; set; }
+    public string? ObservedDeviceId { get; set; }
 
     private bool _isPresent;
     public bool IsPresent
@@ -93,6 +94,14 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         // сервер спрашивает нас про вход студентов и просит свежий QR для показа
         _server.Login = LoginInternal;
         _server.MarkStudent = MarkStudentInternal;
+        _server.MarkStudentByQrId = (studentKey, device) =>
+        {
+            var student = _database.FindByQrId(studentKey);
+            if (student is null) return (false, false, string.Empty);
+            var result = MarkStudentInternal(student.Id, device);
+            var row = Rows.FirstOrDefault(item => item.StudentId == student.Id);
+            return (result.Ok, row?.Suspicious ?? false, result.Name);
+        };
         _server.GetQrPng = BuildQrPng;
 
         // токены сессий храним в базе: перезапуск ПК не выбрасывает
@@ -342,47 +351,87 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         var row = Rows.FirstOrDefault(r => r.StudentId == studentId);
         if (row is null) return (false, false, string.Empty);
 
-        // отметка с чужого телефона не проходит
-        if (device.Length > 0)
+        var mismatch = false;
+        if (!string.IsNullOrWhiteSpace(device))
         {
-            // телефон уже принадлежит другому студенту — подсвечиваем владельца
             var owner = _database.FindStudentIdByDevice(device);
-            if (owner is int ownerId && ownerId != studentId)
-            {
-                FlagSuspicious(ownerId, row.FullName);
-                return (false, true, string.Empty);
-            }
-
+            mismatch = owner is int ownerId && ownerId != studentId;
             var bound = _database.GetDeviceId(studentId);
-            if (bound is null)
+            mismatch |= bound is not null && !string.Equals(bound, device, StringComparison.Ordinal);
+            if (bound is null && !mismatch) _database.SetDeviceId(studentId, device);
+            if (mismatch)
             {
-                _database.SetDeviceId(studentId, device);
-            }
-            else if (bound != device)
-            {
-                return (false, true, string.Empty);
+                row.Suspicious = true;
+                row.ObservedDeviceId = device;
+                FlagSuspicious(owner ?? studentId, row.FullName);
             }
         }
 
         if (!row.IsPresent)
         {
-            MarkRow(row);
+            MarkRow(row, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), mismatch, device);
             _toasts.Success("Отмечен", row.FullName);
         }
         return (true, false, row.FullName);
+    }
+
+    public bool ApplyRemoteMark(RemoteMark mark)
+    {
+        var student = _database.FindByQrId(mark.StudentKey);
+        if (student is null)
+        {
+            _toasts.Error("Неизвестный QR-код", "Отметка получена для студента, которого нет в журнале.");
+            return true;
+        }
+        if (!DateTimeOffset.TryParse(mark.OccurredAt, out var occurred)) return true;
+
+        var localTime = occurred.LocalDateTime;
+        var markedAt = localTime.ToString("yyyy-MM-dd HH:mm:ss");
+        var registered = _database.GetDeviceId(student.Id);
+        var mismatch = registered is not null && !string.Equals(registered, mark.DeviceId, StringComparison.Ordinal);
+        var owner = _database.FindStudentIdByDevice(mark.DeviceId);
+        mismatch |= owner is int ownerId && ownerId != student.Id;
+        if (registered is null && !mismatch && !string.IsNullOrWhiteSpace(mark.DeviceId))
+            _database.SetDeviceId(student.Id, mark.DeviceId);
+
+        var activeStart = DateTime.TryParse(_lessonStartedAt, out var parsedStart) ? parsedStart : DateTime.MinValue;
+        var belongsToActive = RollcallState == StateActive
+            && SelectedGroup?.Id == student.GroupId
+            && localTime >= activeStart.AddMinutes(-2)
+            && localTime <= DateTime.Now.AddMinutes(2);
+        if (belongsToActive)
+        {
+            var row = Rows.FirstOrDefault(item => item.StudentId == student.Id);
+            if (row is null) return false;
+            if (mismatch)
+            {
+                row.Suspicious = true;
+                row.ObservedDeviceId = mark.DeviceId;
+                FlagSuspicious(owner ?? student.Id, student.FullName);
+            }
+            if (!row.IsPresent) MarkRow(row, markedAt, mismatch, mark.DeviceId);
+            return true;
+        }
+
+        var lessonId = _database.FindLessonIdAt(localTime, student.GroupId);
+        if (lessonId is null)
+        {
+            if (RollcallState == StateActive) return false;
+            return false;
+        }
+
+        if (mismatch) _toasts.Error("ID телефона не совпадает", $"Отметка «{student.FullName}» сохранена с другого устройства.");
+        _database.UpsertAttendance(lessonId.Value, student.Id, markedAt, mismatch, mark.DeviceId);
+        return true;
     }
 
     /// <summary>Телефон студента пытались использовать для отметки другого — подсвечиваем его строку.</summary>
     private void FlagSuspicious(int ownerId, string attemptedName)
     {
         var row = Rows.FirstOrDefault(r => r.StudentId == ownerId);
-        if (row is not null)
-        {
-            row.Suspicious = true;
-        }
-        var ownerName = row?.FullName ?? _database.GetStudentName(ownerId) ?? "неизвестного студента";
-        _toasts.Error("Что-то не так",
-            $"Телефон студента {ownerName} использовали для отметки «{attemptedName}»");
+        if (row is not null) row.Suspicious = true;
+        _toasts.Error("ID телефона не совпадает",
+            $"Отметка «{attemptedName}» сохранена, но устройство отличается от зарегистрированного.");
     }
 
     // --------------------------------------------------------------- перекличка
@@ -466,16 +515,12 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         }
     }
 
-    private void MarkRow(StudentRow row)
+    private void MarkRow(StudentRow row, string? markedAt = null, bool deviceMismatch = false, string? observedDeviceId = null)
     {
         row.IsPresent = true;
-        row.MarkedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-
-        if (row.PhoneId is null)
-        {
-            row.PhoneId = AuthService.GeneratePhoneId();
-            _database.UpdateStudentPhoneId(row.StudentId, row.PhoneId);
-        }
+        row.MarkedAt = markedAt ?? DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+        row.Suspicious |= deviceMismatch;
+        row.ObservedDeviceId = observedDeviceId;
 
         RecalcStats();
 
@@ -492,7 +537,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         {
             var lessonId = _database.AddLesson(SelectedGroup.Id, _lessonStartedAt, now);
             _database.AddAttendance(lessonId, Rows.Select(r =>
-                (r.StudentId, r.IsPresent, r.MarkedAt ?? now)));
+                (r.StudentId, r.IsPresent, r.MarkedAt ?? now, r.Suspicious, r.ObservedDeviceId)));
         }
 
         RollcallState = StateFinished;
@@ -533,7 +578,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
     private void OnDataChanged()
     {
         // снимок отметок ДО перезагрузки (ReloadGroups сам сбрасывает список)
-        var marked = Rows.Where(r => r.IsPresent).ToDictionary(r => r.StudentId, r => r.MarkedAt);
+        var marked = Rows.Where(r => r.IsPresent).ToDictionary(r => r.StudentId, r => (r.MarkedAt, r.Suspicious, r.ObservedDeviceId));
 
         ReloadGroups();
 
@@ -542,10 +587,12 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
             LoadStudents();
             foreach (var row in Rows)
             {
-                if (marked.TryGetValue(row.StudentId, out var markedAt))
+                if (marked.TryGetValue(row.StudentId, out var mark))
                 {
                     row.IsPresent = true;
-                    row.MarkedAt = markedAt;
+                    row.MarkedAt = mark.MarkedAt;
+                    row.Suspicious = mark.Suspicious;
+                    row.ObservedDeviceId = mark.ObservedDeviceId;
                 }
             }
             RecalcStats();
@@ -588,7 +635,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
                 StudentId = student.Id,
                 Number = number++,
                 FullName = student.FullName,
-                PhoneId = student.PhoneId,
+                DeviceId = student.DeviceId,
             });
         }
         RecalcStats();

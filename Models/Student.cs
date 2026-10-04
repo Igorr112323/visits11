@@ -8,4 +8,6 @@ public sealed class Student
     public string Login { get; set; } = string.Empty;
     public string Password { get; set; } = string.Empty;
     public string? PhoneId { get; set; }
+    public string? DeviceId { get; set; }
+    public string QrId { get; set; } = string.Empty;
 }

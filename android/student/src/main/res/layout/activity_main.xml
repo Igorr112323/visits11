@@ -4,39 +4,26 @@
     android:layout_height="match_parent"
     android:background="@color/bg">
 
-    <!-- логотип КубГАУ -->
     <ImageView
         android:layout_width="110dp"
         android:layout_height="110dp"
         android:layout_gravity="top|center_horizontal"
         android:layout_marginTop="40dp"
+        android:contentDescription="КубГАУ"
         android:scaleType="fitCenter"
-        android:src="@drawable/logo"
-        android:contentDescription="КубГАУ" />
+        android:src="@drawable/logo" />
 
-    <!-- QR-код на весь экран (обновляется с ПК каждые 5 секунд) -->
-    <ImageView
-        android:id="@+id/qrView"
-        android:layout_width="300dp"
-        android:layout_height="300dp"
-        android:layout_gravity="center"
-        android:scaleType="fitCenter"
-        android:contentDescription="QR"
-        android:visibility="gone" />
-
-    <!-- статус, когда QR показать нельзя -->
     <TextView
         android:id="@+id/statusText"
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_gravity="center"
         android:gravity="center"
         android:padding="32dp"
         android:textColor="@color/textDim"
-        android:textSize="15sp"
+        android:textSize="16sp"
         android:visibility="gone" />
 
-    <!-- вход при первом запуске -->
     <LinearLayout
         android:id="@+id/loginPanel"
         android:layout_width="wrap_content"
@@ -45,39 +32,18 @@
         android:background="@drawable/card_bg"
         android:orientation="vertical"
         android:paddingStart="24dp"
-        android:paddingEnd="24dp"
         android:paddingTop="26dp"
+        android:paddingEnd="24dp"
         android:paddingBottom="24dp"
         android:visibility="gone">
 
-        <EditText
-            android:id="@+id/loginInput"
+        <TextView
             android:layout_width="260dp"
             android:layout_height="wrap_content"
-            android:background="@drawable/input_bg"
-            android:hint="Логин"
-            android:textColorHint="@color/textDim"
-            android:inputType="text"
-            android:maxLines="1"
-            android:imeOptions="actionNext"
-            android:padding="14dp"
-            android:textSize="15sp"
-            android:textColor="@color/text" />
-
-        <EditText
-            android:id="@+id/passwordInput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:background="@drawable/input_bg"
-            android:hint="Пароль"
-            android:textColorHint="@color/textDim"
-            android:inputType="textPassword"
-            android:maxLines="1"
-            android:imeOptions="actionDone"
-            android:padding="14dp"
-            android:textSize="15sp"
-            android:textColor="@color/text" />
+            android:gravity="center"
+            android:text="Отсканируйте QR-код студента"
+            android:textColor="@color/text"
+            android:textSize="16sp" />
 
         <Button
             android:id="@+id/loginButton"
@@ -86,20 +52,10 @@
             android:layout_marginTop="16dp"
             android:background="@drawable/button_bg"
             android:stateListAnimator="@null"
-            android:text="Войти"
+            android:text="Сканировать QR-код"
             android:textAllCaps="false"
             android:textColor="#FFFFFF"
             android:textSize="15sp" />
     </LinearLayout>
-
-    <!-- индикатор связи с ПК -->
-    <View
-        android:id="@+id/dot"
-        android:layout_width="16dp"
-        android:layout_height="16dp"
-        android:layout_gravity="top|end"
-        android:layout_marginTop="22dp"
-        android:layout_marginEnd="22dp"
-        android:background="@drawable/dot_red" />
 
 </FrameLayout>

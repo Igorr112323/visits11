@@ -20,6 +20,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="Server\**\*.cs" />
+    <Page Remove="Server\**\*.xaml" />
+    <ApplicationDefinition Remove="Server\**\*.xaml" />
+    <None Remove="Server\**\*" />
+    <Compile Remove="tests\**\*.cs" />
+    <None Remove="tests\**\*" />
     <Resource Include="Assets\Fonts\*.ttf" />
   </ItemGroup>
 

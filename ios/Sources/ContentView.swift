@@ -1,222 +1,410 @@
+import Foundation
 import SwiftUI
-import CoreNFC
+import AVFoundation
+import CoreBluetooth
+import Combine
 import UIKit
 
-// MARK: - константы
+private let tapServiceId = CBUUID(string: "F0391101-0203-4000-8000-00805F9B34FB")
+private let identityCharacteristicId = CBUUID(string: "F0391102-0203-4000-8000-00805F9B34FB")
+private let markCharacteristicId = CBUUID(string: "F0391103-0203-4000-8000-00805F9B34FB")
 
-private let aid: [UInt8] = [0xF0, 0x39, 0x11, 0x01, 0x02, 0x03, 0x04]
-private let prefs = UserDefaults.standard
-private let keyLogin = "login"
-private let keyPassword = "password"
-private let keyToken = "token"
-private let keyDevice = "device"
-
-/// Уникальный ID устройства — аккаунт привязывается к первому телефону.
-private func deviceId() -> String {
-    if let saved = prefs.string(forKey: keyDevice), !saved.isEmpty {
-        return saved
-    }
-    let id = UUID().uuidString
-    prefs.set(id, forKey: keyDevice)
-    return id
+struct StudentQrPayload: Codable {
+    let version: Int
+    let studentKey: String
+    let fullName: String
+    let serverUrl: String
 }
 
-// MARK: - модель NFC
+struct MarkRecord: Codable, Identifiable, Equatable {
+    let id: String
+    let studentKey: String
+    let deviceId: String
+    let occurredAt: String
+}
 
-final class MarkModel: NSObject, ObservableObject, NFCTagReaderSessionDelegate {
+final class StudentPeripheral: NSObject, ObservableObject, CBPeripheralManagerDelegate {
+    @Published private(set) var bluetoothStatus = "Запуск Bluetooth"
+    var onMark: (() -> Void)?
+    private var manager: CBPeripheralManager!
+    private var identityCharacteristic: CBMutableCharacteristic?
+    private var markCharacteristic: CBMutableCharacteristic?
+    private var identityData = Data()
+    private var didAddService = false
 
-    @Published var status = ""
+    override init() {
+        super.init()
+        manager = CBPeripheralManager(delegate: self, queue: nil, options: [CBPeripheralManagerOptionRestoreIdentifierKey: "ru.visits11.student.peripheral"])
+    }
 
-    private var session: NFCTagReaderSession?
-
-    func start() {
-        guard NFCTagReaderSession.readingAvailable else {
-            status = "NFC на этом iPhone недоступен"
-            return
+    func setIdentity(studentKey: String, fullName: String, deviceId: String) {
+        let value: [String: String] = ["studentKey": studentKey, "fullName": fullName, "deviceId": deviceId]
+        guard let data = try? JSONSerialization.data(withJSONObject: value) else { return }
+        identityData = data
+        identityCharacteristic?.value = data
+        if manager.state == .poweredOn && !didAddService {
+            installService()
         }
-        status = ""
-        session = NFCTagReaderSession(pollingOption: .iso14443, delegate: self, queue: nil)
-        session?.alertMessage = "Приложите iPhone к телефону преподавателя"
-        session?.begin()
     }
 
-    // MARK: NFCTagReaderSessionDelegate
-
-    func tagReaderSessionDidBecomeActive(_ session: NFCTagReaderSession) {
-    }
-
-    func tagReaderSession(_ session: NFCTagReaderSession, didInvalidateWithError error: Error) {
+    func peripheralManagerDidUpdateState(_ peripheral: CBPeripheralManager) {
         DispatchQueue.main.async {
-            if (error as? NFCReaderError)?.code == .readerSessionInvalidationErrorUserCanceled {
-                self.status = "Отменено"
-            }
-        }
-    }
-
-    func tagReaderSession(_ session: NFCTagReaderSession, didDetect tags: [NFCTag]) {
-        guard case .iso7816 = tags.first else {
-            session.restartPolling()
-            return
-        }
-        session.connect(to: tags.first!) { [weak self] error in
-            guard let self, error == nil, case .iso7816(let tag) = tags.first else {
-                session.invalidate(errorMessage: "Не получилось, попробуйте ещё раз")
-                return
-            }
-            self.handle(tag: tag, session: session)
-        }
-    }
-
-    // MARK: обмен APDU
-
-    private func handle(tag: NFCISO7816Tag, session: NFCTagReaderSession) {
-        let select = NFCISO7816APDU(instructionClass: 0x00, instructionCode: 0xA4,
-                                    p1Parameter: 0x04, p2Parameter: 0x00,
-                                    data: Data(aid), expectedResponseLength: 2)
-        tag.sendCommand(apdu: select) { [weak self] _, sw1, sw2, error in
-            guard let self, error == nil, sw1 == 0x90, sw2 == 0x00 else {
-                session.invalidate(errorMessage: "Это не телефон преподавателя")
-                return
-            }
-            self.sendIdentity(tag: tag, session: session, allowRelogin: true)
-        }
-    }
-
-    private func sendIdentity(tag: NFCISO7816Tag, session: NFCTagReaderSession, allowRelogin: Bool) {
-        guard let login = prefs.string(forKey: keyLogin),
-              let password = prefs.string(forKey: keyPassword) else {
-            session.invalidate(errorMessage: "Сначала войдите по логину и паролю")
-            return
-        }
-
-        let device = deviceId()
-        var type: UInt8 = 1
-        var payload = login + "\n" + password + "\n" + device
-        if let token = prefs.string(forKey: keyToken), !token.isEmpty {
-            type = 2
-            payload = token + "\n" + device
-        }
-        let command = NFCISO7816APDU(instructionClass: 0x00, instructionCode: 0x10,
-                                     p1Parameter: 0x00, p2Parameter: 0x00,
-                                     data: Data([type] + Array(payload.utf8)),
-                                     expectedResponseLength: 256)
-        tag.sendCommand(apdu: command) { [weak self] data, sw1, sw2, error in
-            guard let self, error == nil, sw1 == 0x90, sw2 == 0x00, !data.isEmpty else {
-                session.invalidate(errorMessage: "Не получилось, попробуйте ещё раз")
-                return
-            }
-            let result = data[data.startIndex]
-            let value = String(data: data.dropFirst(), encoding: .utf8) ?? ""
-
-            switch result {
-            case 0 where !value.isEmpty:
-                prefs.set(value, forKey: keyToken)
-                self.finish(session: session, message: "Готово! Вы отмечены")
-            case 1:
-                self.finish(session: session,
-                            message: value.isEmpty ? "Вы отмечены" : "Вы отмечены — \(value)")
-            case 2:
-                DispatchQueue.main.async { self.status = "Неверный логин или пароль" }
-                session.invalidate(errorMessage: "Неверный логин или пароль")
-            case 3 where allowRelogin:
-                // сессия устарела — этим же касанием перелогинимся
-                prefs.removeObject(forKey: keyToken)
-                self.sendIdentity(tag: tag, session: session, allowRelogin: false)
-            case 5:
-                DispatchQueue.main.async { self.status = "Аккаунт привязан к другому телефону" }
-                session.invalidate(errorMessage: "Аккаунт привязан к другому телефону")
+            switch peripheral.state {
+            case .poweredOn:
+                self.bluetoothStatus = "Bluetooth готов"
+                self.installService()
+            case .poweredOff:
+                self.bluetoothStatus = "Включите Bluetooth"
+            case .unauthorized:
+                self.bluetoothStatus = "Разрешите Bluetooth"
             default:
-                session.invalidate(errorMessage: "Не получилось, попробуйте ещё раз")
+                self.bluetoothStatus = "Ожидание Bluetooth"
             }
         }
     }
 
-    private func finish(session: NFCTagReaderSession, message: String) {
+    func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
         DispatchQueue.main.async {
-            self.status = message
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            guard error == nil else {
+                self.bluetoothStatus = "Не удалось запустить BLE"
+                self.didAddService = false
+                return
+            }
+            self.didAddService = true
+            peripheral.startAdvertising([CBAdvertisementDataServiceUUIDsKey: [tapServiceId]])
+            self.bluetoothStatus = "Готов к касанию"
         }
-        session.alertMessage = message
-        session.invalidate()
+    }
+
+    func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
+        if error != nil {
+            DispatchQueue.main.async { self.bluetoothStatus = "Не удалось включить BLE" }
+        }
+    }
+
+    func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveRead request: CBATTRequest) {
+        guard request.characteristic.uuid == identityCharacteristicId else {
+            peripheral.respond(to: request, withResult: .attributeNotFound)
+            return
+        }
+        guard request.offset <= identityData.count else {
+            peripheral.respond(to: request, withResult: .invalidOffset)
+            return
+        }
+        request.value = identityData.subdata(in: request.offset..<identityData.count)
+        peripheral.respond(to: request, withResult: .success)
+    }
+
+    func peripheralManager(_ peripheral: CBPeripheralManager, didReceiveWrite requests: [CBATTRequest]) {
+        var result: CBATTError.Code = .success
+        var marked = false
+        for request in requests {
+            if request.characteristic.uuid == markCharacteristicId,
+               let value = request.value,
+               let command = String(data: value, encoding: .utf8),
+               command == "MARK" {
+                marked = true
+            } else {
+                result = .attributeNotFound
+            }
+        }
+        for request in requests { peripheral.respond(to: request, withResult: result) }
+        if marked { DispatchQueue.main.async { self.onMark?() } }
+    }
+
+    func peripheralManager(_ peripheral: CBPeripheralManager, willRestoreState dict: [String: Any]) {
+        if let services = dict[CBPeripheralManagerRestoredStateServicesKey] as? [CBMutableService], !services.isEmpty {
+            didAddService = true
+        }
+    }
+
+    private func installService() {
+        guard manager.state == .poweredOn, !didAddService else { return }
+        let identity = CBMutableCharacteristic(type: identityCharacteristicId, properties: [.read], value: identityData, permissions: [.readable])
+        let mark = CBMutableCharacteristic(type: markCharacteristicId, properties: [.write], value: nil, permissions: [.writeable])
+        let service = CBMutableService(type: tapServiceId, primary: true)
+        service.characteristics = [identity, mark]
+        identityCharacteristic = identity
+        markCharacteristic = mark
+        manager.add(service)
     }
 }
 
-// MARK: - интерфейс
+final class AttendanceModel: ObservableObject {
+    @Published var profile: StudentQrPayload?
+    @Published var status = ""
+    @Published var scanning = false
+    @Published var pendingCount = 0
+    @Published var bluetoothStatus = "Запуск Bluetooth"
+    private var peripheral: StudentPeripheral?
+    private var peripheralCancellable: AnyCancellable?
+    private let defaults = UserDefaults.standard
+    private let profileKey = "visits11.student.profile.v1"
+    private let queueKey = "visits11.student.pending.v1"
+    private let deviceKey = "visits11.student.device-id.v1"
+    private var uploadTask: Task<Void, Never>?
+    private var retryTimer: Timer?
+
+    init() {
+        if let data = defaults.data(forKey: profileKey),
+           let saved = try? JSONDecoder().decode(StudentQrPayload.self, from: data) {
+            profile = saved
+            status = "Поднесите телефон к телефону преподавателя"
+            configurePeripheral()
+        }
+        updatePendingCount()
+    }
+
+    func acceptQr(_ raw: String) -> Bool {
+        guard let data = raw.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(StudentQrPayload.self, from: data),
+              payload.version == 1,
+              payload.studentKey.range(of: "^[0-9a-fA-F]{32}$", options: .regularExpression) != nil,
+              !payload.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let serverUrl = URL(string: payload.serverUrl),
+              serverUrl.scheme == "http" || serverUrl.scheme == "https",
+              serverUrl.host != nil else {
+            return false
+        }
+        profile = payload
+        status = "Поднесите телефон к телефону преподавателя"
+        if defaults.string(forKey: deviceKey) == nil {
+            defaults.set(UUID().uuidString, forKey: deviceKey)
+        }
+        if let encoded = try? JSONEncoder().encode(payload) { defaults.set(encoded, forKey: profileKey) }
+        configurePeripheral()
+        scanning = false
+        uploadPending()
+        return true
+    }
+
+    func showScanner() {
+        scanning = true
+        status = ""
+    }
+
+    func finishScanning() {
+        scanning = false
+        if profile != nil { status = "Поднесите телефон к телефону преподавателя" }
+    }
+
+    func activate() {
+        UIApplication.shared.isIdleTimerDisabled = profile != nil
+        configurePeripheral()
+        if retryTimer == nil {
+            retryTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+                self?.uploadPending()
+            }
+        }
+        uploadPending()
+    }
+
+    func recordMark() {
+        guard let profile else { return }
+        let deviceId = defaults.string(forKey: deviceKey) ?? UUID().uuidString
+        defaults.set(deviceId, forKey: deviceKey)
+        let record = MarkRecord(
+            id: UUID().uuidString,
+            studentKey: profile.studentKey,
+            deviceId: deviceId,
+            occurredAt: ISO8601DateFormatter().string(from: Date())
+        )
+        var queue = loadQueue()
+        queue.append(record)
+        saveQueue(queue)
+        status = "\(profile.fullName)\nВы отмечены на паре"
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        uploadPending()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self, self.profile != nil else { return }
+            self.status = "Поднесите телефон к телефону преподавателя"
+        }
+    }
+
+    func uploadPending() {
+        guard uploadTask == nil, let profile, let base = URL(string: profile.serverUrl) else { return }
+        let queue = loadQueue()
+        guard !queue.isEmpty else { updatePendingCount(); return }
+        uploadTask = Task { [weak self] in
+            guard let self else { return }
+            for item in queue {
+                guard !Task.isCancelled,
+                      let endpoint = URL(string: "/api/marks", relativeTo: base)?.absoluteURL else { break }
+                var request = URLRequest(url: endpoint)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                request.timeoutInterval = 8
+                request.httpBody = try? JSONEncoder().encode(item)
+                do {
+                    let (_, response) = try await URLSession.shared.data(for: request)
+                    guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { break }
+                    await MainActor.run { self.removeFromQueue(item.id) }
+                } catch {
+                    break
+                }
+            }
+            await MainActor.run {
+                self.uploadTask = nil
+                self.updatePendingCount()
+            }
+        }
+    }
+
+    private func configurePeripheral() {
+        guard let profile else { return }
+        let deviceId = defaults.string(forKey: deviceKey) ?? UUID().uuidString
+        defaults.set(deviceId, forKey: deviceKey)
+        if peripheral == nil {
+            let manager = StudentPeripheral()
+            manager.onMark = { [weak self] in self?.recordMark() }
+            peripheral = manager
+            peripheralCancellable = manager.$bluetoothStatus.receive(on: DispatchQueue.main).sink { [weak self] value in
+                self?.bluetoothStatus = value
+            }
+        }
+        peripheral?.setIdentity(studentKey: profile.studentKey, fullName: profile.fullName, deviceId: deviceId)
+    }
+
+    private func loadQueue() -> [MarkRecord] {
+        guard let data = defaults.data(forKey: queueKey),
+              let records = try? JSONDecoder().decode([MarkRecord].self, from: data) else { return [] }
+        return records
+    }
+
+    private func saveQueue(_ records: [MarkRecord]) {
+        if let data = try? JSONEncoder().encode(records) { defaults.set(data, forKey: queueKey) }
+        updatePendingCount()
+    }
+
+    private func removeFromQueue(_ id: String) {
+        saveQueue(loadQueue().filter { $0.id != id })
+    }
+
+    private func updatePendingCount() {
+        pendingCount = loadQueue().count
+    }
+}
 
 struct ContentView: View {
-    @StateObject private var nfc = MarkModel()
-    @State private var showLogin = false
-
-    private var loggedIn: Bool {
-        (prefs.string(forKey: keyLogin) ?? "").isEmpty == false
-    }
+    @StateObject private var model = AttendanceModel()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        VStack(spacing: 18) {
-            if showLogin || !loggedIn {
-                LoginView(done: { showLogin = false })
+        Group {
+            if model.profile == nil || model.scanning {
+                ZStack(alignment: .top) {
+                    QRScannerView { code in
+                        if !model.acceptQr(code) { model.status = "QR-код не распознан" }
+                    }
+                    VStack(spacing: 10) {
+                        Image("KubGAU").resizable().scaledToFit().frame(width: 54, height: 54)
+                        Text("Отсканируйте QR-код студента")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundColor(.white)
+                        Text("Сканирование работает без интернета")
+                            .font(.system(size: 13)).foregroundColor(.white.opacity(0.8))
+                    }
+                    .padding(.top, 38)
+                }
+                .ignoresSafeArea()
+                .overlay(alignment: .bottom) {
+                    if !model.status.isEmpty {
+                        Text(model.status).font(.system(size: 13, weight: .medium)).foregroundColor(.white)
+                            .padding(.horizontal, 16).padding(.vertical, 10)
+                            .background(Color.black.opacity(0.65), in: Capsule()).padding(.bottom, 34)
+                    }
+                }
             } else {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 84))
-                    .foregroundColor(Color(red: 0.29, green: 0.78, blue: 0.42))
-                Text("Visits11")
-                    .font(.title.bold())
-                Text(nfc.status.isEmpty ? "Отметка на паре" : nfc.status)
-                    .font(.body)
-                    .multilineTextAlignment(.center)
-                    .foregroundColor(.secondary)
-                    .animation(.easeInOut, value: nfc.status)
-
-                Button {
-                    nfc.start()
-                } label: {
-                    Text("Отметиться")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 52)
+                VStack(spacing: 20) {
+                    Image("KubGAU").resizable().scaledToFit().frame(width: 116, height: 116)
+                    Text(model.status.isEmpty ? "Поднесите телефон к телефону преподавателя" : model.status)
+                        .font(.system(size: 16, weight: .medium))
+                        .multilineTextAlignment(.center)
+                        .foregroundColor(Color(red: 0.18, green: 0.28, blue: 0.23))
+                    Text(model.bluetoothStatus)
+                        .font(.system(size: 12)).foregroundColor(.secondary)
+                    if model.pendingCount > 0 {
+                        Text("Ожидают отправки: \(model.pendingCount)")
+                            .font(.system(size: 12)).foregroundColor(.secondary)
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(Color(red: 0.29, green: 0.78, blue: 0.42))
-                .padding(.top, 8)
-
-                Button("Сменить студента") {
-                    showLogin = true
-                }
-                .font(.footnote)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(red: 0.94, green: 0.97, blue: 0.95))
+                .onLongPressGesture(minimumDuration: 1.2) { model.showScanner() }
             }
         }
-        .padding(24)
+        .onAppear { model.activate() }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active { model.activate() }
+        }
     }
 }
 
-struct LoginView: View {
-    var done: () -> Void
+struct QRScannerView: UIViewControllerRepresentable {
+    var onCode: (String) -> Void
 
-    @State private var login = ""
-    @State private var password = ""
+    func makeUIViewController(context: Context) -> QRScannerController {
+        let controller = QRScannerController()
+        controller.onCode = onCode
+        return controller
+    }
 
-    var body: some View {
-        VStack(spacing: 14) {
-            Text("Вход")
-                .font(.title.bold())
-            TextField("Логин", text: $login)
-                .textFieldStyle(.roundedBorder)
-                .autocapitalization(.none)
-                .disableAutocorrection(true)
-            SecureField("Пароль", text: $password)
-                .textFieldStyle(.roundedBorder)
-            Button {
-                guard !login.trimmingCharacters(in: .whitespaces).isEmpty, !password.isEmpty else { return }
-                prefs.set(login.trimmingCharacters(in: .whitespaces), forKey: keyLogin)
-                prefs.set(password, forKey: keyPassword)
-                prefs.removeObject(forKey: keyToken)
-                done()
-            } label: {
-                Text("Войти")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity, minHeight: 52)
+    func updateUIViewController(_ controller: QRScannerController, context: Context) {
+        controller.onCode = onCode
+    }
+}
+
+final class QRScannerController: UIViewController, AVCaptureMetadataOutputObjectsDelegate {
+    var onCode: ((String) -> Void)?
+    private let captureSession = AVCaptureSession()
+    private var previewLayer: AVCaptureVideoPreviewLayer?
+    private var didRead = false
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+        AVCaptureDevice.requestAccess(for: .video) { [weak self] allowed in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if allowed { self.configureCamera() }
             }
-            .buttonStyle(.borderedProminent)
-            .padding(.top, 8)
+        }
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        previewLayer?.frame = view.bounds
+    }
+
+    private func configureCamera() {
+        guard captureSession.inputs.isEmpty,
+              let camera = AVCaptureDevice.default(for: .video),
+              let input = try? AVCaptureDeviceInput(device: camera),
+              captureSession.canAddInput(input) else { return }
+        captureSession.addInput(input)
+        let output = AVCaptureMetadataOutput()
+        guard captureSession.canAddOutput(output) else { return }
+        captureSession.addOutput(output)
+        output.setMetadataObjectsDelegate(self, queue: DispatchQueue.main)
+        output.metadataObjectTypes = [.qr]
+        let layer = AVCaptureVideoPreviewLayer(session: captureSession)
+        layer.videoGravity = .resizeAspectFill
+        view.layer.addSublayer(layer)
+        previewLayer = layer
+        DispatchQueue.global(qos: .userInitiated).async { self.captureSession.startRunning() }
+    }
+
+    func metadataOutput(_ output: AVCaptureMetadataOutput, didOutput metadataObjects: [AVMetadataObject], from connection: AVCaptureConnection) {
+        guard !didRead,
+              let object = metadataObjects.first as? AVMetadataMachineReadableCodeObject,
+              let value = object.stringValue else { return }
+        didRead = true
+        captureSession.stopRunning()
+        onCode?(value)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, self.view.window != nil else { return }
+            self.didRead = false
+            DispatchQueue.global(qos: .userInitiated).async { self.captureSession.startRunning() }
         }
     }
 }

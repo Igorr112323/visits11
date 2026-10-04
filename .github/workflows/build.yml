@@ -1,58 +1,54 @@
-name: build
+name: Windows applications
 
 on:
   push:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Setup .NET 8
+      - name: Set up .NET 8
         uses: actions/setup-dotnet@v6
         with:
           dotnet-version: '8.0.x'
 
-      - name: Build
-        run: dotnet build -c Release
+      - name: Build teacher journal
+        run: dotnet build Visits11.csproj -c Release
 
-      - name: Publish single-file exe
-        run: dotnet publish -c Release -r win-x64 -p:PublishSingleFile=true -p:SelfContained=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+      - name: Build server
+        run: dotnet build Server/Server.csproj -c Release
 
-      - name: Upload artifact
+      - name: Verify attendance and QR behavior
+        run: dotnet run --project tests/WindowsSmoke/WindowsSmoke.csproj -c Release
+
+      - name: Publish teacher journal
+        run: dotnet publish Visits11.csproj -c Release -r win-x64 -p:PublishSingleFile=true -p:SelfContained=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish-journal
+
+      - name: Publish server
+        run: dotnet publish Server/Server.csproj -c Release -r win-x64 -p:PublishSingleFile=true -p:SelfContained=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish-server
+
+      - name: Smoke-test server HTTP API
+        shell: pwsh
+        run: ./tests/server-smoke.ps1 -Executable ./publish-server/KubGAU-Server.exe
+
+      - name: Prepare release artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Copy-Item publish-journal/Visits11.exe dist/KubGAU-Journal.exe
+          Copy-Item publish-server/KubGAU-Server.exe dist/KubGAU-Server.exe
+
+      - name: Upload Windows artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: Visits11-win-x64
-          path: publish/Visits11.exe
+          name: KubGAU-Windows-x64
+          path: dist/*.exe
           if-no-files-found: error
-
-      - name: Publish release with exe
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          Copy-Item publish/Visits11.exe KubGAU-Journal.exe
-          gh release view v1.0.0 --repo "$env:GITHUB_REPOSITORY" *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload v1.0.0 KubGAU-Journal.exe --clobber --repo "$env:GITHUB_REPOSITORY"
-            if ($LASTEXITCODE -ne 0) { exit 1 }
-          } else {
-            gh release create v1.0.0 KubGAU-Journal.exe --target "$env:GITHUB_SHA" --repo "$env:GITHUB_REPOSITORY" --title "КубГАУ · Учёт посещаемости" --notes "Журнал КубГАУ — готовый single-file .exe (Windows x64, .NET 8, self-contained). Установка не требуется — скачайте и запустите. Данные (attendance.db, settings.json) создаются рядом с файлом."
-          }
-          gh release edit v1.0.0 --title "КубГАУ · Учёт посещаемости" --repo "$env:GITHUB_REPOSITORY" *> $null
-          # убираем старые имена файлов — оставляем только актуальные
-          gh api "repos/$env:GITHUB_REPOSITORY/releases/tags/v1.0.0" --jq '.assets[] | (.id|tostring) + "\t" + .name' | ForEach-Object {
-            $parts = $_ -split "`t", 2
-            $keep = @("KubGAU-Journal.exe", "KubGAU-Teacher.apk", "KubGAU-Student.apk", "Visits11-Student-iOS-unsigned.ipa")
-            if ($keep -notcontains $parts[1]) {
-              gh api -X DELETE "repos/$env:GITHUB_REPOSITORY/releases/assets/$($parts[0])" *> $null
-            }
-          }
-          exit 0
+          retention-days: 30

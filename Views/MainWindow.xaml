@@ -129,6 +129,13 @@
                                  Margin="0,8,0,0"
                                  Text="{Binding InputText, UpdateSourceTrigger=PropertyChanged}" />
                     </StackPanel>
+                    <StackPanel Margin="0,14,0,0"
+                                Visibility="{Binding ShowInput2, Converter={StaticResource Conv.BoolToVis}}">
+                        <TextBlock Text="{Binding InputLabel2}" Style="{StaticResource Txt.Label}" />
+                        <TextBox Style="{StaticResource Widget.Input}"
+                                 Margin="0,8,0,0"
+                                 Text="{Binding InputText2, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,28,0,0">
                         <Button Content="Отмена"
                                 Style="{StaticResource Btn.Ghost}"
@@ -301,6 +308,12 @@
                                      Tag="{StaticResource Icon.Book}"
                                      Content="Журнал"
                                      IsChecked="{Binding TabJournal, Mode=TwoWay}" />
+                        <Button Style="{StaticResource Btn.Soft}"
+                                Command="{Binding ConfigureServerCommand}"
+                                Content="{Binding ServerStatusText}"
+                                Margin="18,0,0,0"
+                                Padding="12,7"
+                                ToolTip="Настроить подключение к серверу" />
                     </StackPanel>
 
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">

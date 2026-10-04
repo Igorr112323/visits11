@@ -1,0 +1,8 @@
+<Application x:Class="Visits11.Server.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <FontFamily x:Key="FontBody">pack://application:,,,/Assets/Fonts/#Manrope</FontFamily>
+    </Application.Resources>
+</Application>

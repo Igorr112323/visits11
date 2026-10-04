@@ -154,9 +154,9 @@
                                                    Style="{StaticResource Txt.Body}"
                                                    TextTrimming="CharacterEllipsis"
                                                    VerticalAlignment="Center" />
-                                        <TextBlock x:Name="Warn" Grid.Column="2" Text="⚠ Что-то не так"
+                                        <TextBlock x:Name="Warn" Grid.Column="2" Text="⚠ ID телефона не совпадает"
                                                    Visibility="Collapsed" Margin="0,0,12,0" FontSize="11"
-                                                   Foreground="#F5A623" VerticalAlignment="Center" />
+                                                   Foreground="{DynamicResource Brush.Red}" VerticalAlignment="Center" />
                                         <Border x:Name="Badge" Grid.Column="3"
                                                 CornerRadius="20" Padding="11,4"
                                                 Background="{DynamicResource Brush.RedSoft}"
@@ -203,7 +203,7 @@
                                         </DataTrigger.EnterActions>
                                     </DataTrigger>
                                     <DataTrigger Binding="{Binding Suspicious}" Value="True">
-                                        <Setter TargetName="Row" Property="Background" Value="#1FF5A623" />
+                                        <Setter TargetName="Row" Property="Background" Value="#24D34D4D" />
                                         <Setter TargetName="Warn" Property="Visibility" Value="Visible" />
                                     </DataTrigger>
                                 </DataTemplate.Triggers>

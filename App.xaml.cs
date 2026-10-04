@@ -13,6 +13,7 @@ public partial class App : Application
     public static ToastService Toasts { get; private set; } = null!;
     public static PhoneServer Server { get; private set; } = null!;
     public static CameraLink Camera { get; private set; } = null!;
+    public static RemoteSyncService RemoteSync { get; private set; } = null!;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -34,21 +35,25 @@ public partial class App : Application
         Camera = new CameraLink(Server.Port);
         Camera.Start();
 
+        RemoteSync = new RemoteSyncService(Path.Combine(appDir, "server-settings.json"));
+
         DispatcherUnhandledException += (_, args) =>
         {
             MessageBox.Show(args.Exception.Message, "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
             args.Handled = true;
         };
 
-        var viewModel = new MainViewModel(Db, Toasts, Theme, new AuthService(), new WordService(), Server, Camera);
+        var viewModel = new MainViewModel(Db, Toasts, Theme, new AuthService(), new WordService(), Server, Camera, RemoteSync);
         var window = new MainWindow(viewModel);
         window.Show();
+        RemoteSync.Start();
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
         Camera.Dispose();
         Server.Dispose();
+        RemoteSync.Dispose();
         base.OnExit(e);
     }
 

@@ -21,6 +21,7 @@ public sealed class JournalRow
     public int Number { get; init; }
     public string FullName { get; init; } = string.Empty;
     public bool Present { get; init; }
+    public bool DeviceMismatch { get; init; }
     public string StatusText => Present ? "Был" : "Не был";
 }
 
@@ -225,6 +226,7 @@ public sealed class JournalViewModel : ObservableObject, ITabViewModel
                 Number = number++,
                 FullName = detail.FullName,
                 Present = detail.Present,
+                DeviceMismatch = detail.DeviceMismatch,
             });
         }
 

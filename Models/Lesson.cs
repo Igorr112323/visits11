@@ -19,4 +19,5 @@ public sealed class LessonDetail
     public int StudentId { get; set; }
     public string FullName { get; set; } = string.Empty;
     public bool Present { get; set; }
+    public bool DeviceMismatch { get; set; }
 }

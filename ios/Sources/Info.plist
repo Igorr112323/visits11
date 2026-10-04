@@ -5,7 +5,7 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>ru</string>
     <key>CFBundleDisplayName</key>
-    <string>Visits11</string>
+    <string>КубГАУ Студент</string>
     <key>CFBundleExecutable</key>
     <string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key>
@@ -24,6 +24,23 @@
     <true/>
     <key>NFCReaderUsageDescription</key>
     <string>Для отметки на паре поднесите iPhone к телефону преподавателя.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Камера нужна для первого входа по QR-коду студента.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Bluetooth нужен для отметки при касании телефона преподавателя.</string>
+    <key>NSBluetoothPeripheralUsageDescription</key>
+    <string>Bluetooth нужен для отметки при касании телефона преподавателя.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Для локального теста приложение отправляет отметки серверу преподавателя в той же сети.</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>bluetooth-peripheral</string>
+    </array>
     <key>UILaunchScreen</key>
     <dict/>
     <key>UISupportedInterfaceOrientations</key>

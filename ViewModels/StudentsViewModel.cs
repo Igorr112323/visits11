@@ -1,9 +1,12 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Media.Imaging;
 using Microsoft.Win32;
+using QRCoder;
 using Visits11.Models;
 using Visits11.Services;
+using Visits11.Views;
 
 namespace Visits11.ViewModels;
 
@@ -27,7 +30,8 @@ public sealed class StudentTableItem
     public string FullName { get; init; } = string.Empty;
     public string Login { get; init; } = string.Empty;
     public string Password { get; init; } = string.Empty;
-    public string? PhoneId { get; init; }
+    public string? DeviceId { get; init; }
+    public string QrId { get; init; } = string.Empty;
 }
 
 /// <summary>
@@ -40,14 +44,16 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
     private readonly AuthService _auth;
     private readonly WordService _word;
     private readonly MainViewModel _main;
+    private readonly RemoteSyncService _remoteSync;
 
-    public StudentsViewModel(DatabaseService database, ToastService toasts, AuthService auth, WordService word, MainViewModel main)
+    public StudentsViewModel(DatabaseService database, ToastService toasts, AuthService auth, WordService word, MainViewModel main, RemoteSyncService remoteSync)
     {
         _database = database;
         _toasts = toasts;
         _auth = auth;
         _word = word;
         _main = main;
+        _remoteSync = remoteSync;
 
         NewGroupCommand = new RelayCommand(_ => CreateGroupDialog());
         AddStudentCommand = new RelayCommand(_ => AddStudentDialog(), _ => SelectedGroup is not null);
@@ -56,6 +62,8 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
         CopyTextCommand = new RelayCommand(param => CopyToClipboard(param as string));
         DeleteStudentCommand = new RelayCommand(param => DeleteStudentDialog(param as StudentTableItem));
         DeleteGroupCommand = new RelayCommand(_ => DeleteGroupDialog(), _ => SelectedGroup is not null);
+        ShowQrCommand = new RelayCommand(param => ShowStudentQr(param as StudentTableItem));
+        ResetDeviceCommand = new RelayCommand(param => ResetStudentDevice(param as StudentTableItem));
         SelectGroupCommand = new RelayCommand(param =>
         {
             if (param is GroupItemViewModel group) SelectedGroup = group;
@@ -98,6 +106,8 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
     public RelayCommand SelectGroupCommand { get; }
     public RelayCommand DeleteStudentCommand { get; }
     public RelayCommand DeleteGroupCommand { get; }
+    public RelayCommand ShowQrCommand { get; }
+    public RelayCommand ResetDeviceCommand { get; }
 
     // --------------------------------------------------------------- студенты
 
@@ -129,6 +139,53 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
                 }
                 _database.AddGroup(name);
                 _toasts.Success("Группа создана", name);
+                return true;
+            },
+        });
+    }
+
+    private void ShowStudentQr(StudentTableItem? student)
+    {
+        if (student is null) return;
+        try
+        {
+            var payload = StudentQrPayload.Create(student.QrId, student.FullName, _remoteSync.UrlForQr());
+            using var generator = new QRCodeGenerator();
+            using var data = generator.CreateQrCode(payload, QRCodeGenerator.ECCLevel.M);
+            var bytes = new PngByteQRCode(data).GetGraphic(12);
+            var image = new BitmapImage();
+            using (var stream = new MemoryStream(bytes))
+            {
+                image.BeginInit();
+                image.CacheOption = BitmapCacheOption.OnLoad;
+                image.StreamSource = stream;
+                image.EndInit();
+            }
+            image.Freeze();
+            var window = new StudentQrWindow(student.FullName, image)
+            {
+                Owner = Application.Current.MainWindow,
+            };
+            window.ShowDialog();
+        }
+        catch (Exception exception)
+        {
+            _toasts.Error("Не удалось создать QR-код", exception.Message);
+        }
+    }
+
+    private void ResetStudentDevice(StudentTableItem? student)
+    {
+        if (student is null) return;
+        _main.ShowModal(new ModalViewModel
+        {
+            Title = "Сбросить ID телефона?",
+            Message = $"Для «{student.FullName}» будет очищен зарегистрированный ID. Следующая отметка зарегистрирует текущий телефон.",
+            ConfirmText = "Сбросить",
+            OnConfirm = _ =>
+            {
+                _database.ResetDeviceId(student.Id);
+                _toasts.Success("ID телефона сброшен", student.FullName);
                 return true;
             },
         });
@@ -412,7 +469,8 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
                 FullName = student.FullName,
                 Login = student.Login,
                 Password = student.Password,
-                PhoneId = student.PhoneId,
+                DeviceId = student.DeviceId,
+                QrId = student.QrId,
             });
         }
         OnPropertyChanged(nameof(HeaderCount));

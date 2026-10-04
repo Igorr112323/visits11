@@ -81,6 +81,14 @@ public final class TeacherCardService extends HostApduService {
                 String device = parts.length > 1 ? parts[1] : "";
                 request = "{\"type\":2,\"token\":\"" + escape(parts[0])
                         + "\",\"device\":\"" + escape(device) + "\"}";
+            } else if (type == 3) {
+                String[] parts = data.split("\\n", 2);
+                if (parts.length < 1 || parts[0].isEmpty()) {
+                    return ok(new byte[0]);
+                }
+                String device = parts.length > 1 ? parts[1] : "";
+                request = "{\"type\":3,\"studentKey\":\"" + escape(parts[0])
+                        + "\",\"device\":\"" + escape(device) + "\"}";
             } else {
                 return ok(new byte[0]);
             }

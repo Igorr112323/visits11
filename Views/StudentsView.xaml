@@ -142,6 +142,8 @@
                                 <ColumnDefinition Width="130" />
                                 <ColumnDefinition Width="110" />
                                 <ColumnDefinition Width="120" />
+                                <ColumnDefinition Width="58" />
+                                <ColumnDefinition Width="78" />
                                 <ColumnDefinition Width="46" />
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="№" Style="{StaticResource Txt.Label}" />
@@ -149,6 +151,8 @@
                             <TextBlock Grid.Column="2" Text="Логин" Style="{StaticResource Txt.Label}" />
                             <TextBlock Grid.Column="3" Text="Пароль" Style="{StaticResource Txt.Label}" />
                             <TextBlock Grid.Column="4" Text="ID телефона" Style="{StaticResource Txt.Label}" />
+                            <TextBlock Grid.Column="5" Text="QR" Style="{StaticResource Txt.Label}" />
+                            <TextBlock Grid.Column="6" Text="Привязка" Style="{StaticResource Txt.Label}" />
                         </Grid>
                     </Border>
 
@@ -171,6 +175,8 @@
                                                 <ColumnDefinition Width="130" />
                                                 <ColumnDefinition Width="110" />
                                                 <ColumnDefinition Width="120" />
+                                                <ColumnDefinition Width="58" />
+                                                <ColumnDefinition Width="78" />
                                                 <ColumnDefinition Width="46" />
                                             </Grid.ColumnDefinitions>
 
@@ -197,11 +203,13 @@
                                                     HorizontalAlignment="Left" />
 
                                             <Grid Grid.Column="4">
-                                                <TextBlock Text="{Binding PhoneId}"
+                                                <TextBlock Text="{Binding DeviceId}"
                                                            Style="{StaticResource Txt.Mono}"
                                                            VerticalAlignment="Center"
-                                                           Visibility="{Binding PhoneId, Converter={StaticResource Conv.NullToVis}}" />
-                                                <Grid Visibility="{Binding PhoneId, Converter={StaticResource Conv.NullToVis}, ConverterParameter=invert}"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding DeviceId}"
+                                                           Visibility="{Binding DeviceId, Converter={StaticResource Conv.NullToVis}}" />
+                                                <Grid Visibility="{Binding DeviceId, Converter={StaticResource Conv.NullToVis}, ConverterParameter=invert}"
                                                       Height="24">
                                                     <Rectangle RadiusX="8" RadiusY="8"
                                                                Stroke="{DynamicResource Brush.BorderStrong}"
@@ -214,7 +222,15 @@
                                                 </Grid>
                                             </Grid>
 
-                                            <Button Grid.Column="5"
+                                            <Button Grid.Column="5" Style="{StaticResource Btn.Chip}"
+                                                    Content="QR" Padding="7,5"
+                                                    Command="{Binding DataContext.ShowQrCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding}" ToolTip="Показать QR-код студента" />
+                                            <Button Grid.Column="6" Style="{StaticResource Btn.Chip}"
+                                                    Content="Сбросить" Padding="6,5"
+                                                    Command="{Binding DataContext.ResetDeviceCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding}" ToolTip="Очистить ID зарегистрированного телефона" />
+                                            <Button Grid.Column="7"
                                                     Style="{StaticResource Btn.Icon}"
                                                     Width="30" Height="30"
                                                     HorizontalAlignment="Center"
