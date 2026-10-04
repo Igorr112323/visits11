@@ -38,7 +38,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Inet4Address;
 import java.net.InetAddress;
-import java.net.InterfaceAddress;
 import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
 import java.net.ServerSocket;
@@ -581,39 +580,16 @@ public final class MainActivity extends Activity {
         throw new IOException("No free teacher USB port");
     }
 
-    /** Принимаем запросы только к USB IP от ПК в той же USB tether-подсети. */
+    /** Принимаем запросы только на локальный USB tether IP; Wi-Fi-адреса не обслуживаются. */
     private boolean isUsbTetherConnection(Socket client) {
         try {
             InetAddress usbAddress = findUsbTetherAddress();
-            if (usbAddress == null || !usbAddress.equals(client.getLocalAddress())) return false;
-            InetAddress peerAddress = client.getInetAddress();
-            if (!(peerAddress instanceof Inet4Address)) return false;
-
-            NetworkInterface usbInterface = NetworkInterface.getByInetAddress(usbAddress);
-            if (usbInterface == null || !usbInterface.isUp()) return false;
-            for (InterfaceAddress interfaceAddress : usbInterface.getInterfaceAddresses()) {
-                if (!usbAddress.equals(interfaceAddress.getAddress())) continue;
-                return isSameIpv4Subnet(usbAddress, peerAddress,
-                        interfaceAddress.getNetworkPrefixLength());
-            }
+            return usbAddress != null
+                    && usbAddress.equals(client.getLocalAddress())
+                    && client.getInetAddress() instanceof Inet4Address;
         } catch (Throwable ignored) {
+            return false;
         }
-        return false;
-    }
-
-    private static boolean isSameIpv4Subnet(InetAddress left, InetAddress right, int prefixLength) {
-        if (!(left instanceof Inet4Address) || !(right instanceof Inet4Address)
-                || prefixLength < 1 || prefixLength > 32) return false;
-        byte[] leftBytes = left.getAddress();
-        byte[] rightBytes = right.getAddress();
-        int remainingBits = prefixLength;
-        for (int i = 0; i < leftBytes.length; i++) {
-            int bits = Math.min(remainingBits, 8);
-            int mask = bits == 0 ? 0 : (0xFF << (8 - bits)) & 0xFF;
-            if (((leftBytes[i] & 0xFF) & mask) != ((rightBytes[i] & 0xFF) & mask)) return false;
-            remainingBits -= bits;
-        }
-        return true;
     }
 
     private static void sleepQuietly(long milliseconds) {
