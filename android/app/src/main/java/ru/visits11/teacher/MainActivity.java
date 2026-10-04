@@ -441,7 +441,7 @@ public final class MainActivity extends Activity {
             statusText.setText("ПК подключён, NFC готов");
             statusText.setTextColor(0xFF2E7D32);
         } else if (isUsbTethered()) {
-            statusText.setText("USB-модем включён — ожидаю подключение ПК по кабелю");
+            statusText.setText("USB-модем активен — ожидаю запрос журнала с ПК");
             statusText.setTextColor(0xFF8A8A8A);
         } else {
             statusText.setText("Подключите USB-кабель и включите USB-модем");

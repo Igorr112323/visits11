@@ -1,4 +1,4 @@
-name: Validated release v2.0.2
+name: Teacher USB release v2.0.3
 
 on:
   push:
@@ -23,33 +23,25 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Build and test Windows applications
+      - name: Build and smoke-test Windows journal
         run: |
           dotnet build Visits11.csproj -c Release
-          dotnet build Server/Server.csproj -c Release
           dotnet run --project tests/WindowsSmoke/WindowsSmoke.csproj -c Release
 
-      - name: Publish Windows applications
-        run: |
-          dotnet publish Visits11.csproj -c Release -r win-x64 -p:PublishSingleFile=true -p:SelfContained=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish-journal
-          dotnet publish Server/Server.csproj -c Release -r win-x64 -p:PublishSingleFile=true -p:SelfContained=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish-server
+      - name: Publish Windows journal
+        run: dotnet publish Visits11.csproj -c Release -r win-x64 -p:PublishSingleFile=true -p:SelfContained=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish-journal
 
-      - name: Smoke-test server HTTP API
-        shell: pwsh
-        run: ./tests/server-smoke.ps1 -Executable ./publish-server/KubGAU-Server.exe
-
-      - name: Prepare Windows release files
+      - name: Prepare Windows release file
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist -Force | Out-Null
           Copy-Item publish-journal/Visits11.exe dist/KubGAU-Journal.exe
-          Copy-Item publish-server/KubGAU-Server.exe dist/KubGAU-Server.exe
 
-      - name: Upload Windows release files
+      - name: Upload Windows release file
         uses: actions/upload-artifact@v7
         with:
-          name: release-windows
-          path: dist/*
+          name: teacher-windows
+          path: dist/KubGAU-Journal.exe
           if-no-files-found: error
           retention-days: 3
 
@@ -70,102 +62,47 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Test and build Android applications
+      - name: Test and build teacher APK only
         working-directory: android
-        run: gradle testReleaseUnitTest lintRelease assembleRelease --no-daemon
+        run: gradle :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease --no-daemon
 
-      - name: Prepare Android release files
+      - name: Prepare Android release file
         run: |
           mkdir -p dist
           cp android/app/build/outputs/apk/release/app-release.apk dist/KubGAU-Teacher.apk
-          cp android/student/build/outputs/apk/release/student-release.apk dist/KubGAU-Student.apk
 
-      - name: Upload Android release files
+      - name: Upload Android release file
         uses: actions/upload-artifact@v7
         with:
-          name: release-android
-          path: dist/*.apk
-          if-no-files-found: error
-          retention-days: 3
-
-  ios:
-    runs-on: macos-14
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Install XcodeGen
-        run: brew install xcodegen
-
-      - name: Generate Xcode project
-        working-directory: ios
-        run: |
-          xcodegen generate
-          sed -i '' 's/objectVersion = 77;/objectVersion = 56;/' Visits11Student.xcodeproj/project.pbxproj
-
-      - name: Build unsigned iOS app
-        working-directory: ios
-        run: |
-          xcodebuild -project Visits11Student.xcodeproj \
-            -scheme Visits11Student \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            clean build > build.log 2>&1 || {
-              grep -m 10 "error:" build.log | while read -r line; do echo "::error::$line"; done
-              tail -20 build.log | while read -r line; do echo "::error::$line"; done
-              exit 1
-            }
-
-      - name: Package unsigned iOS IPA
-        working-directory: ios
-        run: |
-          mkdir -p Payload dist
-          cp -R build/Build/Products/Release-iphoneos/Visits11Student.app Payload/
-          zip -qry dist/Visits11-Student-iOS-unsigned.ipa Payload
-
-      - name: Upload iOS release file
-        uses: actions/upload-artifact@v7
-        with:
-          name: release-ios
-          path: ios/dist/Visits11-Student-iOS-unsigned.ipa
+          name: teacher-android
+          path: dist/KubGAU-Teacher.apk
           if-no-files-found: error
           retention-days: 3
 
   release:
     runs-on: ubuntu-latest
-    needs: [windows, android, ios]
+    needs: [windows, android]
     steps:
-      - name: Download Windows files
+      - name: Download Windows file
         uses: actions/download-artifact@v7
         with:
-          name: release-windows
+          name: teacher-windows
           path: release-assets
 
-      - name: Download Android files
+      - name: Download Android file
         uses: actions/download-artifact@v7
         with:
-          name: release-android
+          name: teacher-android
           path: release-assets
 
-      - name: Download iOS file
-        uses: actions/download-artifact@v7
-        with:
-          name: release-ios
-          path: release-assets
-
-      - name: Publish new validated release
+      - name: Publish teacher USB release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create v2.0.2 \
-            release-assets/KubGAU-Server.exe \
+          gh release create v2.0.3 \
             release-assets/KubGAU-Journal.exe \
             release-assets/KubGAU-Teacher.apk \
-            release-assets/KubGAU-Student.apk \
-            release-assets/Visits11-Student-iOS-unsigned.ipa \
             --target "$GITHUB_SHA" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "КубГАУ · Учёт посещаемости v2.0.2" \
-            --notes "v2.0.2: связь APK преподавателя с ПК ограничена USB-модемом (RNDIS); Wi-Fi и мобильная сеть для этого канала не используются. При первом запуске приложение запрашивает BLE-разрешения, предлагает включить Bluetooth и открывает настройки USB-модема. Релизные сборки Windows, Android и iOS прошли CI; физическое тестирование USB/NFC/BLE требует устройств. iOS IPA без подписи — подпишите её Apple Developer Account или Sideloadly."
+            --title "КубГАУ · Связь преподавателя по USB v2.0.3" \
+            --notes "v2.0.3: журнал Windows сам инициирует исходящие запросы к APK преподавателя через USB/RNDIS-адаптер и привязывает запросы к этому интерфейсу. Сначала проверяется адрес USB-модема, затем при необходимости — адреса его подсети. Для этой связи не требуется открывать входящий порт или добавлять исключение в брандмауэр Windows. Релиз содержит только Windows-журнал и APK преподавателя."

@@ -16,6 +16,9 @@ public sealed class CameraLink : IDisposable
 {
     private const int Port = 8090;
 
+    private readonly record struct ProbeTarget(IPAddress RemoteAddress, IPAddress LocalAddress);
+    private sealed record PhoneEndpoint(string Host, IPAddress LocalAddress);
+
     private readonly int _serverPort;
 
     private CancellationTokenSource? _cts;
@@ -55,12 +58,12 @@ public sealed class CameraLink : IDisposable
     {
         while (!token.IsCancellationRequested)
         {
-            string? host = null;
-            try { host = await DiscoverAsync(token); }
+            PhoneEndpoint? phone = null;
+            try { phone = await DiscoverAsync(token); }
             catch (OperationCanceledException) { break; }
             catch { /* ошибка поиска — попробуем ещё раз */ }
 
-            if (host is null)
+            if (phone is null)
             {
                 try { await Task.Delay(3000, token); } catch (OperationCanceledException) { break; }
                 continue;
@@ -68,11 +71,11 @@ public sealed class CameraLink : IDisposable
 
             try
             {
-                // кадры и NFC-события — два параллельных исходящих соединения;
-                // оборвалось видео — пересканируем и NFC тоже
+                // ПК сам инициирует оба соединения, привязывая их к локальному USB/RNDIS-адресу.
+                // Оборвалось видео — переподключаемся и восстанавливаем NFC-обмен.
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(token);
-                var cameraTask = StreamAsync(host, linked.Token);
-                var eventTask = EventStreamAsync(host, linked.Token);
+                var cameraTask = StreamAsync(phone, linked.Token);
+                var eventTask = EventStreamAsync(phone.Host, phone.LocalAddress, linked.Token);
                 await cameraTask;
                 linked.Cancel();
                 try { await eventTask; } catch { /* отменено — нормально */ }
@@ -84,15 +87,19 @@ public sealed class CameraLink : IDisposable
         }
     }
 
-    /// <summary>Перебирает адреса всех активных подсетей, ищет наш телефон по /info.</summary>
-    private static async Task<string?> DiscoverAsync(CancellationToken token)
+    /// <summary>
+    /// Находит телефон только через активный USB/RNDIS Ethernet-адаптер ПК.
+    /// Сначала проверяется адрес шлюза телефона; если шлюз не опубликован,
+    /// Windows делает исходящие пробы адресов той же USB-подсети.
+    /// </summary>
+    private static async Task<PhoneEndpoint?> DiscoverAsync(CancellationToken token)
     {
         var targets = BuildTargets();
         foreach (var batch in targets.Chunk(128))
         {
             if (token.IsCancellationRequested) return null;
 
-            var probes = batch.Select(host => ProbeAsync(host, token)).ToArray();
+            var probes = batch.Select(target => ProbeAsync(target, token)).ToArray();
             try { await Task.WhenAll(probes); }
             catch { /* пробы не бросают исключений — на всякий случай */ }
 
@@ -107,8 +114,8 @@ public sealed class CameraLink : IDisposable
         return null;
     }
 
-    /// <summary>Подключается к кандидату и проверяет, что это Visits11-камера.</summary>
-    private static async Task<string?> ProbeAsync(string host, CancellationToken token)
+    /// <summary>ПК проверяет кандидата исходящим запросом, привязанным к USB-адаптеру.</summary>
+    private static async Task<PhoneEndpoint?> ProbeAsync(ProbeTarget target, CancellationToken token)
     {
         var text = new StringBuilder();
         try
@@ -116,10 +123,12 @@ public sealed class CameraLink : IDisposable
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
             timeout.CancelAfter(TimeSpan.FromMilliseconds(1200));
 
-            using var tcp = new TcpClient();
-            await tcp.ConnectAsync(host, Port, timeout.Token);
+            using var tcp = new TcpClient(AddressFamily.InterNetwork);
+            tcp.Client.Bind(new IPEndPoint(target.LocalAddress, 0));
+            await tcp.ConnectAsync(target.RemoteAddress, Port, timeout.Token);
 
             var stream = tcp.GetStream();
+            var host = target.RemoteAddress.ToString();
             var request = Encoding.ASCII.GetBytes(
                 $"GET /info HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
             await stream.WriteAsync(request, timeout.Token);
@@ -148,17 +157,18 @@ public sealed class CameraLink : IDisposable
             // этот адрес не наш — просто пропускаем
         }
         var response = text.ToString();
-        return response.Contains("200") && response.Contains("visits11-camera") ? host : null;
+        return response.Contains("200") && response.Contains("visits11-camera")
+            ? new PhoneEndpoint(target.RemoteAddress.ToString(), target.LocalAddress)
+            : null;
     }
 
     /// <summary>
     /// Забирает NFC-события с телефона: GET /event (long-poll) → обработать → POST /event_result.
     /// Всё исходящее со стороны ПК — брандмауэр Windows ничего не спрашивает.
     /// </summary>
-    private async Task EventStreamAsync(string host, CancellationToken token)
+    private async Task EventStreamAsync(string host, IPAddress localAddress, CancellationToken token)
     {
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(6) };
-        client.DefaultRequestHeaders.ConnectionClose = true;
+        using var client = CreateUsbHttpClient(localAddress, TimeSpan.FromSeconds(6));
 
         var failures = 0;
         while (!token.IsCancellationRequested && failures < 4)
@@ -202,17 +212,12 @@ public sealed class CameraLink : IDisposable
     }
 
     /// <summary>Цикл кадров: запрашивает /frame?since=N один за другим.</summary>
-    private async Task StreamAsync(string host, CancellationToken token)
+    private async Task StreamAsync(PhoneEndpoint phone, CancellationToken token)
     {
-        // сообщаем телефону адрес ПК (для NFC-отметок) — IP этого соединения + порт сервера
-        var localHost = GetLocalHostFor(host);
-
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(4) };
-        client.DefaultRequestHeaders.ConnectionClose = true;
-        if (localHost.Length > 0)
-        {
-            client.DefaultRequestHeaders.Add("X-Host", $"{localHost}:{_serverPort}");
-        }
+        var host = phone.Host;
+        // ПК инициирует запросы, каждый сокет привязан к USB/RNDIS-адресу.
+        using var client = CreateUsbHttpClient(phone.LocalAddress, TimeSpan.FromSeconds(4));
+        client.DefaultRequestHeaders.Add("X-Host", $"{phone.LocalAddress}:{_serverPort}");
 
         var failures = 0;
         long seq = 0;
@@ -266,11 +271,18 @@ public sealed class CameraLink : IDisposable
 
     // ------------------------------------------------------------- адреса сети
 
-    /// <summary>Адреса только активных USB/RNDIS tether-интерфейсов ПК; Wi-Fi и обычный Ethernet исключены.</summary>
-    private static List<string> BuildTargets()
+    /// <summary>
+    /// Собирает адреса телефона только с активных USB/RNDIS Ethernet-интерфейсов.
+    /// Сначала идут шлюзы USB-модема, затем адреса из той же USB-подсети.
+    /// </summary>
+    private static List<ProbeTarget> BuildTargets()
     {
-        var targets = new List<string>();
-        var own = new HashSet<string>();
+        var adapters = new List<(IPAddress LocalAddress, int PrefixLength, List<IPAddress> Gateways)>();
+        var gatewayTargets = new List<ProbeTarget>();
+        var subnetTargets = new List<ProbeTarget>();
+        var gatewaySet = new HashSet<ProbeTarget>();
+        var subnetSet = new HashSet<ProbeTarget>();
+
         try
         {
             foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
@@ -279,29 +291,57 @@ public sealed class CameraLink : IDisposable
                 if (nic.NetworkInterfaceType != NetworkInterfaceType.Ethernet) continue;
                 if (!IsUsbTetherAdapter(nic)) continue;
 
-                foreach (var address in nic.GetIPProperties().UnicastAddresses)
+                var properties = nic.GetIPProperties();
+                var gateways = properties.GatewayAddresses
+                    .Select(gateway => gateway.Address)
+                    .Where(address => address.AddressFamily == AddressFamily.InterNetwork
+                                      && !address.Equals(IPAddress.Any)
+                                      && !address.Equals(IPAddress.Loopback))
+                    .ToList();
+
+                foreach (var address in properties.UnicastAddresses)
                 {
                     if (address.Address.AddressFamily != AddressFamily.InterNetwork) continue;
-                    own.Add(address.Address.ToString());
+                    if (IPAddress.IsLoopback(address.Address)) continue;
+                    adapters.Add((address.Address, address.PrefixLength, gateways));
+                }
+            }
 
-                    // только /24 и мельче — иначе перебор адресов затянется
-                    var prefix = address.PrefixLength is >= 24 and <= 32 ? address.PrefixLength : 24;
-                    var ip = ToUint(address.Address.GetAddressBytes());
-                    var mask = uint.MaxValue << (32 - prefix);
-                    var network = ip & mask;
-                    var broadcast = network | ~mask;
-                    for (var host = network + 1; host < broadcast; host++)
-                    {
-                        targets.Add(ToStringIp(host));
-                    }
+            var ownAddresses = adapters.Select(adapter => adapter.LocalAddress).ToHashSet();
+            foreach (var adapter in adapters)
+            {
+                foreach (var gateway in adapter.Gateways)
+                {
+                    if (gateway.Equals(adapter.LocalAddress) || ownAddresses.Contains(gateway)) continue;
+                    var target = new ProbeTarget(gateway, adapter.LocalAddress);
+                    if (gatewaySet.Add(target)) gatewayTargets.Add(target);
+                }
+            }
+
+            foreach (var adapter in adapters)
+            {
+                // USB tethering normally uses /24. For tiny /31 or /32 host routes
+                // use /24 as a fallback because the gateway can still be in that range.
+                var prefix = adapter.PrefixLength is >= 24 and <= 30 ? adapter.PrefixLength : 24;
+                var ip = ToUint(adapter.LocalAddress.GetAddressBytes());
+                var mask = uint.MaxValue << (32 - prefix);
+                var network = ip & mask;
+                var broadcast = network | ~mask;
+                for (var host = network + 1; host < broadcast; host++)
+                {
+                    var remoteAddress = IPAddress.Parse(ToStringIp(host));
+                    if (ownAddresses.Contains(remoteAddress)) continue;
+                    var target = new ProbeTarget(remoteAddress, adapter.LocalAddress);
+                    if (subnetSet.Add(target)) subnetTargets.Add(target);
                 }
             }
         }
         catch
         {
-            // сетевые интерфейсы недоступны — вернём что есть
+            // сетевые интерфейсы недоступны — вернём уже собранные адреса
         }
-        return targets.Where(t => !own.Contains(t)).Distinct().ToList();
+
+        return gatewayTargets.Concat(subnetTargets).ToList();
     }
 
     private static bool IsUsbTetherAdapter(NetworkInterface nic)
@@ -309,30 +349,57 @@ public sealed class CameraLink : IDisposable
         var identity = $"{nic.Name} {nic.Description}";
         return identity.Contains("USB", StringComparison.OrdinalIgnoreCase)
                || identity.Contains("RNDIS", StringComparison.OrdinalIgnoreCase)
-               || identity.Contains("Remote NDIS", StringComparison.OrdinalIgnoreCase)
+               || identity.Contains("NDIS", StringComparison.OrdinalIgnoreCase)
+               || identity.Contains("NCM", StringComparison.OrdinalIgnoreCase)
+               || identity.Contains("Tether", StringComparison.OrdinalIgnoreCase)
+               || identity.Contains("Gadget", StringComparison.OrdinalIgnoreCase)
                || identity.Contains("Android", StringComparison.OrdinalIgnoreCase);
     }
 
     private static uint ToUint(byte[] bytes)
         => (uint)(bytes[0] << 24 | bytes[1] << 16 | bytes[2] << 8 | bytes[3]);
 
-    /// <summary>Локальный IP, которым ПК выходит на телефон — телефон будет отвечать на него.</summary>
-    private static string GetLocalHostFor(string host)
+    /// <summary>
+    /// Создаёт HTTP-клиент без системного прокси и привязывает каждый исходящий сокет
+    /// к локальному USB/RNDIS-адресу Windows. Входящее соединение к ПК не требуется.
+    /// </summary>
+    private static HttpClient CreateUsbHttpClient(IPAddress localAddress, TimeSpan timeout)
     {
+        var handler = new SocketsHttpHandler
+        {
+            UseProxy = false,
+            ConnectCallback = (context, cancellationToken) =>
+                ConnectOnUsbAsync(context, localAddress, cancellationToken)
+        };
+        var client = new HttpClient(handler) { Timeout = timeout };
+        client.DefaultRequestHeaders.ConnectionClose = true;
+        return client;
+    }
+
+    private static async ValueTask<Stream> ConnectOnUsbAsync(
+        SocketsHttpConnectionContext context,
+        IPAddress localAddress,
+        CancellationToken cancellationToken)
+    {
+        if (!IPAddress.TryParse(context.DnsEndPoint.Host, out var remoteAddress)
+            || remoteAddress.AddressFamily != AddressFamily.InterNetwork)
+        {
+            throw new SocketException((int)SocketError.AddressFamilyNotSupported);
+        }
+
+        var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
         try
         {
-            using var probe = new TcpClient();
-            probe.Connect(host, Port);
-            if (probe.Client.LocalEndPoint is IPEndPoint endPoint)
-            {
-                return endPoint.Address.ToString();
-            }
+            socket.Bind(new IPEndPoint(localAddress, 0));
+            await socket.ConnectAsync(
+                new IPEndPoint(remoteAddress, context.DnsEndPoint.Port), cancellationToken);
+            return new NetworkStream(socket, ownsSocket: true);
         }
         catch
         {
-            // не получилось — телефон узнает адрес иначе
+            socket.Dispose();
+            throw;
         }
-        return "";
     }
 
     private static string ToStringIp(uint value)
