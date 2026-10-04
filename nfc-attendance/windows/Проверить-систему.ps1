@@ -100,11 +100,9 @@ Check "список присутствующих читается" {
 }
 
 Check "выгрузка CSV сохраняется рядом со скриптом" {
-    $csv = Invoke-WebRequest -Uri "$Server/api/attendance/$sessionId/export.csv" -TimeoutSec 10
     $file = Join-Path $folder "проверка-отметок.csv"
-    [System.IO.File]::WriteAllBytes($file, $csv.Content)
+    Invoke-WebRequest -Uri "$Server/api/attendance/$sessionId/export.csv" -OutFile $file -TimeoutSec 10
     if (-not (Test-Path $file)) { throw "файл не сохранён" }
-    Write-Host "`r  OK  выгрузка CSV: $file" -ForegroundColor Green
 }
 
 Write-Host ""

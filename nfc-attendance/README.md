@@ -185,7 +185,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 ### 3. iOS-приложение студента
 
-* Готовый неподписанный `.ipa` (231 КБ):
+* Готовый неподписанный `.ipa` (345 КБ):
   **[скачать](https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/NFC-Attendance-Student-unsigned.ipa)**;
   подписать своим Apple ID (даже бесплатным) на компьютере: нужны
   [Sideloadly](https://sideloadly.io/SideloadlySetup64.exe) и, на Windows,
