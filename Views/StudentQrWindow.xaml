@@ -4,8 +4,8 @@
         Title="QR-код студента" Width="520" Height="690"
         MinWidth="480" MinHeight="630"
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
-        WindowStyle="None" ShowInTaskbar="False"
-        Background="{DynamicResource Brush.Bg}"
+        WindowStyle="None" AllowsTransparency="True" ShowInTaskbar="False"
+        Background="Transparent"
         FontFamily="{DynamicResource Font.Default}">
     <Border Margin="18" CornerRadius="22" Background="{DynamicResource Brush.Panel}"
             BorderBrush="{DynamicResource Brush.Border}" BorderThickness="1"
@@ -25,7 +25,7 @@
                 <Image Source="{Binding QrImage}" Width="330" Height="330" Stretch="Uniform" />
             </Border>
             <Button Grid.Row="3" Content="Закрыть" Style="{StaticResource Btn.Primary}"
-                    HorizontalAlignment="Right" MinWidth="130" Margin="0,22,0,0"
+                    HorizontalAlignment="Center" MinWidth="130" Margin="0,22,0,0"
                     IsCancel="True" Click="Close_OnClick" />
         </Grid>
     </Border>
