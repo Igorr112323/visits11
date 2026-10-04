@@ -5,8 +5,7 @@
         Width="760" Height="680" MinWidth="680" MinHeight="600"
         WindowStyle="None" ResizeMode="CanResize"
         WindowStartupLocation="CenterScreen"
-        Background="#071B16" FontFamily="{StaticResource FontBody}"
-        Icon="/Assets/app.ico">
+        Background="#071B16" FontFamily="{StaticResource FontBody}">
     <Border CornerRadius="22" Background="#0B211B" BorderBrush="#254239" BorderThickness="1" Margin="8">
         <Grid>
             <Grid.RowDefinitions>
