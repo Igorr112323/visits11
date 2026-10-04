@@ -15,10 +15,14 @@ namespace Visits11.Services;
 /// </summary>
 public sealed class CameraLink : IDisposable
 {
-    private const int Port = 8090;
+    private const int PortStart = 8090;
+    private const int PortEnd = 8199;
 
-    private readonly record struct ProbeTarget(IPAddress RemoteAddress, IPAddress LocalAddress);
-    private sealed record PhoneEndpoint(string Host, IPAddress LocalAddress);
+    private readonly record struct ProbeTarget(
+        IPAddress RemoteAddress,
+        IPAddress LocalAddress,
+        bool IsGateway = false);
+    private sealed record PhoneEndpoint(string Host, IPAddress LocalAddress, int Port);
 
     private readonly int _serverPort;
 
@@ -76,7 +80,7 @@ public sealed class CameraLink : IDisposable
                 // Оборвалось видео — переподключаемся и восстанавливаем NFC-обмен.
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(token);
                 var cameraTask = StreamAsync(phone, linked.Token);
-                var eventTask = EventStreamAsync(phone.Host, phone.LocalAddress, linked.Token);
+                var eventTask = EventStreamAsync(phone, linked.Token);
                 await cameraTask;
                 linked.Cancel();
                 try { await eventTask; } catch { /* отменено — нормально */ }
@@ -96,37 +100,65 @@ public sealed class CameraLink : IDisposable
     private static async Task<PhoneEndpoint?> DiscoverAsync(CancellationToken token)
     {
         var targets = BuildTargets();
-        foreach (var batch in targets.Chunk(128))
+        var phone = await DiscoverAtPortAsync(targets, PortStart, 1200, token);
+        if (phone is not null || token.IsCancellationRequested) return phone;
+
+        // If 8090 is occupied, Android selects another free port. Probe alternatives
+        // on wired gateways; the USB tether gateway is the phone itself.
+        var alternateTargets = targets.Where(target => target.IsGateway).ToList();
+        if (alternateTargets.Count == 0) alternateTargets = targets;
+        var alternatePorts = Enumerable.Range(PortStart + 1, PortEnd - PortStart);
+
+        foreach (var batch in alternateTargets.Chunk(2))
         {
             if (token.IsCancellationRequested) return null;
-
-            var probes = batch.Select(target => ProbeAsync(target, token)).ToArray();
+            var probes = (from target in batch
+                          from port in alternatePorts
+                          select ProbeAsync(target, port, 1200, token)).ToArray();
             try { await Task.WhenAll(probes); }
             catch { /* пробы не бросают исключений — на всякий случай */ }
 
             foreach (var probe in probes)
             {
                 if (probe.IsCompletedSuccessfully && probe.Result is not null)
-                {
                     return probe.Result;
-                }
             }
         }
         return null;
     }
 
-    /// <summary>ПК проверяет кандидата исходящим запросом, привязанным к USB-адаптеру.</summary>
-    private static async Task<PhoneEndpoint?> ProbeAsync(ProbeTarget target, CancellationToken token)
+    private static async Task<PhoneEndpoint?> DiscoverAtPortAsync(
+        List<ProbeTarget> targets, int port, int timeoutMs, CancellationToken token)
+    {
+        foreach (var batch in targets.Chunk(128))
+        {
+            if (token.IsCancellationRequested) return null;
+            var probes = batch.Select(target => ProbeAsync(target, port, timeoutMs, token)).ToArray();
+            try { await Task.WhenAll(probes); }
+            catch { /* пробы не бросают исключений — на всякий случай */ }
+
+            foreach (var probe in probes)
+            {
+                if (probe.IsCompletedSuccessfully && probe.Result is not null)
+                    return probe.Result;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>ПК проверяет кандидата исходящим запросом, привязанным к Ethernet-адаптеру.</summary>
+    private static async Task<PhoneEndpoint?> ProbeAsync(
+        ProbeTarget target, int port, int timeoutMs, CancellationToken token)
     {
         var text = new StringBuilder();
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-            timeout.CancelAfter(TimeSpan.FromMilliseconds(1200));
+            timeout.CancelAfter(TimeSpan.FromMilliseconds(timeoutMs));
 
             using var tcp = new TcpClient(AddressFamily.InterNetwork);
             tcp.Client.Bind(new IPEndPoint(target.LocalAddress, 0));
-            await tcp.ConnectAsync(target.RemoteAddress, Port, timeout.Token);
+            await tcp.ConnectAsync(target.RemoteAddress, port, timeout.Token);
 
             var stream = tcp.GetStream();
             var host = target.RemoteAddress.ToString();
@@ -159,7 +191,7 @@ public sealed class CameraLink : IDisposable
         }
         var response = text.ToString();
         return response.Contains("200") && response.Contains("visits11-camera")
-            ? new PhoneEndpoint(target.RemoteAddress.ToString(), target.LocalAddress)
+            ? new PhoneEndpoint(target.RemoteAddress.ToString(), target.LocalAddress, port)
             : null;
     }
 
@@ -167,16 +199,17 @@ public sealed class CameraLink : IDisposable
     /// Забирает NFC-события с телефона: GET /event (long-poll) → обработать → POST /event_result.
     /// Всё исходящее со стороны ПК — брандмауэр Windows ничего не спрашивает.
     /// </summary>
-    private async Task EventStreamAsync(string host, IPAddress localAddress, CancellationToken token)
+    private async Task EventStreamAsync(PhoneEndpoint phone, CancellationToken token)
     {
-        using var client = CreateUsbHttpClient(localAddress, TimeSpan.FromSeconds(6));
+        var host = phone.Host;
+        using var client = CreateUsbHttpClient(phone.LocalAddress, TimeSpan.FromSeconds(6));
 
         var failures = 0;
         while (!token.IsCancellationRequested && failures < 4)
         {
             try
             {
-                using var response = await client.GetAsync($"http://{host}:{Port}/event?wait=3000", token);
+                using var response = await client.GetAsync($"http://{host}:{phone.Port}/event?wait=3000", token);
                 if (response.StatusCode == HttpStatusCode.NoContent)
                 {
                     failures = 0;
@@ -198,7 +231,7 @@ public sealed class CameraLink : IDisposable
                 var result = handler is not null ? handler(request) : "{\"code\":4}";
 
                 using var content = new StringContent(result, Encoding.UTF8, "application/json");
-                await client.PostAsync($"http://{host}:{Port}/event_result", content, token);
+                await client.PostAsync($"http://{host}:{phone.Port}/event_result", content, token);
             }
             catch (OperationCanceledException)
             {
@@ -227,7 +260,7 @@ public sealed class CameraLink : IDisposable
         {
             try
             {
-                using var response = await client.GetAsync($"http://{host}:{Port}/frame?since={seq}", token);
+                using var response = await client.GetAsync($"http://{host}:{phone.Port}/frame?since={seq}", token);
                 if (response.StatusCode == HttpStatusCode.NoContent)
                 {
                     // телефон жив, кадра пока нет
@@ -315,7 +348,7 @@ public sealed class CameraLink : IDisposable
                 foreach (var gateway in adapter.Gateways)
                 {
                     if (gateway.Equals(adapter.LocalAddress) || ownAddresses.Contains(gateway)) continue;
-                    var target = new ProbeTarget(gateway, adapter.LocalAddress);
+                    var target = new ProbeTarget(gateway, adapter.LocalAddress, IsGateway: true);
                     if (!seenTargets.Add(target)) continue;
                     (adapter.IsUsb ? usbGatewayTargets : otherGatewayTargets).Add(target);
                 }

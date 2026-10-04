@@ -39,6 +39,7 @@ import java.io.OutputStream;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InterfaceAddress;
+import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -64,7 +65,8 @@ import java.util.concurrent.TimeUnit;
  */
 public final class MainActivity extends Activity {
 
-    private static final int SERVER_PORT = 8090;
+    private static final int SERVER_PORT_START = 8090;
+    private static final int SERVER_PORT_END = 8199;
     private static final long FRAME_WAIT_MS = 800;
     private static final long PC_TIMEOUT_MS = 3000;
     private static final UUID TAP_SERVICE_ID = UUID.fromString("F0391101-0203-4000-8000-00805F9B34FB");
@@ -442,8 +444,8 @@ public final class MainActivity extends Activity {
             statusText.setText("ПК подключён, NFC готов");
             statusText.setTextColor(0xFF2E7D32);
         } else if (isUsbTethered() && serverSocket == null) {
-            statusText.setText("USB-модем активен, но порт связи 8090 не запущен");
-            statusText.setTextColor(0xFFB34A4A);
+            statusText.setText("USB-модем активен — автоматически запускаю порт связи");
+            statusText.setTextColor(0xFF8A8A8A);
         } else if (isUsbTethered()) {
             statusText.setText("USB-модем активен — ожидаю запрос журнала с ПК");
             statusText.setTextColor(0xFF8A8A8A);
@@ -530,11 +532,10 @@ public final class MainActivity extends Activity {
         while (serverRunning) {
             ServerSocket listener = null;
             try {
-                // Как в рабочей версии, сервер слушает wildcard-адрес, чтобы Android
-                // не отказал в bind к RNDIS-адресу на некоторых прошивках.
-                // Ниже пропускаем только запросы, пришедшие на USB IP из USB-подсети.
-                listener = new ServerSocket(SERVER_PORT);
-                listener.setSoTimeout(1000);
+                // Выбираем первый свободный порт из диапазона автоматически.
+                // Сервер слушает wildcard-адрес для совместимости прошивок, но
+                // ниже принимает только USB-IP и ПК из той же tether-подсети.
+                listener = openAvailableServerSocket();
                 serverSocket = listener;
 
                 while (serverRunning) {
@@ -557,6 +558,27 @@ public final class MainActivity extends Activity {
             }
             if (serverRunning) sleepQuietly(750);
         }
+    }
+
+    private ServerSocket openAvailableServerSocket() throws IOException {
+        IOException lastError = null;
+        for (int port = SERVER_PORT_START; port <= SERVER_PORT_END; port++) {
+            ServerSocket candidate = null;
+            try {
+                candidate = new ServerSocket();
+                candidate.bind(new InetSocketAddress(port), 50);
+                candidate.setSoTimeout(1000);
+                return candidate;
+            } catch (IOException error) {
+                lastError = error;
+                closeQuietly(candidate);
+            } catch (SecurityException error) {
+                closeQuietly(candidate);
+                throw new IOException("Android denied opening the teacher USB listener", error);
+            }
+        }
+        if (lastError != null) throw lastError;
+        throw new IOException("No free teacher USB port");
     }
 
     /** Принимаем запросы только к USB IP от ПК в той же USB tether-подсети. */

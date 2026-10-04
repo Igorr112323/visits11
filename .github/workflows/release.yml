@@ -1,4 +1,4 @@
-name: Teacher USB release v2.0.4
+name: Teacher USB release v2.0.5
 
 # This teacher-only release intentionally omits the student, iOS, and server builds.
 on:
@@ -100,10 +100,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create v2.0.4 \
+          gh release create v2.0.5 \
             release-assets/KubGAU-Journal.exe \
             release-assets/KubGAU-Teacher.apk \
             --target "$GITHUB_SHA" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "КубГАУ · Связь преподавателя по USB v2.0.4" \
-            --notes "v2.0.4 исправляет обнаружение телефона по истории ранее работавшего варианта: Windows больше не отбрасывает USB/RNDIS-сетевой адаптер из-за его имени (в том числе локализованного/общего). Wi-Fi не сканируется. ПК инициирует запросы через Ethernet-подсети, APK отвечает только на USB-IP и от узла в той же USB-подсети. Входящие исключения брандмауэра Windows для этого канала не нужны. Релиз содержит только Windows-журнал и APK преподавателя."
+            --title "КубГАУ · Связь преподавателя по USB v2.0.5" \
+            --notes "v2.0.5: APK автоматически выбирает свободный порт в диапазоне 8090–8199 вместо бесконечного ожидания одного занятого порта. Журнал Windows ищет приложение на USB/RNDIS Ethernet-соединении, проверяя свободный порт на шлюзе USB-модема. Wi-Fi не сканируется; входящие исключения брандмауэра Windows не нужны. APK отвечает только на USB-IP и от ПК в той же USB-подсети. Релиз содержит только Windows-журнал и APK преподавателя."
