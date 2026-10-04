@@ -4,14 +4,15 @@ import SwiftUI
 ///
 /// Что происходит при запуске:
 ///   1. поднимается Core Data (локальные отметки, очередь отправки);
-///   2. приложение проверяет связь с сервером преподавателя и досылает
-///      всё, что не уехало в прошлый раз;
-///   3. открывается экран «Отметиться».
+///   2. восстанавливается вход студента (логин и хэш пароля лежат в Keychain);
+///   3. приложение проверяет связь с сервером и досылает всё, что не уехало;
+///   4. открывается один из двух экранов: вход (если не вошёл) или отметка.
 @main
 struct Visits11StudentApp: App {
 
     @StateObject private var store = AttendanceStore.shared
     @StateObject private var settings = Settings.shared
+    @StateObject private var auth = AuthService.shared
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -19,6 +20,7 @@ struct Visits11StudentApp: App {
             ContentView()
                 .environmentObject(store)
                 .environmentObject(settings)
+                .environmentObject(auth)
                 .task {
                     // при старте — досылаем очередь и обновляем список
                     await SyncService.shared.syncPending(store: store)

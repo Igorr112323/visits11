@@ -26,6 +26,7 @@ targets:
         PRODUCT_NAME: Visits11Student
         MARKETING_VERSION: "1.0.0"
         CURRENT_PROJECT_VERSION: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon   # иконка как в Android-приложении
         TARGETED_DEVICE_FAMILY: "1"          # только iPhone
         GENERATE_INFOPLIST_FILE: "NO"
         INFOPLIST_FILE: Sources/Info.plist

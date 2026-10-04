@@ -112,6 +112,21 @@ curl -s -X POST http://127.0.0.1:8000/api/attendance \
 
 ---
 
+## Этап 2.5. Логины и пароли студентов (2 минуты)
+
+1. Откройте `windows/Студенты.ps1`, впишите логины, ФИО и пароли.
+2. Запустите: `.\windows\Студенты.ps1` — скрипт зарегистрирует всех и сразу
+   проверит вход каждого.
+3. Проверка «как у студента» (должен быть `ok: True`), а затем неверный пароль —
+   сервер обязан ответить **401 wrong_password**:
+
+```powershell
+$body = @{ student_id = "ARHIPOV_II"; password = "kubgau-2026" } | ConvertTo-Json
+Invoke-RestMethod http://127.0.0.1:8000/api/students/login -Method Post -ContentType "application/json; charset=utf-8" -Body ([System.Text.Encoding]::UTF8.GetBytes($body))
+```
+
+Всё то же «одним нажатием»: `.\windows\Проверить-систему.ps1`.
+
 ## Этап 3. iPhone-студент (10–20 минут, включая подпись)
 
 Подготовка: iPhone с iOS 16+, приложение установлено (см. [INSTALL_AND_SIGNING.md](INSTALL_AND_SIGNING.md)),

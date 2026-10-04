@@ -129,9 +129,21 @@ class SessionSync(BaseModel):
 
 
 class StudentCreate(BaseModel):
+    """Регистрация студента: логин, ФИО и (необязательно) пароль."""
+
     student_id: str = Field(min_length=1, max_length=120)
     name: Optional[str] = Field(default=None, max_length=200)
     group_name: Optional[str] = Field(default=None, max_length=120)
+    # Пароль нужен, чтобы студент входил в приложение и приложение могло
+    # проверить, что он ввёл его правильно.
+    password: Optional[str] = Field(default=None, min_length=4, max_length=120)
+
+
+class StudentLogin(BaseModel):
+    """Вход студента: логин + пароль (проверяет сервер)."""
+
+    student_id: str = Field(min_length=1, max_length=120)
+    password: str = Field(min_length=1, max_length=120)
 
 
 # ------------------------------------------------------------------- служебные
@@ -165,6 +177,7 @@ def index() -> str:
   <ul>
     <li><a href="/docs">Swagger-документация (/docs)</a></li>
     <li><code>POST /api/session</code> — создать пару</li>
+    <li><code>POST /api/students/login</code> — войти студенту (логин + пароль)</li>
     <li><code>POST /api/attendance</code> — прислать отметку</li>
     <li><code>GET /api/attendance/{{session_id}}</code> — список присутствующих</li>
     <li><code>GET /api/sessions</code> — список пар</li>
@@ -192,10 +205,68 @@ def register_student(
     payload: StudentCreate,
     x_api_key: Optional[str] = Header(default=None, alias="X-Api-Key"),
 ) -> dict[str, Any]:
-    """Регистрирует студента (login → ФИО, группа). device_id привяжется при первой отметке."""
+    """
+    Регистрирует студента (login → ФИО, группа, пароль).
+
+    device_id привяжется при первой отметке. Пароль сохраняется в виде хэша —
+    по нему приложение проверяет вход студента.
+    """
     check_key(x_api_key)
-    student = db.upsert_student(payload.student_id, payload.name, payload.group_name)
+    student = db.upsert_student(
+        payload.student_id, payload.name, payload.group_name, payload.password
+    )
     return {"ok": True, "student": student}
+
+
+@app.post("/api/students/login")
+def login_student(
+    payload: StudentLogin,
+    x_api_key: Optional[str] = Header(default=None, alias="X-Api-Key"),
+) -> JSONResponse:
+    """
+    Проверить логин и пароль студента: так iPhone понимает, правильно ли введён пароль.
+
+    Ответы:
+      • 200 ok                       — пароль верный, отдаём карточку студента;
+      • 401 wrong_password           — логин есть, но пароль другой;
+      • 404 unknown_student          — такого логина нет (можно зарегистрироваться);
+      • 409 no_password              — студент есть, но пароль ещё не задан.
+    """
+    check_key(x_api_key)
+    student_id = payload.student_id.strip()
+
+    checked = db.check_student_password(student_id, payload.password)
+    if checked is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "ok": False,
+                "reason": "unknown_student",
+                "detail": "Такого логина нет. Проверьте написание или создайте аккаунт.",
+            },
+        )
+
+    student = db.get_student(student_id) or {}
+    if not db.has_password(student_id):
+        return JSONResponse(
+            status_code=409,
+            content={
+                "ok": False,
+                "reason": "no_password",
+                "detail": "У этого логина ещё нет пароля — создайте аккаунт с паролем.",
+            },
+        )
+    if not checked:
+        return JSONResponse(
+            status_code=401,
+            content={
+                "ok": False,
+                "reason": "wrong_password",
+                "detail": "Неверный пароль. Проверьте раскладку клавиатуры и Caps Lock.",
+            },
+        )
+
+    return JSONResponse(status_code=200, content={"ok": True, "student": student})
 
 
 @app.get("/api/students")

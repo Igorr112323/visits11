@@ -128,6 +128,9 @@ SELECT s.id, s.name FROM students s
 SELECT created_at, student_id, device_id, reason FROM rejected_marks
  WHERE session_id = 'UUID пары' ORDER BY created_at DESC;
 
+-- у кого задан пароль (в базе только хэш, сам пароль не хранится)
+SELECT id, name, (password_hash IS NOT NULL) AS has_password FROM students;
+
 -- отметки без подтверждения касанием (или со слабым сигналом — «из коридора»)
 SELECT student_id, timestamp, rssi, source FROM attendance
  WHERE session_id = 'UUID пары' AND verified = 0;

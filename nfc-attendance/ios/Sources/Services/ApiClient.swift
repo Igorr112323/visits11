@@ -82,6 +82,36 @@ struct ApiClient {
         let detail: String?
     }
 
+    /// Карточка студента, которую отдаёт сервер (без пароля и его хэша).
+    struct StudentInfo: Codable {
+        let id: String
+        let name: String?
+        let groupName: String?
+        let deviceId: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id, name
+            case groupName = "group_name"
+            case deviceId = "device_id"
+        }
+    }
+
+    private struct StudentResponse: Codable {
+        let ok: Bool
+        let student: StudentInfo?
+    }
+
+    /// Итог проверки логина и пароля.
+    enum LoginResult {
+        case ok(StudentInfo)
+        case wrongPassword(String)
+        case unknownStudent(String)
+        case noPassword(String)
+        case unavailable
+    }
+
+
+
     /// Тело отметки — ровно то, что ждёт POST /api/attendance.
     struct MarkBody: Codable {
         let sessionId: String
@@ -106,6 +136,57 @@ struct ApiClient {
     }
 
     // ------------------------------------------------------------------ запросы
+
+    /// Вход студента: POST /api/students/login.
+    ///
+    /// Сервер сам решает, верный ли пароль: он хранит только PBKDF2-хэш.
+    func login(studentId: String, password: String) async -> LoginResult {
+        await studentRequest(
+            path: "/api/students/login",
+            body: ["student_id": studentId, "password": password]
+        )
+    }
+
+    /// Создать аккаунт студента: POST /api/students/register (логин, ФИО, пароль).
+    func register(studentId: String, name: String, password: String) async -> LoginResult {
+        await studentRequest(
+            path: "/api/students/register",
+            body: ["student_id": studentId, "name": name, "password": password]
+        )
+    }
+
+    private func studentRequest(path: String, body: [String: Any]) async -> LoginResult {
+        guard let url = URL(string: path, relativeTo: baseURL) else { return .unavailable }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            let error = try? JSONDecoder().decode(ErrorResponse.self, from: data)
+            let detail = error?.detail ?? ""
+
+            switch status {
+            case 200:
+                guard let student = try? JSONDecoder().decode(StudentResponse.self, from: data).student else {
+                    return .unavailable
+                }
+                return .ok(student)
+            case 401:
+                return .wrongPassword(detail.isEmpty ? "Неверный пароль" : detail)
+            case 404:
+                return .unknownStudent(detail.isEmpty ? "Такого логина нет" : detail)
+            case 409:
+                return .noPassword(detail.isEmpty ? "У логина ещё нет пароля" : detail)
+            default:
+                return .unavailable
+            }
+        } catch {
+            return .unavailable
+        }
+    }
 
     /// Проверка связи: GET /api/health.
     func health() async -> Bool {
@@ -209,5 +290,13 @@ struct ApiClient {
         } catch {
             return []
         }
+    }
+}
+
+extension ApiClient {
+    /// Удобный конструктор: берём адрес из настроек студента.
+    init?(settings: Settings) {
+        guard let baseURL = settings.baseURL else { return nil }
+        self.init(baseURL: baseURL)
     }
 }
