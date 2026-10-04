@@ -1,0 +1,232 @@
+name: NFC Attendance (Kotlin + Swift)
+
+on:
+  push:
+    paths:
+      - 'nfc-attendance/**'
+      - '.github/workflows/nfc-attendance.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------- Android APK
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      # Тестовый ключ подписи. Для обновления уже установленного приложения
+      # без переустановки положите свой keystore в секреты репозитория
+      # (ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS).
+      - name: Test keystore (можно заменить своими секретами)
+        run: |
+          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/ci.jks"
+            echo "KEYSTORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+          else
+            keytool -genkeypair -v -keystore "$RUNNER_TEMP/ci.jks" \
+              -storepass kubgau-test -keypass kubgau-test \
+              -alias kubgau -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=KubGAU Test, O=KubGAU, C=RU"
+            echo "KEYSTORE_PASSWORD=kubgau-test" >> "$GITHUB_ENV"
+            echo "KEY_ALIAS=kubgau" >> "$GITHUB_ENV"
+            echo "KEY_PASSWORD=kubgau-test" >> "$GITHUB_ENV"
+          fi
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/ci.jks" >> "$GITHUB_ENV"
+
+      - name: Build release APK (Kotlin, HCE)
+        working-directory: nfc-attendance/android
+        env:
+          KEYSTORE_PATH: ${{ env.KEYSTORE_PATH }}
+          KEYSTORE_PASSWORD: ${{ env.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ env.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ env.KEY_PASSWORD }}
+        run: |
+          set -o pipefail
+          gradle assembleRelease --no-daemon --stacktrace > build.log 2>&1 || {
+            echo "=== ошибки сборки (аннотации) ==="
+            grep -E "^e: |error:|error |Execution failed|What went wrong|Could not|Caused by" build.log \
+              | head -40 | while read -r line; do echo "::error::$line"; done
+            tail -30 build.log | while read -r line; do echo "::error::LOG: $line"; done
+            exit 1
+          }
+          tail -5 build.log
+
+      - name: Collect APK
+        run: |
+          mkdir -p out
+          cp nfc-attendance/android/app/build/outputs/apk/release/app-release.apk \
+             out/NFC-Attendance-Teacher.apk
+          ls -lh out
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NFC-Attendance-Teacher-apk
+          path: out/NFC-Attendance-Teacher.apk
+          if-no-files-found: error
+
+      - name: Publish APK to release nfc-v1.0.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view nfc-v1.0.0 --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload nfc-v1.0.0 out/NFC-Attendance-Teacher.apk --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create nfc-v1.0.0 out/NFC-Attendance-Teacher.apk \
+              --title "КубГАУ · NFC-отметки (FastAPI + Kotlin + Swift)" \
+              --notes "Локальная система отметок: сервер FastAPI, Android-терминал с эмуляцией NDEF-метки, iPhone-приложение студента. Подробности — в nfc-attendance/README.md" \
+              --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY"
+          fi
+
+  # ----------------------------------------------- Сервер .exe (Windows, без Python)
+  server-exe:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install server dependencies
+        working-directory: nfc-attendance/server
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi==0.115.6 uvicorn==0.34.0 pydantic==2.10.4 pyinstaller==6.11.1
+
+      # Не собираем exe из сломанного кода: сначала прогоняем тесты сервера
+      - name: Test server
+        working-directory: nfc-attendance/server
+        run: |
+          pip install pytest==8.3.4 httpx==0.28.1
+          python -m pytest tests -q
+
+      - name: Build one-file EXE (PyInstaller)
+        working-directory: nfc-attendance/server
+        run: |
+          pyinstaller --noconfirm --onefile --name KubGAU-Attendance-Server --collect-all uvicorn --hidden-import uvicorn.logging --hidden-import uvicorn.loops.asyncio --hidden-import uvicorn.lifespan.on --hidden-import uvicorn.protocols.http.h11_impl --hidden-import main --hidden-import database launcher.py
+          Get-ChildItem dist
+
+      - name: Smoke test EXE (запуск и ответ /api/health)
+        working-directory: nfc-attendance/server
+        shell: pwsh
+        run: |
+          $env:ATTENDANCE_DB = "$env:RUNNER_TEMP\smoke.db"
+          $process = Start-Process -FilePath "dist\KubGAU-Attendance-Server.exe" -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP\exe.log" -NoNewWindow
+          $ok = $false
+          foreach ($i in 1..30) {
+            Start-Sleep -Seconds 1
+            try {
+              $response = Invoke-WebRequest -Uri "http://127.0.0.1:8000/api/health" -UseBasicParsing -TimeoutSec 3
+              if ($response.StatusCode -eq 200) { $ok = $true; break }
+            } catch { }
+          }
+          Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          Get-Content "$env:RUNNER_TEMP\exe.log" | Select-Object -First 40
+          if (-not $ok) {
+            Write-Error "::error::EXE не отвечает на /api/health"
+            exit 1
+          }
+          Write-Host "EXE отвечает на /api/health — ок"
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KubGAU-Attendance-Server-exe
+          path: nfc-attendance/server/dist/KubGAU-Attendance-Server.exe
+          if-no-files-found: error
+
+      - name: Publish EXE to release nfc-v1.0.0
+        working-directory: nfc-attendance/server
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $null = gh release view nfc-v1.0.0 --repo "$env:GITHUB_REPOSITORY" 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload nfc-v1.0.0 dist/KubGAU-Attendance-Server.exe --clobber --repo "$env:GITHUB_REPOSITORY"
+          } else {
+            gh release create nfc-v1.0.0 dist/KubGAU-Attendance-Server.exe --title "КубГАУ · Отметки касанием (FastAPI + Kotlin + Swift)" --notes "Локальная система отметок: сервер FastAPI (exe для Windows), Android-терминал с BLE-меткой и NFC HCE, iPhone-приложение студента. Подробности — в nfc-attendance/README.md" --target "$env:GITHUB_SHA" --repo "$env:GITHUB_REPOSITORY"
+          }
+
+  # ------------------------------------------------------------------ iOS (ipa)
+  ios:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: nfc-attendance/ios
+        run: |
+          xcodegen generate
+          # XcodeGen пишет формат Xcode 16 (objectVersion 77) — на раннере Xcode 15
+          sed -i '' 's/objectVersion = 77;/objectVersion = 56;/' Visits11Student.xcodeproj/project.pbxproj
+
+      - name: Build unsigned app (проверка компиляции)
+        working-directory: nfc-attendance/ios
+        run: |
+          set -o pipefail
+          xcodebuild -project Visits11Student.xcodeproj \
+            -scheme Visits11Student \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            clean build > build.log 2>&1 || {
+              grep -m 40 "error:" build.log | while read -r line; do echo "::error::$line"; done
+              tail -40 build.log | while read -r line; do echo "::error::$line"; done
+              exit 1
+            }
+
+      - name: Package unsigned .ipa (подпишете своим Apple ID через Sideloadly)
+        working-directory: nfc-attendance/ios
+        run: |
+          mkdir Payload
+          cp -r build/Build/Products/Release-iphoneos/Visits11Student.app Payload/
+          zip -qry NFC-Attendance-Student-unsigned.ipa Payload
+          cp NFC-Attendance-Student-unsigned.ipa ..
+          ls -lh NFC-Attendance-Student-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NFC-Attendance-Student-ipa
+          path: nfc-attendance/ios/NFC-Attendance-Student-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Publish IPA to release nfc-v1.0.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view nfc-v1.0.0 --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload nfc-v1.0.0 nfc-attendance/ios/NFC-Attendance-Student-unsigned.ipa \
+              --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create nfc-v1.0.0 nfc-attendance/ios/NFC-Attendance-Student-unsigned.ipa \
+              --title "КубГАУ · NFC-отметки (FastAPI + Kotlin + Swift)" \
+              --notes "Локальная система отметок: сервер FastAPI, Android-терминал с эмуляцией NDEF-метки, iPhone-приложение студента." \
+              --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY"
+          fi
