@@ -166,5 +166,6 @@ jobs:
             release-assets/KubGAU-Student.apk \
             release-assets/Visits11-Student-iOS-unsigned.ipa \
             --target "$GITHUB_SHA" \
+            --repo "$GITHUB_REPOSITORY" \
             --title "КубГАУ · Учёт посещаемости v2.0.0" \
             --notes "Windows, Android и iOS build/test artifacts from the cross-platform QR attendance workflow. iOS IPA is unsigned; sign it with an Apple Developer account or Sideloadly before installing. BLE/NFC device flows require physical phones and are not verified by CI."
