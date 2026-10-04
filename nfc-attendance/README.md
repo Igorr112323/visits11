@@ -125,6 +125,20 @@
 
 ### 1. Сервер (ноутбук преподавателя)
 
+**Вариант А — готовый `.exe` для Windows (Python не нужен):**
+
+1. Скачайте
+   [`KubGAU-Attendance-Server.exe`](https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/KubGAU-Attendance-Server.exe).
+2. Положите в любую папку (например `C:\КубГАУ\`) и запустите.
+   Windows спросит про брандмауэр — поставьте галочку **«Частные сети»** и
+   нажмите **«Разрешить доступ»**.
+3. В чёрном окне появится адрес вида `http://192.168.1.10:8000` — его вводят
+   телефоны. Рядом с exe создастся `attendance.db` (это база, её можно копировать
+   для резервной копии).
+4. Окно не закрывайте — это и есть сервер. Остановить: `Ctrl + C`.
+
+**Вариант Б — из исходников (любая система):**
+
 ```bash
 cd server
 python -m venv .venv
@@ -132,9 +146,9 @@ python -m venv .venv
 # macOS/Linux:  source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn main:app --host 0.0.0.0 --port 8000
+# или просто:  python launcher.py
 ```
 
-В консоли появится адрес вида `http://192.168.1.10:8000` — его вводят телефоны.
 Тесты: `pytest -v` (22 проверки, включая BLE-касания и отсев слабого сигнала).
 
 ### 2. Android-приложение преподавателя
@@ -213,6 +227,7 @@ Swagger: `http://<IP>:8000/docs`.
 ```
 nfc-attendance/
 ├── server/                  FastAPI + SQLite (22 теста pytest)
+│   └── launcher.py          точка входа для сборки KubGAU-Attendance-Server.exe
 ├── android/                 Kotlin, Android Studio проект
 │   └── app/src/main/java/ru/kubgau/attendance/terminal/
 │       ├── ble/             BLE-метка: протокол, дистанции, foreground-сервис
