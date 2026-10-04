@@ -1,5 +1,6 @@
 name: Teacher USB release v2.0.3
 
+# This teacher-only release intentionally omits the student, iOS, and server builds.
 on:
   push:
     branches:
