@@ -66,7 +66,8 @@ try {
     if ($afterAck.Count -ne 0) { throw "Acknowledged mark remained in the pending queue" }
     Write-Output "PASS server health, key persistence, mark acceptance, duplicate protection, teacher authorization, queue delivery and acknowledgement"
 } catch {
-    Write-Output "::error::Server API smoke test failed: $($_.Exception.Message)"
+    $message = $_.Exception.Message -replace "[\r\n]+", " | "
+    Write-Output "::error::Server API smoke test failed: $message"
     throw
 } finally {
     if ($null -ne $process -and -not $process.HasExited) { Stop-Process -Id $process.Id -Force }
