@@ -2,6 +2,11 @@
 
 Порядок — от простого к сложному. Этап 1 можно пройти вообще без телефонов.
 
+**Готовые файлы для этапов 2–3:**
+[APK преподавателя](https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/NFC-Attendance-Teacher.apk) ·
+[неподписанный IPA студента](https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/NFC-Attendance-Student-unsigned.ipa)
+(подписать своим Apple ID — [инструкция](INSTALL_AND_SIGNING.md#3-iphone-приложение-студента))
+
 ---
 
 ## Этап 0. Автотесты сервера (2 минуты)
