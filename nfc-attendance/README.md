@@ -157,8 +157,8 @@ uvicorn main:app --host 0.0.0.0 --port 8000
   [Sideloadly](https://sideloadly.io/SideloadlySetup64.exe) и, на Windows,
   [iTunes](https://www.apple.com/itunes/download/win64) +
   [iCloud](https://updates.cdn-apple.com/2020/windows/001-39935-20200911-1A70AA56-F448-11EA-8CC0-99D41950005E/iCloudSetup.exe)
-  с сайта Apple. Пошагово:
-  [инструкция](docs/INSTALL_AND_SIGNING.md#31-установка-и-подпись-через-sideloadly--пошагово-windows-или-macos).
+  с сайта Apple. Короткая памятка: **[КАК-ПОСТАВИТЬ-НА-IPHONE.md](docs/КАК-ПОСТАВИТЬ-НА-IPHONE.md)**,
+  подробно: [INSTALL_AND_SIGNING.md](docs/INSTALL_AND_SIGNING.md#31-установка-и-подпись-через-sideloadly--пошагово-windows-или-macos).
 * Или `xcodegen generate` в `ios/` и ▶ в Xcode.
 
 В приложении: «Настройки» → адрес сервера и логин → вкладка «Отметиться» →

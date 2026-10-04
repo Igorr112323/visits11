@@ -5,7 +5,7 @@
 **Готовые файлы для этапов 2–3:**
 [APK преподавателя](https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/NFC-Attendance-Teacher.apk) ·
 [неподписанный IPA студента](https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/NFC-Attendance-Student-unsigned.ipa)
-(подписать своим Apple ID — [инструкция](INSTALL_AND_SIGNING.md#3-iphone-приложение-студента))
+(подписать своим Apple ID — [памятка](КАК-ПОСТАВИТЬ-НА-IPHONE.md))
 
 ---
 
