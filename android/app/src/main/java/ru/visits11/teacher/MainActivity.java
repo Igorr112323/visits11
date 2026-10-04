@@ -38,8 +38,8 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.InterfaceAddress;
 import java.net.NetworkInterface;
-import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketTimeoutException;
@@ -417,7 +417,8 @@ public final class MainActivity extends Activity {
     // ------------------------------------------------------------ статус связи
 
     private boolean pcConnected() {
-        return serverRunning && SystemClock.elapsedRealtime() - lastClientAt < PC_TIMEOUT_MS;
+        return serverRunning && serverSocket != null
+                && SystemClock.elapsedRealtime() - lastClientAt < PC_TIMEOUT_MS;
     }
 
     private void updateStatus() {
@@ -440,6 +441,9 @@ public final class MainActivity extends Activity {
         if (pcConnected()) {
             statusText.setText("ПК подключён, NFC готов");
             statusText.setTextColor(0xFF2E7D32);
+        } else if (isUsbTethered() && serverSocket == null) {
+            statusText.setText("USB-модем активен, но порт связи 8090 не запущен");
+            statusText.setTextColor(0xFFB34A4A);
         } else if (isUsbTethered()) {
             statusText.setText("USB-модем активен — ожидаю запрос журнала с ПК");
             statusText.setTextColor(0xFF8A8A8A);
@@ -524,38 +528,70 @@ public final class MainActivity extends Activity {
 
     private void serverLoop() {
         while (serverRunning) {
-            InetAddress usbAddress = findUsbTetherAddress();
-            if (usbAddress == null) {
-                sleepQuietly(750);
-                continue;
-            }
-
             ServerSocket listener = null;
             try {
-                listener = new ServerSocket();
-                listener.setReuseAddress(true);
-                listener.bind(new InetSocketAddress(usbAddress, SERVER_PORT), 50);
+                // Как в рабочей версии, сервер слушает wildcard-адрес, чтобы Android
+                // не отказал в bind к RNDIS-адресу на некоторых прошивках.
+                // Ниже пропускаем только запросы, пришедшие на USB IP из USB-подсети.
+                listener = new ServerSocket(SERVER_PORT);
                 listener.setSoTimeout(1000);
                 serverSocket = listener;
 
                 while (serverRunning) {
-                    InetAddress currentAddress = findUsbTetherAddress();
-                    if (currentAddress == null || !usbAddress.equals(currentAddress)) break;
                     try {
                         Socket client = listener.accept();
+                        if (!isUsbTetherConnection(client)) {
+                            closeQuietly(client);
+                            continue;
+                        }
                         new Thread(() -> handleClient(client), "Http").start();
                     } catch (SocketTimeoutException ignored) {
-                        // Периодически проверяем, что USB-модем всё ещё активен.
+                        // Проверяем флаг остановки, не блокируясь в accept бесконечно.
                     }
                 }
             } catch (IOException ignored) {
-                // При отключении кабеля сокет закрывается и создаётся заново только на USB-интерфейсе.
+                // Если порт занят, повторяем попытку после короткой паузы.
             } finally {
                 if (serverSocket == listener) serverSocket = null;
                 closeQuietly(listener);
             }
             if (serverRunning) sleepQuietly(750);
         }
+    }
+
+    /** Принимаем запросы только к USB IP от ПК в той же USB tether-подсети. */
+    private boolean isUsbTetherConnection(Socket client) {
+        try {
+            InetAddress usbAddress = findUsbTetherAddress();
+            if (usbAddress == null || !usbAddress.equals(client.getLocalAddress())) return false;
+            InetAddress peerAddress = client.getInetAddress();
+            if (!(peerAddress instanceof Inet4Address)) return false;
+
+            NetworkInterface usbInterface = NetworkInterface.getByInetAddress(usbAddress);
+            if (usbInterface == null || !usbInterface.isUp()) return false;
+            for (InterfaceAddress interfaceAddress : usbInterface.getInterfaceAddresses()) {
+                if (!usbAddress.equals(interfaceAddress.getAddress())) continue;
+                return isSameIpv4Subnet(usbAddress, peerAddress,
+                        interfaceAddress.getNetworkPrefixLength());
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
+    private static boolean isSameIpv4Subnet(InetAddress left, InetAddress right, int prefixLength) {
+        if (!(left instanceof Inet4Address) || !(right instanceof Inet4Address)
+                || prefixLength < 1 || prefixLength > 32) return false;
+        byte[] leftBytes = left.getAddress();
+        byte[] rightBytes = right.getAddress();
+        int remainingBits = prefixLength;
+        for (int i = 0; i < leftBytes.length; i++) {
+            int bits = Math.min(remainingBits, 8);
+            int mask = bits == 0 ? 0 : (0xFF << (8 - bits)) & 0xFF;
+            if (((leftBytes[i] & 0xFF) & mask) != ((rightBytes[i] & 0xFF) & mask)) return false;
+            remainingBits -= bits;
+        }
+        return true;
     }
 
     private static void sleepQuietly(long milliseconds) {

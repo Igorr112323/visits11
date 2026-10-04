@@ -89,9 +89,9 @@ public sealed class CameraLink : IDisposable
     }
 
     /// <summary>
-    /// Находит телефон только через активный USB/RNDIS Ethernet-адаптер ПК.
-    /// Сначала проверяется адрес шлюза телефона; если шлюз не опубликован,
-    /// Windows делает исходящие пробы адресов той же USB-подсети.
+    /// Windows may report RNDIS with a generic Ethernet name, so inspect active
+    /// wired adapters (not Wi-Fi), prioritizing recognizable USB adapters.
+    /// The APK responds only on its USB-tether address and to a peer in that subnet.
     /// </summary>
     private static async Task<PhoneEndpoint?> DiscoverAsync(CancellationToken token)
     {
@@ -273,16 +273,18 @@ public sealed class CameraLink : IDisposable
     // ------------------------------------------------------------- адреса сети
 
     /// <summary>
-    /// Собирает адреса телефона только с активных USB/RNDIS Ethernet-интерфейсов.
-    /// Сначала идут шлюзы USB-модема, затем адреса из той же USB-подсети.
+    /// Windows reports some phone RNDIS adapters with a generic or localized name.
+    /// Scan active wired Ethernet interfaces (never Wi-Fi), preferring recognizable
+    /// USB adapters. The APK answers only on its USB-tether address/subnet.
     /// </summary>
     private static List<ProbeTarget> BuildTargets()
     {
-        var adapters = new List<(IPAddress LocalAddress, int PrefixLength, List<IPAddress> Gateways)>();
-        var gatewayTargets = new List<ProbeTarget>();
-        var subnetTargets = new List<ProbeTarget>();
-        var gatewaySet = new HashSet<ProbeTarget>();
-        var subnetSet = new HashSet<ProbeTarget>();
+        var adapters = new List<(IPAddress LocalAddress, int PrefixLength, List<IPAddress> Gateways, bool IsUsb)>();
+        var usbGatewayTargets = new List<ProbeTarget>();
+        var otherGatewayTargets = new List<ProbeTarget>();
+        var usbSubnetTargets = new List<ProbeTarget>();
+        var otherSubnetTargets = new List<ProbeTarget>();
+        var seenTargets = new HashSet<ProbeTarget>();
 
         try
         {
@@ -290,39 +292,38 @@ public sealed class CameraLink : IDisposable
             {
                 if (nic.OperationalStatus != OperationalStatus.Up) continue;
                 if (nic.NetworkInterfaceType != NetworkInterfaceType.Ethernet) continue;
-                if (!IsUsbTetherAdapter(nic)) continue;
+                if (IsVirtualAdapter(nic)) continue;
 
                 var properties = nic.GetIPProperties();
                 var gateways = properties.GatewayAddresses
                     .Select(gateway => gateway.Address)
-                    .Where(address => address.AddressFamily == AddressFamily.InterNetwork
-                                      && !address.Equals(IPAddress.Any)
-                                      && !address.Equals(IPAddress.Loopback))
+                    .Where(IsPrivateOrLinkLocalIPv4)
                     .ToList();
+                var isUsb = IsUsbTetherAdapter(nic);
 
                 foreach (var address in properties.UnicastAddresses)
                 {
-                    if (address.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                    if (!IsPrivateOrLinkLocalIPv4(address.Address)) continue;
                     if (IPAddress.IsLoopback(address.Address)) continue;
-                    adapters.Add((address.Address, address.PrefixLength, gateways));
+                    adapters.Add((address.Address, address.PrefixLength, gateways, isUsb));
                 }
             }
 
             var ownAddresses = adapters.Select(adapter => adapter.LocalAddress).ToHashSet();
-            foreach (var adapter in adapters)
+            foreach (var adapter in adapters.OrderByDescending(adapter => adapter.IsUsb))
             {
                 foreach (var gateway in adapter.Gateways)
                 {
                     if (gateway.Equals(adapter.LocalAddress) || ownAddresses.Contains(gateway)) continue;
                     var target = new ProbeTarget(gateway, adapter.LocalAddress);
-                    if (gatewaySet.Add(target)) gatewayTargets.Add(target);
+                    if (!seenTargets.Add(target)) continue;
+                    (adapter.IsUsb ? usbGatewayTargets : otherGatewayTargets).Add(target);
                 }
             }
 
-            foreach (var adapter in adapters)
+            foreach (var adapter in adapters.OrderByDescending(adapter => adapter.IsUsb))
             {
-                // USB tethering normally uses /24. For tiny /31 or /32 host routes
-                // use /24 as a fallback because the gateway can still be in that range.
+                // USB tethering normally uses /24. For host routes, use /24 as fallback.
                 var prefix = adapter.PrefixLength is >= 24 and <= 30 ? adapter.PrefixLength : 24;
                 var ip = ToUint(adapter.LocalAddress.GetAddressBytes());
                 var mask = uint.MaxValue << (32 - prefix);
@@ -331,9 +332,10 @@ public sealed class CameraLink : IDisposable
                 for (var host = network + 1; host < broadcast; host++)
                 {
                     var remoteAddress = IPAddress.Parse(ToStringIp(host));
-                    if (ownAddresses.Contains(remoteAddress)) continue;
+                    if (!IsPrivateOrLinkLocalIPv4(remoteAddress) || ownAddresses.Contains(remoteAddress)) continue;
                     var target = new ProbeTarget(remoteAddress, adapter.LocalAddress);
-                    if (subnetSet.Add(target)) subnetTargets.Add(target);
+                    if (!seenTargets.Add(target)) continue;
+                    (adapter.IsUsb ? usbSubnetTargets : otherSubnetTargets).Add(target);
                 }
             }
         }
@@ -342,7 +344,31 @@ public sealed class CameraLink : IDisposable
             // сетевые интерфейсы недоступны — вернём уже собранные адреса
         }
 
-        return gatewayTargets.Concat(subnetTargets).ToList();
+        return usbGatewayTargets
+            .Concat(otherGatewayTargets)
+            .Concat(usbSubnetTargets)
+            .Concat(otherSubnetTargets)
+            .ToList();
+    }
+
+    private static bool IsVirtualAdapter(NetworkInterface nic)
+    {
+        var identity = $"{nic.Name} {nic.Description}";
+        return identity.Contains("Hyper-V", StringComparison.OrdinalIgnoreCase)
+               || identity.Contains("Virtual", StringComparison.OrdinalIgnoreCase)
+               || identity.Contains("VMware", StringComparison.OrdinalIgnoreCase)
+               || identity.Contains("Loopback", StringComparison.OrdinalIgnoreCase)
+               || identity.Contains("Wi-Fi Direct", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsPrivateOrLinkLocalIPv4(IPAddress address)
+    {
+        if (address.AddressFamily != AddressFamily.InterNetwork) return false;
+        var bytes = address.GetAddressBytes();
+        return bytes[0] == 10
+               || (bytes[0] == 172 && bytes[1] is >= 16 and <= 31)
+               || (bytes[0] == 192 && bytes[1] == 168)
+               || (bytes[0] == 169 && bytes[1] == 254);
     }
 
     private static bool IsUsbTetherAdapter(NetworkInterface nic)
