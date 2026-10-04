@@ -1,261 +1,325 @@
+import Combine
 import SwiftUI
 
-/// Экран отметки — как в Android: одна большая кнопка и статус.
+/// Экран отметки: студент прикладывает iPhone к телефону преподавателя.
 ///
-/// Студент вошёл под логином и паролем (проверил сервер), дальше ему нужно
-/// только приложить телефон. Кнопка — это единственное действие на экране:
-/// нажатие запускает поиск метки терминала (и перезапускает его, если что-то
-/// не сработало). Работает Bluetooth-касание; NFC доступен отдельной строкой внизу.
+/// Основной канал — Bluetooth (BLE): приложение само находит метку терминала и
+/// «касается» её, без кнопок и системных окон. NFC доступен отдельной кнопкой
+/// внизу экрана (он требует платного аккаунта Apple и показывает системное окно).
+///
+/// Что видит студент: «Приложите iPhone», через секунду — галочка и время.
 struct MarkView: View {
 
     @EnvironmentObject private var store: AttendanceStore
     @EnvironmentObject private var settings: Settings
-    @EnvironmentObject private var auth: AuthService
 
     @StateObject private var ble = BleMarkClient()
     @StateObject private var nfc = NDEFReader()
 
+    @State private var banner: Banner?
     @State private var lastMark: Mark?
-    @State private var status: String = ""
-    @State private var statusKind: Kind = .waiting
-    @State private var didComplete = false
     @State private var isSending = false
-    @State private var showHistory = false
+    @State private var didComplete = false
     @State private var pulse = false
-    @State private var running = false
+    @State private var sessionRunning = false
 
-    private enum Kind { case waiting, success, error }
+    private struct Banner: Equatable {
+        let text: String
+        let kind: Kind
+        enum Kind: Equatable { case success, error, waiting }
+    }
 
     var body: some View {
-        VStack(spacing: 18) {
-            topBar
-            Spacer(minLength: 0)
-            bigButton
-            statusView
-            Spacer(minLength: 0)
-            bottomBar
-        }
-        .padding(20)
-        .background(Color(.systemGroupedBackground))
-        .sheet(isPresented: $showHistory) {
-            HistoryView()
-                .environmentObject(store)
-                .environmentObject(settings)
-        }
-        .onAppear(perform: startOrKeep)
-        .onDisappear {
-            running = false
-            ble.stop()
-            nfc.cancel()
-        }
-    }
-
-    // -------------------------------------------------------------- верх и низ
-
-    private var topBar: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(auth.student?.name ?? settings.studentName)
-                    .font(.title3.weight(.semibold))
-                    .lineLimit(1)
-                Text(auth.student?.id ?? settings.studentId)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button("Выйти") {
-                ble.stop()
-                auth.logout()
-            }
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-        }
-    }
-
-    /// Единственная кнопка: приложить телефон (или повторить попытку).
-    private var bigButton: some View {
-        Button(action: restart) {
-            ZStack {
-                Circle()
-                    .fill(ringColor.opacity(0.14))
-                    .frame(width: 268, height: 268)
-                    .scaleEffect(pulse ? 1.05 : 0.95)
-                    .animation(
-                        .easeInOut(duration: 1.1).repeatForever(autoreverses: true),
-                        value: pulse
-                    )
-
-                Circle()
-                    .strokeBorder(ringColor.opacity(0.45), lineWidth: 3)
-                    .frame(width: 224, height: 224)
-
-                VStack(spacing: 10) {
-                    Image(systemName: iconName)
-                        .font(.system(size: 64, weight: .semibold))
-                        .foregroundStyle(ringColor)
-                    Text(buttonLabel)
-                        .font(.headline)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 18)
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 20) {
+                    header
+                    tapTarget
+                    statusLine
+                    if let banner {
+                        bannerView(banner)
+                    }
+                    if !settings.isConfigured {
+                        notConfiguredHint
+                    }
+                    if let mark = lastMark {
+                        lastMarkCard(mark)
+                    }
+                    queueCard
+                    nfcRow
                 }
+                .padding(16)
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Отметиться")
+            .onAppear(perform: startTapFlow)
+            .onDisappear {
+                stopTapFlow()
             }
         }
-        .buttonStyle(.plain)
-        .onAppear { pulse = true }
-        .disabled(isSending)   // пока отправляем — не даём сбить процесс; иначе кнопка = «повторить»
     }
 
-    private var statusView: some View {
+    // ------------------------------------------------------------------- блоки
+
+    private var header: some View {
         VStack(spacing: 6) {
-            HStack(spacing: 8) {
-                Circle().fill(ringColor).frame(width: 9, height: 9)
-                Text(status.isEmpty ? ble.statusText : status)
-                    .font(.footnote)
+            Text(settings.studentName.isEmpty ? "Студент" : settings.studentName)
+                .font(.title2.weight(.bold))
+            Text(settings.studentId.isEmpty ? "логин не указан" : settings.studentId)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    /// Круг-цель: пульсирует, пока приложение ищет терминал.
+    private var tapTarget: some View {
+        ZStack {
+            Circle()
+                .fill(accentColor.opacity(0.12))
+                .frame(width: 210, height: 210)
+                .scaleEffect(pulse ? 1.06 : 0.94)
+                .animation(
+                    .easeInOut(duration: 1.1).repeatForever(autoreverses: true),
+                    value: pulse
+                )
+
+            Circle()
+                .strokeBorder(accentColor.opacity(0.35), lineWidth: 2)
+                .frame(width: 168, height: 168)
+
+            VStack(spacing: 8) {
+                Image(systemName: iconName)
+                    .font(.system(size: 52, weight: .semibold))
+                    .foregroundStyle(accentColor)
+                Text(shortStatus)
+                    .font(.footnote.weight(.medium))
                     .multilineTextAlignment(.center)
                     .foregroundStyle(.secondary)
-            }
-            if let rssi = ble.lastRssi {
-                Text("сигнал \(rssi) dBm")
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-            if let mark = lastMark {
-                Text("Последняя отметка: \(mark.subject) · \(timeText(mark.timestamp))"
-                     + (mark.verified ? " · подтверждена" : ""))
-                    .font(.caption)
-                    .foregroundStyle(mark.verified ? Color.green : Color.orange)
+                    .padding(.horizontal, 12)
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 6)
+        .onAppear { pulse = true }
     }
 
-    private var bottomBar: some View {
-        VStack(spacing: 10) {
-            if store.pendingCount > 0 {
-                Button {
-                    Task {
-                        isSending = true
-                        await SyncService.shared.syncPending(store: store, settings: settings)
-                        if let mark = lastMark { lastMark = refreshed(mark) }
-                        isSending = false
-                    }
-                } label: {
-                    Label(isSending
-                          ? "Отправляем…"
-                          : "Отправить неотправленное (\(store.pendingCount))",
-                          systemImage: "arrow.up.circle")
-                        .font(.footnote)
-                }
-                .buttonStyle(.bordered)
-                .disabled(isSending)
-            }
-
-            HStack(spacing: 16) {
-                Button {
-                    showHistory = true
-                } label: {
-                    Label("Мои отметки", systemImage: "list.bullet.rectangle")
-                        .font(.footnote)
-                }
-
-                if NDEFReader.isAvailable {
-                    Button {
-                        startNfc()
-                    } label: {
-                        Label("Отметить по NFC", systemImage: "wave.3.forward.circle")
-                            .font(.footnote)
-                    }
-                }
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.accentColor)
-
-            if auth.offlineLogin {
-                Text("Вход проверен без сервера (по сохранённому паролю)")
-                    .font(.caption2)
-                    .foregroundStyle(.orange)
+    private var statusLine: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(accentColor)
+                .frame(width: 10, height: 10)
+            Text(ble.statusText)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            Spacer()
+            if let rssi = ble.lastRssi {
+                Text("\(rssi) dBm")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
             }
         }
+        .padding(12)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func bannerColor(_ kind: Banner.Kind) -> Color {
+        switch kind {
+        case .success: return .green
+        case .error: return .red
+        case .waiting: return .orange
+        }
+    }
+
+    private func bannerIcon(_ kind: Banner.Kind) -> String {
+        switch kind {
+        case .success: return "checkmark.circle.fill"
+        case .error: return "xmark.octagon.fill"
+        case .waiting: return "hand.raised.fill"
+        }
+    }
+
+    private func bannerView(_ banner: Banner) -> some View {
+        let color: Color = bannerColor(banner.kind)
+        let icon: String = bannerIcon(banner.kind)
+
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+            Text(banner.text)
+                .font(.subheadline)
+            Spacer()
+        }
+        .padding(12)
+        .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+        .foregroundStyle(color)
+    }
+
+    private var notConfiguredHint: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Сначала настройте приложение", systemImage: "exclamationmark.triangle")
+                .font(.subheadline.weight(.semibold))
+            Text("Во вкладке «Настройки» укажите адрес ноутбука преподавателя "
+                 + "(например, 192.168.1.10) и свой логин со вкладки «Студенты».")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func lastMarkCard(_ mark: Mark) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Последняя отметка")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            HStack {
+                Text(mark.subject)
+                    .font(.headline)
+                Spacer()
+                Text(SessionPayload.isoString(mark.timestamp).suffix(8))
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 6) {
+                Image(systemName: mark.verified ? "checkmark.seal.fill" : "clock.badge.questionmark")
+                    .foregroundStyle(mark.verified ? Color.green : Color.orange)
+                Text(mark.serverMessage.isEmpty ? "Ждёт отправки" : mark.serverMessage)
+                    .font(.footnote)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var queueCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Очередь отправки")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(store.pendingCount == 0 ? "пусто" : "\(store.pendingCount) шт.")
+                    .font(.footnote)
+                    .foregroundStyle(store.pendingCount == 0 ? Color.secondary : Color.orange)
+            }
+
+            if !store.lastResult.isEmpty {
+                Text(store.lastResult)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button {
+                Task {
+                    isSending = true
+                    await SyncService.shared.syncPending(store: store, settings: settings)
+                    if let mark = lastMark { lastMark = refreshed(mark) }
+                    isSending = false
+                }
+            } label: {
+                Label(isSending ? "Отправляем…" : "Отправить неотправленное",
+                      systemImage: "arrow.up.circle")
+            }
+            .buttonStyle(.bordered)
+            .disabled(store.pendingCount == 0 || isSending)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// Запасной канал для тех, у кого есть платный аккаунт Apple.
+    private var nfcRow: some View {
+        Group {
+            if NDEFReader.isAvailable {
+                Button {
+                    startNfc()
+                } label: {
+                    Label("Отметить по NFC", systemImage: "wave.3.forward.circle")
+                        .font(.footnote)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Color.accentColor)
+            } else {
+                Text("Bluetooth-касание работает всегда — NFC на этом iPhone недоступен.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 4)
     }
 
     // ------------------------------------------------------------------ внешний вид
 
-    private var ringColor: Color {
-        switch statusKind {
-        case .success: return .green
-        case .error: return .red
-        case .waiting: break
-        }
+    private var accentColor: Color {
         switch ble.state {
         case .accepted: return .green
         case .rejected, .unavailable: return .red
         case .tooFar, .sending: return .orange
-        default: return .accentColor
+        default: return didComplete ? .green : .accentColor
         }
     }
 
     private var iconName: String {
-        switch statusKind {
-        case .success: return "checkmark.circle.fill"
-        case .error: return "exclamationmark.triangle.fill"
-        case .waiting: break
-        }
         switch ble.state {
         case .accepted: return "checkmark.circle.fill"
-        case .tooFar: return "arrow.down.circle"
         case .rejected, .unavailable: return "exclamationmark.triangle.fill"
+        case .tooFar: return "arrow.down.circle"
         case .sending, .connecting: return "wave.3.right"
         default: return "iphone.radiowaves.left.and.right"
         }
     }
 
-    private var buttonLabel: String {
-        switch statusKind {
-        case .success: return "Вы отмечены"
-        case .error: return "Повторить"
-        case .waiting: break
-        }
+    private var shortStatus: String {
         switch ble.state {
         case .accepted: return "Вы отмечены"
-        case .tooFar: return "Поднесите ближе"
+        case .rejected(let text): return text
+        case .unavailable(let text): return text
+        case .tooFar: return "Поднесите телефон ближе"
         case .sending: return "Отправляем…"
         case .connecting: return "Проверяем расстояние…"
-        case .unavailable: return "Bluetooth выключен"
-        case .rejected: return "Повторить"
-        case .searching, .idle: return "Приложить телефон"
+        case .searching: return "Приложите iPhone\nк телефону преподавателя"
+        case .idle: return "Нажмите, чтобы отметить"
         }
     }
 
     // ------------------------------------------------------------------- логика
 
-    private func startOrKeep() {
-        guard !running else { return }
-        running = true
-        restart()
-    }
-
-    /// Кнопка: заново запускаем поиск метки (и сбрасываем прошлый результат).
-    private func restart() {
+    /// Старт: одновременно слушаем BLE (основной канал) и NFC (если разрешён).
+    private func startTapFlow() {
+        guard !sessionRunning, settings.isConfigured else { return }
+        sessionRunning = true
         didComplete = false
-        status = ""
-        statusKind = .waiting
+        banner = Banner(text: "Приложите iPhone к телефону преподавателя — отметка поставится сама.",
+                        kind: .waiting)
 
-        ble.onMark = handleMark(session:rssi:time:)
+        ble.onMark = handleBleMark(session:rssi:time:)
         ble.start(deviceId: DeviceIdentity.deviceId,
                   studentName: settings.studentName.isEmpty ? settings.studentId : settings.studentName)
     }
 
+    /// Запасной путь: отметка через NFC. Отдельная кнопка, потому что iOS показывает
+    /// системное окно «Приложите iPhone», и оно перекрыло бы весь экран.
+    /// Работает только с платным аккаунтом Apple (capability «NFC Tag Reading»).
     private func startNfc() {
-        nfc.onPayload = handleNfc(payload:)
+        nfc.onPayload = handleNfcPayload(payload:)
         nfc.start()
-        status = "Приложите iPhone к телефону преподавателя — читаем NFC-метку"
-        statusKind = .waiting
+        banner = Banner(text: "Приложите iPhone к телефону преподавателя и подержите — "
+                              + "отметку прочитает NFC.", kind: .waiting)
     }
 
-    /// Касание по Bluetooth: сохраняем отметку и сразу отправляем.
-    private func handleMark(session: BleMarkClient.TerminalSession, rssi: Int, time: Date) {
+    private func stopTapFlow() {
+        sessionRunning = false
+        ble.stop()
+        nfc.cancel()
+    }
+
+    /// Касание по Bluetooth: отметка + отправка на сервер.
+    private func handleBleMark(session: BleMarkClient.TerminalSession, rssi: Int, time: Date) {
         guard !didComplete else { return }
         didComplete = true
         nfc.cancel()
@@ -266,59 +330,53 @@ struct MarkView: View {
             teacherId: session.teacherId,
             timestamp: time
         )
-        save(payload: payload, source: "ble", rssi: rssi)
+        saveAndSend(payload: payload, source: "ble", rssi: rssi)
     }
 
     /// Касание по NFC (если доступно).
-    private func handleNfc(payload: SessionPayload) {
+    private func handleNfcPayload(payload: SessionPayload) {
         guard !didComplete else { return }
         didComplete = true
         ble.stop()
-        save(payload: payload, source: "nfc", rssi: nil)
+        saveAndSend(payload: payload, source: "nfc", rssi: nil)
     }
 
-    private func save(payload: SessionPayload, source: String, rssi: Int?) {
+    private func saveAndSend(payload: SessionPayload, source: String, rssi: Int?) {
         let mark = store.addMark(payload: payload, settings: settings, source: source, rssi: rssi)
         store.saveStudent(id: mark.studentId, name: mark.studentName)
         lastMark = mark
 
-        status = "Отметка сохранена: \(payload.subject). Отправляем на сервер…"
-        statusKind = .waiting
+        banner = Banner(text: "Отметка сохранена: \(payload.subject). Отправляем на сервер…",
+                        kind: .waiting)
 
         Task {
             await SyncService.shared.ensureSessionExists(payload: payload, settings: settings)
             await SyncService.shared.syncPending(store: store, settings: settings)
+            lastMark = refreshed(mark)
 
-            let updated = refreshed(mark)
-            lastMark = updated
-
-            switch updated.syncState {
-            case .sent where updated.verified:
-                status = "Готово: \(payload.subject) в \(timeText(updated.timestamp))"
-                statusKind = .success
+            switch mark.syncState {
+            case .sent where mark.verified:
+                banner = Banner(text: "Вы отмечены: \(payload.subject). "
+                                      + "Сигнал \(rssi.map { "\($0) dBm" } ?? "—").",
+                                kind: .success)
             case .sent:
-                status = "Отметка принята, но без подтверждения касанием — преподаватель её видит"
-                statusKind = .waiting
+                banner = Banner(text: "Отметка принята, но подтверждение касания слабое — "
+                                      + "преподаватель увидит её как неподтверждённую.",
+                                kind: .waiting)
             case .duplicate:
-                status = updated.serverMessage.isEmpty ? "Вы уже отмечены в этой паре" : updated.serverMessage
-                statusKind = .success
+                banner = Banner(text: mark.serverMessage, kind: .success)
             case .rejected:
-                status = updated.serverMessage.isEmpty ? "Сервер отклонил отметку" : updated.serverMessage
-                statusKind = .error
+                banner = Banner(text: mark.serverMessage, kind: .error)
             default:
-                status = "Сервер недоступен. Отметка сохранена и уйдёт сама, когда появится связь."
-                statusKind = .waiting
+                banner = Banner(text: "Сервер недоступен. Отметка сохранена и уйдёт автоматически, "
+                                      + "как только появится связь.", kind: .waiting)
             }
+            sessionRunning = false
         }
     }
 
     private func refreshed(_ mark: Mark) -> Mark {
         store.marks.first { $0.id == mark.id } ?? mark
-    }
-
-    private func timeText(_ date: Date) -> String {
-        let text = SessionPayload.isoString(date)
-        return String(text.suffix(8))
     }
 }
 
@@ -326,5 +384,4 @@ struct MarkView: View {
     MarkView()
         .environmentObject(AttendanceStore.shared)
         .environmentObject(Settings.shared)
-        .environmentObject(AuthService.shared)
 }

@@ -14,10 +14,7 @@ SQLite-хранилище и вся античит-логика сервера �
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import os
-import secrets
 import sqlite3
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -52,7 +49,6 @@ CREATE TABLE IF NOT EXISTS students (
     name        TEXT NOT NULL,              -- ФИО
     device_id   TEXT UNIQUE,                -- привязанный телефон (генерируется 1 раз)
     group_name  TEXT,
-    password_hash TEXT,                     -- PBKDF2-SHA256 (пароль студента), NULL — вход без пароля
     created_at  TEXT NOT NULL
 );
 
@@ -175,7 +171,6 @@ def _migrate() -> None:
     """
     with connect() as connection:
         for table, columns in {
-            "students": [("password_hash", "TEXT")],
             "attendance": [("rssi", "INTEGER")],
             "terminal_taps": [("device_id", "TEXT"), ("rssi", "INTEGER")],
         }.items():
@@ -211,42 +206,6 @@ def _migrate() -> None:
             """)
 
 
-def public_student(row: Optional[sqlite3.Row | dict[str, Any]]) -> Optional[dict[str, Any]]:
-    """Строка студента без служебных полей (хэш пароля наружу не отдаём)."""
-    if row is None:
-        return None
-    data = dict(row)
-    data.pop("password_hash", None)
-    return data
-
-
-def hash_password(password: str, iterations: int = 120_000) -> str:
-    """
-    Пароль студента → строка для базы: pbkdf2_sha256$итерации$соль$хэш.
-
-    Сам пароль не хранится и не передаётся никуда, кроме запроса входа.
-    """
-    salt = secrets.token_hex(16)
-    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), iterations)
-    return f"pbkdf2_sha256${iterations}${salt}${digest.hex()}"
-
-
-def verify_password(password: str, stored: Optional[str]) -> bool:
-    """Проверка пароля по сохранённому хэшу (устойчиво к подбору по времени)."""
-    if not stored:
-        return False
-    try:
-        algorithm, iterations, salt, expected = stored.split("$")
-        if algorithm != "pbkdf2_sha256":
-            return False
-        digest = hashlib.pbkdf2_hmac(
-            "sha256", password.encode("utf-8"), salt.encode("utf-8"), int(iterations)
-        )
-        return hmac.compare_digest(digest.hex(), expected)
-    except (ValueError, TypeError):
-        return False
-
-
 def rows_to_dicts(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
@@ -258,74 +217,30 @@ def upsert_student(
     student_id: str,
     name: Optional[str] = None,
     group_name: Optional[str] = None,
-    password: Optional[str] = None,
 ) -> dict[str, Any]:
-    """
-    Создаёт студента или обновляет ФИО/группу/пароль (device_id не трогает).
-
-    Если передан пароль — сохраняем его хэш: по нему приложение проверяет вход.
-    """
+    """Создаёт студента или обновляет ФИО/группу (device_id не трогает)."""
     student_id = student_id.strip()
-    password_hash = hash_password(password) if password else None
     with connect() as connection:
         row = connection.execute(
             "SELECT * FROM students WHERE id = ?", (student_id,)
         ).fetchone()
         if row is None:
             connection.execute(
-                """INSERT INTO students (id, name, device_id, group_name, password_hash, created_at)
-                   VALUES (?, ?, NULL, ?, ?, ?)""",
-                (student_id, name or student_id, group_name, password_hash, now_iso()),
+                """INSERT INTO students (id, name, device_id, group_name, created_at)
+                   VALUES (?, ?, NULL, ?, ?)""",
+                (student_id, name or student_id, group_name, now_iso()),
             )
         else:
             connection.execute(
                 """UPDATE students
                       SET name = COALESCE(?, name),
-                          group_name = COALESCE(?, group_name),
-                          password_hash = COALESCE(?, password_hash)
+                          group_name = COALESCE(?, group_name)
                     WHERE id = ?""",
-                (name, group_name, password_hash, student_id),
+                (name, group_name, student_id),
             )
-        return public_student(connection.execute(
+        return dict(connection.execute(
             "SELECT * FROM students WHERE id = ?", (student_id,)
         ).fetchone())
-
-
-def set_student_password(student_id: str, password: str) -> Optional[dict[str, Any]]:
-    """Сменить пароль студента (например, преподаватель сбрасывает забытый)."""
-    with connect() as connection:
-        connection.execute(
-            "UPDATE students SET password_hash = ? WHERE id = ?",
-            (hash_password(password), student_id.strip()),
-        )
-        return public_student(connection.execute(
-            "SELECT * FROM students WHERE id = ?", (student_id.strip(),)
-        ).fetchone())
-
-
-def has_password(student_id: str) -> bool:
-    """Задан ли у студента пароль (нужно, чтобы отличить «нет пароля» от «неверный»)."""
-    with connect() as connection:
-        row = connection.execute(
-            "SELECT password_hash FROM students WHERE id = ?", (student_id.strip(),)
-        ).fetchone()
-    return bool(row and row["password_hash"])
-
-
-def check_student_password(student_id: str, password: str) -> Optional[bool]:
-    """
-    Проверка логина и пароля:
-      • None  — такого логина нет;
-      • False — пароль неверный (или у студента он ещё не задан);
-      • True  — пароль верный.
-    """
-    with connect() as connection:
-        row = connection.execute(
-            "SELECT password_hash FROM students WHERE id = ?", (student_id.strip(),)
-        ).fetchone()
-    if row is None:
-        return None
-    return verify_password(password, row["password_hash"])
 
 
 def get_student(student_id: str) -> Optional[dict[str, Any]]:
@@ -333,7 +248,7 @@ def get_student(student_id: str) -> Optional[dict[str, Any]]:
         row = connection.execute(
             "SELECT * FROM students WHERE id = ?", (student_id,)
         ).fetchone()
-    return public_student(row)
+    return dict(row) if row else None
 
 
 def list_students() -> list[dict[str, Any]]:
@@ -341,7 +256,7 @@ def list_students() -> list[dict[str, Any]]:
         rows = connection.execute(
             "SELECT * FROM students ORDER BY name COLLATE NOCASE"
         ).fetchall()
-    return [public_student(row) for row in rows]  # type: ignore[misc]
+    return rows_to_dicts(rows)
 
 
 def find_student_by_device(device_id: str) -> Optional[dict[str, Any]]:
@@ -350,7 +265,7 @@ def find_student_by_device(device_id: str) -> Optional[dict[str, Any]]:
         row = connection.execute(
             "SELECT * FROM students WHERE device_id = ?", (device_id,)
         ).fetchone()
-    return public_student(row)
+    return dict(row) if row else None
 
 
 def bind_device(student_id: str, device_id: str) -> bool:

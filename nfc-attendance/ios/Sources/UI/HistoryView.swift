@@ -6,8 +6,6 @@ struct HistoryView: View {
     @EnvironmentObject private var store: AttendanceStore
     @EnvironmentObject private var settings: Settings
 
-    @Environment(\.dismiss) private var dismiss
-
     @State private var selected: Mark?
     @State private var present: [ApiClient.PresentRow] = []
     @State private var isLoadingPresent = false
@@ -35,9 +33,6 @@ struct HistoryView: View {
             }
             .navigationTitle("Мои отметки")
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Готово") { dismiss() }
-                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
                         Task { await SyncService.shared.syncPending(store: store, settings: settings) }

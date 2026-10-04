@@ -6,7 +6,7 @@
 
 | Устройство | Файл | Прямая ссылка |
 |---|---|---|
-| iPhone студента | `NFC-Attendance-Student-unsigned.ipa` (345 491 Б) | **https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/NFC-Attendance-Student-unsigned.ipa** |
+| iPhone студента | `NFC-Attendance-Student-unsigned.ipa` (231 534 Б) | **https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/NFC-Attendance-Student-unsigned.ipa** |
 | Android преподавателя | `NFC-Attendance-Teacher.apk` (1 741 298 Б) | **https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/NFC-Attendance-Teacher.apk** |
 
 Файл для iPhone — **неподписанный**: его нужно подписать своим Apple ID (любым,
@@ -51,35 +51,7 @@
 
 ## 1. Сервер на ноутбуке
 
-### Вариант А. Готовый exe (Windows, Python не нужен) — самый простой
-
-1. Скачайте
-   [`KubGAU-Attendance-Server.exe`](https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/KubGAU-Attendance-Server.exe).
-2. Положите его в отдельную папку, например `C:\КубГАУ\` (туда же ляжет база
-   `attendance.db`).
-3. Запустите двойным щелчком. Если Windows покажет SmartScreen «Windows защитила
-   ваш компьютер» — **«Подробнее» → «Выполнить в любом случае»**.
-4. На вопрос брандмауэра отметьте **«Частные сети»** и нажмите
-   **«Разрешить доступ»** — без этого телефоны не увидят сервер.
-5. В окне появится адрес:
-
-```
-      http://192.168.1.10:8000
-```
-
-   Это адрес, который вводят оба приложения (преподавателя и студента).
-6. Окно не закрывайте — пока оно открыто, сервер работает. Остановка: `Ctrl + C`.
-
-Что важно знать:
-* база `attendance.db` создаётся рядом с exe — для резервной копии просто
-  скопируйте её;
-* порт по умолчанию 8000; другой можно задать при запуске:
-  `KubGAU-Attendance-Server.exe 8080`;
-* антивирус иногда придирается к новым exe — добавьте файл в исключения;
-* если адрес в окне начинается на `169.254.` — ноутбук не в сети: подключитесь
-  к Wi-Fi (или включите мобильную точку доступа, см. ниже).
-
-### Вариант Б. Из исходников (Windows / macOS / Linux)
+### Windows
 
 1. Установите Python 3.11+ с [python.org](https://www.python.org/downloads/)
    (галочка **Add python.exe to PATH**).
@@ -200,7 +172,7 @@ NFC включится сам, если у вас есть платный акк
 | Sideloadly для macOS | [sideloadly.io/SideloadlySetup.dmg](https://sideloadly.io/SideloadlySetup.dmg) | то же на Mac |
 | **iTunes** (веб-версия, 64-bit) | **[apple.com/itunes/download/win64](https://www.apple.com/itunes/download/win64)** | драйверы для iPhone. Только Windows |
 | **iCloud** (веб-версия) | [iCloudSetup.exe](https://updates.cdn-apple.com/2020/windows/001-39935-20200911-1A70AA56-F448-11EA-8CC0-99D41950005E/iCloudSetup.exe) | Sideloadly требует его на Windows |
-| **Наше приложение** (IPA, 345 КБ) | [NFC-Attendance-Student-unsigned.ipa](https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/NFC-Attendance-Student-unsigned.ipa) | то, что ставим на iPhone |
+| **Наше приложение** (IPA, 231 КБ) | [NFC-Attendance-Student-unsigned.ipa](https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/NFC-Attendance-Student-unsigned.ipa) | то, что ставим на iPhone |
 
 На macOS iTunes и iCloud не нужны — достаточно Sideloadly.
 

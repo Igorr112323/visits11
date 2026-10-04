@@ -28,13 +28,9 @@ pytest -v
 
 ## Этап 1. Сервер руками через curl (5 минут)
 
-> Без Python: скачайте
-> [KubGAU-Attendance-Server.exe](https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/KubGAU-Attendance-Server.exe),
-> запустите, разрешите брандмауэру — и выполняйте те же запросы.
-
 ```bash
 # 1. запустить сервер (в отдельном окне)
-uvicorn main:app --host 0.0.0.0 --port 8000    # или: python launcher.py
+uvicorn main:app --host 0.0.0.0 --port 8000
 
 # 2. создать пару
 SID=$(python3 -c "import uuid;print(uuid.uuid4())")
@@ -111,21 +107,6 @@ curl -s -X POST http://127.0.0.1:8000/api/attendance \
 После запуска сервера нажмите «Синхронизировать» — пара появится в `/api/sessions`.
 
 ---
-
-## Этап 2.5. Логины и пароли студентов (2 минуты)
-
-1. Откройте `windows/Студенты.ps1`, впишите логины, ФИО и пароли.
-2. Запустите: `.\windows\Студенты.ps1` — скрипт зарегистрирует всех и сразу
-   проверит вход каждого.
-3. Проверка «как у студента» (должен быть `ok: True`), а затем неверный пароль —
-   сервер обязан ответить **401 wrong_password**:
-
-```powershell
-$body = @{ student_id = "ARHIPOV_II"; password = "kubgau-2026" } | ConvertTo-Json
-Invoke-RestMethod http://127.0.0.1:8000/api/students/login -Method Post -ContentType "application/json; charset=utf-8" -Body ([System.Text.Encoding]::UTF8.GetBytes($body))
-```
-
-Всё то же «одним нажатием»: `.\windows\Проверить-систему.ps1`.
 
 ## Этап 3. iPhone-студент (10–20 минут, включая подпись)
 
