@@ -176,6 +176,20 @@ NFC включится сам, если у вас есть платный акк
 
 На macOS iTunes и iCloud не нужны — достаточно Sideloadly.
 
+**Если ссылка на Sideloadly не открывается** (сайт заблокирован в вашей сети или
+к ссылке приклеился текст) — скачайте открытую программу **Impactor**, она лежит
+на GitHub и делает то же самое:
+
+```
+Windows x64  https://github.com/claration/impactor/releases/download/v2.6.5/Impactor-windows-x86_64-setup.exe
+Windows x86  https://github.com/claration/impactor/releases/download/v2.6.5/Impactor-windows-x86-setup.exe
+macOS        https://github.com/claration/impactor/releases/download/v2.6.5/Impactor-macos-universal.dmg
+Все сборки   https://github.com/claration/impactor/releases
+```
+
+Порядок тот же (iTunes/iCloud для драйверов, Apple ID бесплатный): подключить
+iPhone → перетащить `.ipa` в окно → ввести Apple ID → нажать установку.
+
 > Важно про Windows: если iTunes или iCloud уже стояли **из Microsoft Store** —
 > сначала удалите их. Sideloadly работает только с обычными («web») версиями
 > с сайта Apple, иначе будет ошибка `NP_E_CONN_FAILED`.

@@ -6,29 +6,60 @@
 
 ---
 
-## ШАГ 0. Скачать 4 файла
+## ШАГ 0. Скачать программы и наше приложение
 
 ### Если компьютер на Windows
 
-| № | Файл | Ссылка для скачивания |
+Ссылки (копируйте **целиком, без лишних слов** — если ссылка «не открывается»,
+скорее всего к ней приклеился текст):
+
+```
+1) Sideloadly          https://sideloadly.io/SideloadlySetup64.exe
+2) iTunes (веб-версия) https://www.apple.com/itunes/download/win64
+3) iCloud (веб-версия) https://updates.cdn-apple.com/2020/windows/001-39935-20200911-1A70AA56-F448-11EA-8CC0-99D41950005E/iCloudSetup.exe
+4) Наше приложение     https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/NFC-Attendance-Student-unsigned.ipa
+```
+
+| № | Что это | Размер |
 |---|---|---|
-| 1 | **Sideloadly** — программа подписи | https://sideloadly.io/SideloadlySetup64.exe |
-| 2 | **iTunes** (веб-версия, 64-bit) | https://www.apple.com/itunes/download/win64 |
-| 3 | **iCloud** (веб-версия) | https://updates.cdn-apple.com/2020/windows/001-39935-20200911-1A70AA56-F448-11EA-8CC0-99D41950005E/iCloudSetup.exe |
-| 4 | **Наше приложение** (IPA, 0,2 МБ) | https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/NFC-Attendance-Student-unsigned.ipa |
+| 1 | **Sideloadly** — подписывает и ставит приложение | ~126 МБ |
+| 2 | **iTunes** (обычная «веб»-версия) — драйверы для iPhone | ~230 МБ |
+| 3 | **iCloud** (обычная «веб»-версия) — требует Sideloadly | ~180 МБ |
+| 4 | **Наше приложение** (IPA) | 0,2 МБ |
 
 ### Если компьютер на macOS
 
-| № | Файл | Ссылка |
-|---|---|---|
-| 1 | **Sideloadly** | https://sideloadly.io/SideloadlySetup.dmg |
-| 2 | **Наше приложение** (IPA) | https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/NFC-Attendance-Student-unsigned.ipa |
+```
+1) Sideloadly  https://sideloadly.io/SideloadlySetup.dmg
+2) Приложение  https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/NFC-Attendance-Student-unsigned.ipa
+```
 
 iTunes и iCloud на Mac не нужны.
 
 > **ВАЖНО:** на Windows нельзя ставить iTunes/iCloud из Microsoft Store —
 > Sideloadly с ними не работает. Только файлы с сайта Apple по ссылкам выше.
 > Если Store-версии уже стоят — удалите их.
+
+### Ссылка на Sideloadly не открывается?
+
+Запасной путь — программа **Impactor** (открытая, делает то же самое):
+качается **с GitHub**, как и наше приложение, поэтому доступна всегда.
+
+```
+Windows (64-бит)  https://github.com/claration/impactor/releases/download/v2.6.5/Impactor-windows-x86_64-setup.exe
+Windows (32-бит)  https://github.com/claration/impactor/releases/download/v2.6.5/Impactor-windows-x86-setup.exe
+macOS             https://github.com/claration/impactor/releases/download/v2.6.5/Impactor-macos-universal.dmg
+Все файлы         https://github.com/claration/impactor/releases
+```
+
+Работает так же: iTunes/iCloud нужны только ради драйверов,
+Apple ID — обычный (бесплатный), подпись живёт те же 7 дней.
+Как ставить: подключите iPhone → перетащите `.ipa` в окно Impactor →
+введите Apple ID и пароль → нажмите кнопку установки.
+Дальше — те же ШАГ 5 и ШАГ 6.
+
+Если и это не открывается — включите VPN или раздайте интернет с телефона:
+проблема не в ссылке, а в доступе к сайту из вашей сети.
 
 ---
 
@@ -130,6 +161,7 @@ iTunes и iCloud на Mac не нужны.
 | `NP_E_CONN_FAILED`, `AFC_E_MUX_ERROR` | стоят версии iTunes/iCloud из Microsoft Store: удалите, поставьте по ссылкам из ШАГА 0 |
 | Приложение на экране не появилось | перезагрузите iPhone |
 | Через 7 дней пишет «не удалось проверить разработчика» | истёк срок подписи: повторите ШАГ 4 |
+| Ссылка на скачивание «не открывается» | скопируйте ссылку **целиком** без лишнего текста; если сайт всё равно не грузится — скачайте запасную программу Impactor с GitHub (см. ШАГ 0) или включите VPN |
 
 ---
 
