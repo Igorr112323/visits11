@@ -62,8 +62,8 @@ try {
     $ack = @{ id = $markId } | ConvertTo-Json -Compress
     $ackResult = Invoke-RestMethod -Method Post -Uri "$base/api/marks/ack" -Headers $headers -ContentType "application/json" -Body $ack
     if (-not $ackResult.ok) { throw "Teacher acknowledgement failed" }
-    $afterAck = @(Invoke-RestMethod -Uri "$base/api/marks/pending" -Headers $headers)
-    if ($afterAck.Count -ne 0) { throw "Acknowledged mark remained in the pending queue" }
+    $afterAck = Invoke-RestMethod -Uri "$base/api/marks/pending" -Headers $headers
+    if ($null -ne $afterAck -and @($afterAck).Count -ne 0) { throw "Acknowledged mark remained in the pending queue" }
     Write-Output "PASS server health, key persistence, mark acceptance, duplicate protection, teacher authorization, queue delivery and acknowledgement"
 } catch {
     $message = $_.Exception.Message -replace "[\r\n]+", " | "
