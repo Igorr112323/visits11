@@ -139,8 +139,9 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 ### 2. Android-приложение преподавателя
 
-* Готовый APK: релиз **`nfc-v1.0.0`** → `NFC-Attendance-Teacher.apk`
-  (подписан, ставится файлом или `adb install -r`).
+* Готовый APK (1,7 МБ, подписан):
+  **[скачать](https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/NFC-Attendance-Teacher.apk)** —
+  ставится файлом или `adb install -r`.
 * Локально: открыть `android/` в Android Studio (JDK 17).
 
 В приложении: адрес сервера → «Проверить связь» → предмет/группа/свой id →
@@ -150,9 +151,10 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 ### 3. iOS-приложение студента
 
-* Готовый неподписанный `.ipa`: релиз **`nfc-v1.0.0`** →
-  `NFC-Attendance-Student-unsigned.ipa`, подписать своим Apple ID через
-  **Sideloadly** ([инструкция](docs/INSTALL_AND_SIGNING.md)).
+* Готовый неподписанный `.ipa` (231 КБ):
+  **[скачать](https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/NFC-Attendance-Student-unsigned.ipa)**,
+  подписать своим Apple ID (даже бесплатным) через **Sideloadly** —
+  пошаговая [инструкция](docs/INSTALL_AND_SIGNING.md#3-iphone-приложение-студента).
 * Или `xcodegen generate` в `ios/` и ▶ в Xcode.
 
 В приложении: «Настройки» → адрес сервера и логин → вкладка «Отметиться» →
