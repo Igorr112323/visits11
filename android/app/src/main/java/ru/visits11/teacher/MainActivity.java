@@ -39,8 +39,10 @@ import java.io.OutputStream;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
+import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -69,6 +71,7 @@ public final class MainActivity extends Activity {
     private static final UUID IDENTITY_CHARACTERISTIC_ID = UUID.fromString("F0391102-0203-4000-8000-00805F9B34FB");
     private static final UUID MARK_CHARACTERISTIC_ID = UUID.fromString("F0391103-0203-4000-8000-00805F9B34FB");
     private static final int BLE_PERMISSION_REQUEST = 41;
+    private static final int BLUETOOTH_ENABLE_REQUEST = 42;
 
     private TextView statusText;
     private BluetoothAdapter bluetoothAdapter;
@@ -96,8 +99,11 @@ public final class MainActivity extends Activity {
         }
     };
 
-    private ServerSocket serverSocket;
+    private volatile ServerSocket serverSocket;
     private volatile boolean serverRunning;
+    private boolean blePermissionRequestInFlight;
+    private boolean bluetoothEnableRequestInFlight;
+    private boolean usbSettingsOpenedAtStartup;
 
     private volatile long lastClientAt;
 
@@ -120,7 +126,7 @@ public final class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         statusText = findViewById(R.id.statusText);
-        // нажатие: выключенный NFC -> настройки NFC, нет ПК -> тумблер USB-модема
+        // Нажатие открывает настройки первого недостающего условия: NFC, Bluetooth или USB-модем.
         findViewById(R.id.root).setOnClickListener(v -> {
             NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
             if (adapter != null && !adapter.isEnabled()) {
@@ -131,9 +137,11 @@ public final class MainActivity extends Activity {
                 }
                 return;
             }
-            if (!pcConnected()) {
-                openTetherSettings();
+            if (isBluetoothDisabled()) {
+                requestBluetoothEnable();
+                return;
             }
+            if (!isUsbTethered()) openTetherSettings();
         });
 
         startServer();
@@ -163,22 +171,82 @@ public final class MainActivity extends Activity {
     }
 
     private void ensureBlePermissions() {
+        if (blePermissionRequestInFlight) return;
+        List<String> missing = new ArrayList<>();
         if (Build.VERSION.SDK_INT >= 31) {
-            List<String> missing = new ArrayList<>();
             if (checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED)
                 missing.add(Manifest.permission.BLUETOOTH_SCAN);
             if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED)
                 missing.add(Manifest.permission.BLUETOOTH_CONNECT);
-            if (!missing.isEmpty()) requestPermissions(missing.toArray(new String[0]), BLE_PERMISSION_REQUEST);
-        } else if (Build.VERSION.SDK_INT >= 23 && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, BLE_PERMISSION_REQUEST);
+        } else if (Build.VERSION.SDK_INT >= 23
+                && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.ACCESS_FINE_LOCATION);
         }
+
+        if (!missing.isEmpty()) {
+            blePermissionRequestInFlight = true;
+            requestPermissions(missing.toArray(new String[0]), BLE_PERMISSION_REQUEST);
+            return;
+        }
+        ui.post(this::continueStartupSetup);
+    }
+
+    private void continueStartupSetup() {
+        if (bluetoothEnableRequestInFlight) return;
+        if (blePermissionsGranted()) {
+            if (isBluetoothDisabled()) {
+                tapFeedback = "Включите Bluetooth для касания iPhone";
+                tapFeedbackAt = SystemClock.elapsedRealtime();
+                requestBluetoothEnable();
+                return;
+            }
+            startBleScan();
+        } else {
+            toast("Разрешите доступ к устройствам поблизости для Bluetooth-связи");
+        }
+        promptUsbTetheringAtStartup();
+    }
+
+    private void requestBluetoothEnable() {
+        if (bluetoothEnableRequestInFlight) return;
+        bluetoothEnableRequestInFlight = true;
+        try {
+            startActivityForResult(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), BLUETOOTH_ENABLE_REQUEST);
+        } catch (Throwable ignored) {
+            try {
+                startActivityForResult(new Intent("android.settings.BLUETOOTH_SETTINGS"), BLUETOOTH_ENABLE_REQUEST);
+            } catch (Throwable ignoredAgain) {
+                bluetoothEnableRequestInFlight = false;
+                promptUsbTetheringAtStartup();
+            }
+        }
+    }
+
+    private void promptUsbTetheringAtStartup() {
+        if (usbSettingsOpenedAtStartup || isUsbTethered()) return;
+        usbSettingsOpenedAtStartup = true;
+        toast("Подключите телефон к ПК USB-кабелем и включите «USB-модем»");
+        ui.postDelayed(this::openTetherSettings, 500);
     }
 
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == BLE_PERMISSION_REQUEST) startBleScan();
+        if (requestCode != BLE_PERMISSION_REQUEST) return;
+        blePermissionRequestInFlight = false;
+        if (!blePermissionsGranted()) {
+            toast("Без разрешения Bluetooth-связь с iPhone будет недоступна");
+        }
+        continueStartupSetup();
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != BLUETOOTH_ENABLE_REQUEST) return;
+        bluetoothEnableRequestInFlight = false;
+        if (blePermissionsGranted()) startBleScan();
+        promptUsbTetheringAtStartup();
     }
 
     private boolean blePermissionsGranted() {
@@ -188,6 +256,17 @@ public final class MainActivity extends Activity {
         }
         return Build.VERSION.SDK_INT < 23
                 || checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean isBluetoothDisabled() {
+        if (!blePermissionsGranted()) return false;
+        try {
+            BluetoothManager manager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+            bluetoothAdapter = manager == null ? null : manager.getAdapter();
+            return bluetoothAdapter != null && !bluetoothAdapter.isEnabled();
+        } catch (SecurityException ignored) {
+            return false;
+        }
     }
 
     private void startBleScan() {
@@ -362,10 +441,10 @@ public final class MainActivity extends Activity {
             statusText.setText("ПК подключён, NFC готов");
             statusText.setTextColor(0xFF2E7D32);
         } else if (isUsbTethered()) {
-            statusText.setText("Кабель подключён — запустите Visits11 на ПК");
+            statusText.setText("USB-модем включён — ожидаю подключение ПК по кабелю");
             statusText.setTextColor(0xFF8A8A8A);
         } else {
-            statusText.setText("Нет связи с ПК — нажмите, чтобы включить USB-модем");
+            statusText.setText("Подключите USB-кабель и включите USB-модем");
             statusText.setTextColor(0xFFB34A4A);
         }
         appendTapFeedback();
@@ -388,6 +467,11 @@ public final class MainActivity extends Activity {
      * поэтому единственный переключатель делает сам пользователь.
      */
     private void openTetherSettings() {
+        try {
+            startActivity(new Intent("android.settings.TETHER_SETTINGS"));
+            return;
+        } catch (Throwable ignored) {
+        }
         for (String[] screen : TETHER_SCREENS) {
             try {
                 Intent intent = new Intent();
@@ -398,37 +482,34 @@ public final class MainActivity extends Activity {
             }
         }
         try {
-            startActivity(new Intent("android.settings.TETHER_SETTINGS"));
-            return;
-        } catch (Throwable ignored) {
-        }
-        try {
             startActivity(new Intent("android.settings.WIRELESS_SETTINGS"));
         } catch (Throwable ignored) {
             toast("Откройте «USB-модем» в настройках");
         }
     }
 
-    /** Появилась ли сеть USB-модема (usb0/rndis0). */
+    /** Адрес активного USB-tether интерфейса; Wi-Fi и мобильные сети здесь не используются. */
     private boolean isUsbTethered() {
+        return findUsbTetherAddress() != null;
+    }
+
+    private InetAddress findUsbTetherAddress() {
         try {
             Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
             while (interfaces != null && interfaces.hasMoreElements()) {
                 NetworkInterface nic = interfaces.nextElement();
                 String name = nic.getName().toLowerCase(Locale.ROOT);
-                if (!name.contains("usb") && !name.contains("rndis")) continue;
+                if (!name.contains("usb") && !name.contains("rndis") && !name.contains("ncm")) continue;
                 if (!nic.isUp()) continue;
                 Enumeration<InetAddress> addresses = nic.getInetAddresses();
                 while (addresses.hasMoreElements()) {
                     InetAddress address = addresses.nextElement();
-                    if (address instanceof Inet4Address && !address.isLoopbackAddress()) {
-                        return true;
-                    }
+                    if (address instanceof Inet4Address && !address.isLoopbackAddress()) return address;
                 }
             }
         } catch (Throwable ignored) {
         }
-        return false;
+        return null;
     }
 
     // ------------------------------------------------------------ связь с ПК
@@ -442,20 +523,46 @@ public final class MainActivity extends Activity {
     }
 
     private void serverLoop() {
-        try {
-            serverSocket = new ServerSocket(SERVER_PORT);
-        } catch (IOException e) {
-            serverRunning = false;
-            toast("Не удалось занять порт 8090");
-            return;
-        }
         while (serverRunning) {
-            try {
-                Socket client = serverSocket.accept();
-                new Thread(() -> handleClient(client), "Http").start();
-            } catch (IOException e) {
-                break;
+            InetAddress usbAddress = findUsbTetherAddress();
+            if (usbAddress == null) {
+                sleepQuietly(750);
+                continue;
             }
+
+            ServerSocket listener = null;
+            try {
+                listener = new ServerSocket();
+                listener.setReuseAddress(true);
+                listener.bind(new InetSocketAddress(usbAddress, SERVER_PORT), 50);
+                listener.setSoTimeout(1000);
+                serverSocket = listener;
+
+                while (serverRunning) {
+                    InetAddress currentAddress = findUsbTetherAddress();
+                    if (currentAddress == null || !usbAddress.equals(currentAddress)) break;
+                    try {
+                        Socket client = listener.accept();
+                        new Thread(() -> handleClient(client), "Http").start();
+                    } catch (SocketTimeoutException ignored) {
+                        // Периодически проверяем, что USB-модем всё ещё активен.
+                    }
+                }
+            } catch (IOException ignored) {
+                // При отключении кабеля сокет закрывается и создаётся заново только на USB-интерфейсе.
+            } finally {
+                if (serverSocket == listener) serverSocket = null;
+                closeQuietly(listener);
+            }
+            if (serverRunning) sleepQuietly(750);
+        }
+    }
+
+    private static void sleepQuietly(long milliseconds) {
+        try {
+            Thread.sleep(milliseconds);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
         }
     }
 

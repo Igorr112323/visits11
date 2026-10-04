@@ -8,7 +8,7 @@ using System.Windows;
 namespace Visits11.Services;
 
 /// <summary>
-/// Автопоиск телефона-камеры в сети (USB-модем или Wi-Fi) и приём кадров.
+/// Поиск Android-телефона преподавателя только в подсети USB-модема и приём событий по кабелю.
 /// Телефон отдаёт JPEG по GET /frame?since=N (long-poll ~0.8с), поэтому
 /// соединение инициирует ПК — файрвол Windows для камеры не спрашивает.
 /// </summary>
@@ -266,7 +266,7 @@ public sealed class CameraLink : IDisposable
 
     // ------------------------------------------------------------- адреса сети
 
-    /// <summary>Адреса всех подсетей (/24 и мельче) активных Ethernet/Wi-Fi интерфейсов.</summary>
+    /// <summary>Адреса только активных USB/RNDIS tether-интерфейсов ПК; Wi-Fi и обычный Ethernet исключены.</summary>
     private static List<string> BuildTargets()
     {
         var targets = new List<string>();
@@ -276,14 +276,8 @@ public sealed class CameraLink : IDisposable
             foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
             {
                 if (nic.OperationalStatus != OperationalStatus.Up) continue;
-                if (nic.NetworkInterfaceType is not (NetworkInterfaceType.Ethernet
-                                                     or NetworkInterfaceType.Wireless80211)) continue;
-
-                var description = nic.Description;
-                if (description.Contains("Hyper-V", StringComparison.OrdinalIgnoreCase) ||
-                    description.Contains("Virtual", StringComparison.OrdinalIgnoreCase) ||
-                    description.Contains("VMware", StringComparison.OrdinalIgnoreCase) ||
-                    description.Contains("Loopback", StringComparison.OrdinalIgnoreCase)) continue;
+                if (nic.NetworkInterfaceType != NetworkInterfaceType.Ethernet) continue;
+                if (!IsUsbTetherAdapter(nic)) continue;
 
                 foreach (var address in nic.GetIPProperties().UnicastAddresses)
                 {
@@ -308,6 +302,15 @@ public sealed class CameraLink : IDisposable
             // сетевые интерфейсы недоступны — вернём что есть
         }
         return targets.Where(t => !own.Contains(t)).Distinct().ToList();
+    }
+
+    private static bool IsUsbTetherAdapter(NetworkInterface nic)
+    {
+        var identity = $"{nic.Name} {nic.Description}";
+        return identity.Contains("USB", StringComparison.OrdinalIgnoreCase)
+               || identity.Contains("RNDIS", StringComparison.OrdinalIgnoreCase)
+               || identity.Contains("Remote NDIS", StringComparison.OrdinalIgnoreCase)
+               || identity.Contains("Android", StringComparison.OrdinalIgnoreCase);
     }
 
     private static uint ToUint(byte[] bytes)

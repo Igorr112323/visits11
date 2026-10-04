@@ -1,4 +1,4 @@
-name: Validated release v2.0.1
+name: Validated release v2.0.2
 
 on:
   push:
@@ -159,7 +159,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create v2.0.1 \
+          gh release create v2.0.2 \
             release-assets/KubGAU-Server.exe \
             release-assets/KubGAU-Journal.exe \
             release-assets/KubGAU-Teacher.apk \
@@ -167,5 +167,5 @@ jobs:
             release-assets/Visits11-Student-iOS-unsigned.ipa \
             --target "$GITHUB_SHA" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "КубГАУ · Учёт посещаемости v2.0.1" \
-            --notes "v2.0.1: Android-приложение студента остаётся на экране входа при запуске; QR-сканер открывается по кнопке, а доступ к камере запрашивается и обрабатывается явно. В релиз входят успешно собранные CI-версии Windows, Android и iOS. iOS IPA без подписи; перед установкой её нужно подписать Apple Developer Account или Sideloadly. Реальные NFC/BLE-касания требуют устройств и CI не проверяются."
+            --title "КубГАУ · Учёт посещаемости v2.0.2" \
+            --notes "v2.0.2: связь APK преподавателя с ПК ограничена USB-модемом (RNDIS); Wi-Fi и мобильная сеть для этого канала не используются. При первом запуске приложение запрашивает BLE-разрешения, предлагает включить Bluetooth и открывает настройки USB-модема. Релизные сборки Windows, Android и iOS прошли CI; физическое тестирование USB/NFC/BLE требует устройств. iOS IPA без подписи — подпишите её Apple Developer Account или Sideloadly."
