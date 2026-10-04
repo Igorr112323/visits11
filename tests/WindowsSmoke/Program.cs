@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.IO;
 using Visits11.Models;
 using Visits11.Services;
 
@@ -29,7 +31,11 @@ try
     var startedAt = markedAt.ToString("yyyy-MM-dd HH:mm:ss");
     var finishedAt = markedAt.AddMinutes(10).ToString("yyyy-MM-dd HH:mm:ss");
     var lessonId = database.AddLesson(group.Id, startedAt, finishedAt);
-    database.AddAttendance(lessonId, new[] { (savedStudent.Id, true, startedAt, true, "different-device") });
+    var attendanceRows = new List<(int StudentId, bool Present, string MarkedAt, bool DeviceMismatch, string? ObservedDeviceId)>
+    {
+        (savedStudent.Id, true, startedAt, true, "different-device")
+    };
+    database.AddAttendance(lessonId, attendanceRows);
     var detail = database.GetLessonDetails(lessonId).Single();
     Assert(detail.DeviceMismatch, "A mismatched attendance device was not flagged");
     Assert(detail.Present, "A device mismatch incorrectly rejected attendance");
