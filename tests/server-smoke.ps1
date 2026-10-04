@@ -15,7 +15,11 @@ try {
     Write-Output "SMOKE_STAGE: wait-health"
     $health = $null
     for ($i = 0; $i -lt 45; $i++) {
-        if ($process.HasExited) { throw "Server process exited with code $($process.ExitCode)" }
+        if ($process.HasExited) {
+            $crashPath = Join-Path $dataDir "server-error.log"
+            $crash = if (Test-Path $crashPath) { Get-Content -Raw $crashPath } else { "No managed exception log was written" }
+            throw "Server process exited with code $($process.ExitCode): $crash"
+        }
         try {
             $health = Invoke-RestMethod -Uri "$base/api/health" -TimeoutSec 2
             break
