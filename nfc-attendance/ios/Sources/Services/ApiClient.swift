@@ -295,6 +295,8 @@ struct ApiClient {
 
 extension ApiClient {
     /// Удобный конструктор: берём адрес из настроек студента.
+    /// `@MainActor`, потому что настройки читаются только из главного потока.
+    @MainActor
     init?(settings: Settings) {
         guard let baseURL = settings.baseURL else { return nil }
         self.init(baseURL: baseURL)
