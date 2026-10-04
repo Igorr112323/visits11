@@ -63,7 +63,7 @@
                     <Border Background="#102820" BorderBrush="#254239" BorderThickness="1" CornerRadius="14" Padding="16">
                         <DockPanel>
                             <Button DockPanel.Dock="Right" Content="Копировать ключ" Click="CopyKey_OnClick" Background="#1A4B37" Foreground="#D9F1E2" BorderThickness="0" Padding="12,8" Margin="12,0,0,0" />
-                            <TextBox Text="{Binding SyncKey}" IsReadOnly="True" Background="Transparent" Foreground="#C8D8CF" BorderThickness="0" FontSize="12" TextWrapping="Wrap" VerticalContentAlignment="Center" />
+                            <TextBox Text="{Binding SyncKey, Mode=OneWay}" IsReadOnly="True" Background="Transparent" Foreground="#C8D8CF" BorderThickness="0" FontSize="12" TextWrapping="Wrap" VerticalContentAlignment="Center" />
                         </DockPanel>
                     </Border>
                     <TextBlock Text="Сохранённые данные" Foreground="#ECF4EF" FontSize="16" FontWeight="SemiBold" Margin="0,24,0,10" />
