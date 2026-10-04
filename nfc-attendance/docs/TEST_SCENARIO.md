@@ -28,9 +28,13 @@ pytest -v
 
 ## Этап 1. Сервер руками через curl (5 минут)
 
+> Без Python: скачайте
+> [KubGAU-Attendance-Server.exe](https://github.com/Igorr112323/visits11/releases/download/nfc-v1.0.0/KubGAU-Attendance-Server.exe),
+> запустите, разрешите брандмауэру — и выполняйте те же запросы.
+
 ```bash
 # 1. запустить сервер (в отдельном окне)
-uvicorn main:app --host 0.0.0.0 --port 8000
+uvicorn main:app --host 0.0.0.0 --port 8000    # или: python launcher.py
 
 # 2. создать пару
 SID=$(python3 -c "import uuid;print(uuid.uuid4())")

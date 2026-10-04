@@ -95,6 +95,79 @@ jobs:
               --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY"
           fi
 
+  # ----------------------------------------------- Сервер .exe (Windows, без Python)
+  server-exe:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install server dependencies
+        working-directory: nfc-attendance/server
+        run: |
+          python -m pip install --upgrade pip
+          pip install fastapi==0.115.6 uvicorn==0.34.0 pydantic==2.10.4 pyinstaller==6.11.1
+
+      # Не собираем exe из сломанного кода: сначала прогоняем тесты сервера
+      - name: Test server
+        working-directory: nfc-attendance/server
+        run: |
+          pip install pytest==8.3.4 httpx==0.28.1
+          python -m pytest tests -q
+
+      - name: Build one-file EXE (PyInstaller)
+        working-directory: nfc-attendance/server
+        run: |
+          pyinstaller --noconfirm --onefile --name KubGAU-Attendance-Server --collect-all uvicorn --hidden-import uvicorn.logging --hidden-import uvicorn.loops.asyncio --hidden-import uvicorn.lifespan.on --hidden-import uvicorn.protocols.http.h11_impl --hidden-import main --hidden-import database launcher.py
+          Get-ChildItem dist
+
+      - name: Smoke test EXE (запуск и ответ /api/health)
+        working-directory: nfc-attendance/server
+        shell: pwsh
+        run: |
+          $env:ATTENDANCE_DB = "$env:RUNNER_TEMP\smoke.db"
+          $process = Start-Process -FilePath "dist\KubGAU-Attendance-Server.exe" -PassThru -RedirectStandardOutput "$env:RUNNER_TEMP\exe.log" -NoNewWindow
+          $ok = $false
+          foreach ($i in 1..30) {
+            Start-Sleep -Seconds 1
+            try {
+              $response = Invoke-WebRequest -Uri "http://127.0.0.1:8000/api/health" -UseBasicParsing -TimeoutSec 3
+              if ($response.StatusCode -eq 200) { $ok = $true; break }
+            } catch { }
+          }
+          Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          Get-Content "$env:RUNNER_TEMP\exe.log" | Select-Object -First 40
+          if (-not $ok) {
+            Write-Error "::error::EXE не отвечает на /api/health"
+            exit 1
+          }
+          Write-Host "EXE отвечает на /api/health — ок"
+
+      - name: Upload EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KubGAU-Attendance-Server-exe
+          path: nfc-attendance/server/dist/KubGAU-Attendance-Server.exe
+          if-no-files-found: error
+
+      - name: Publish EXE to release nfc-v1.0.0
+        working-directory: nfc-attendance/server
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $null = gh release view nfc-v1.0.0 --repo "$env:GITHUB_REPOSITORY" 2>&1
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload nfc-v1.0.0 dist/KubGAU-Attendance-Server.exe --clobber --repo "$env:GITHUB_REPOSITORY"
+          } else {
+            gh release create nfc-v1.0.0 dist/KubGAU-Attendance-Server.exe --title "КубГАУ · Отметки касанием (FastAPI + Kotlin + Swift)" --notes "Локальная система отметок: сервер FastAPI (exe для Windows), Android-терминал с BLE-меткой и NFC HCE, iPhone-приложение студента. Подробности — в nfc-attendance/README.md" --target "$env:GITHUB_SHA" --repo "$env:GITHUB_REPOSITORY"
+          }
+
   # ------------------------------------------------------------------ iOS (ipa)
   ios:
     runs-on: macos-14
