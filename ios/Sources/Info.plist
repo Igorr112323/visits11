@@ -22,8 +22,6 @@
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
-    <key>NFCReaderUsageDescription</key>
-    <string>Для отметки на паре поднесите iPhone к телефону преподавателя.</string>
     <key>NSCameraUsageDescription</key>
     <string>Камера нужна для первого входа по QR-коду студента.</string>
     <key>NSBluetoothAlwaysUsageDescription</key>

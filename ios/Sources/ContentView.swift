@@ -41,7 +41,8 @@ final class StudentPeripheral: NSObject, ObservableObject, CBPeripheralManagerDe
         let value: [String: String] = ["studentKey": studentKey, "fullName": fullName, "deviceId": deviceId]
         guard let data = try? JSONSerialization.data(withJSONObject: value) else { return }
         identityData = data
-        identityCharacteristic?.value = data
+        // The characteristic is dynamic (value=nil), so reads always use this
+        // latest payload instead of a value CoreBluetooth cached at addService time.
         if manager.state == .poweredOn && !didAddService {
             installService()
         }
@@ -54,9 +55,17 @@ final class StudentPeripheral: NSObject, ObservableObject, CBPeripheralManagerDe
                 self.bluetoothStatus = "Bluetooth готов"
                 self.installService()
             case .poweredOff:
+                self.didAddService = false
+                self.identityCharacteristic = nil
+                self.markCharacteristic = nil
                 self.bluetoothStatus = "Включите Bluetooth"
             case .unauthorized:
-                self.bluetoothStatus = "Разрешите Bluetooth"
+                self.didAddService = false
+                self.identityCharacteristic = nil
+                self.markCharacteristic = nil
+                self.bluetoothStatus = "Разрешите Bluetooth в настройках iPhone"
+            case .unsupported:
+                self.bluetoothStatus = "Этот iPhone не поддерживает Bluetooth LE"
             default:
                 self.bluetoothStatus = "Ожидание Bluetooth"
             }
@@ -65,20 +74,24 @@ final class StudentPeripheral: NSObject, ObservableObject, CBPeripheralManagerDe
 
     func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
         DispatchQueue.main.async {
-            guard error == nil else {
-                self.bluetoothStatus = "Не удалось запустить BLE"
+            if let error {
+                self.bluetoothStatus = "Не удалось добавить BLE-службу: \(error.localizedDescription)"
                 self.didAddService = false
                 return
             }
             self.didAddService = true
+            self.bluetoothStatus = "Запускаю Bluetooth-связь"
             peripheral.startAdvertising([CBAdvertisementDataServiceUUIDsKey: [tapServiceId]])
-            self.bluetoothStatus = "Готов к касанию"
         }
     }
 
     func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
-        if error != nil {
-            DispatchQueue.main.async { self.bluetoothStatus = "Не удалось включить BLE" }
+        DispatchQueue.main.async {
+            if let error {
+                self.bluetoothStatus = "Не удалось включить BLE: \(error.localizedDescription)"
+            } else {
+                self.bluetoothStatus = "Готов к касанию"
+            }
         }
     }
 
@@ -119,8 +132,12 @@ final class StudentPeripheral: NSObject, ObservableObject, CBPeripheralManagerDe
     }
 
     private func installService() {
-        guard manager.state == .poweredOn, !didAddService else { return }
-        let identity = CBMutableCharacteristic(type: identityCharacteristicId, properties: [.read], value: identityData, permissions: [.readable])
+        // Do not publish an empty or stale student identity if CoreBluetooth
+        // reports .poweredOn before the QR profile has been installed.
+        guard manager.state == .poweredOn, !didAddService, !identityData.isEmpty else { return }
+        // A nil value makes this a dynamic characteristic. Reads are answered
+        // by peripheralManager(_:didReceiveRead:) using the latest identityData.
+        let identity = CBMutableCharacteristic(type: identityCharacteristicId, properties: [.read], value: nil, permissions: [.readable])
         let mark = CBMutableCharacteristic(type: markCharacteristicId, properties: [.write], value: nil, permissions: [.writeable])
         let service = CBMutableService(type: tapServiceId, primary: true)
         service.characteristics = [identity, mark]
