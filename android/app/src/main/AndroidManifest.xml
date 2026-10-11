@@ -3,14 +3,16 @@
 
     <!--
       Интернета приложению не нужно: связь с ПК идёт по USB-кабелю, Wi-Fi не используется.
-      Но разрешение INTERNET обязательно даже для своих сокетов: без него Android
-      запрещает создавать любой сокет (EACCES) и не отдаёт список сетевых интерфейсов,
-      поэтому сервер связи с ПК просто не мог открыться.
+      Разрешение INTERNET нужно только для создания локального сокета USB-модема.
+      Bluetooth (BLE) используется для отметки iPhone при поднесении вплотную к телефону преподавателя.
     -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.NFC" />
     <uses-permission android:name="android.permission.VIBRATE" />
-
+    <uses-permission android:name="android.permission.BLUETOOTH" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <application
         android:label="КубГАУ Преподаватель"

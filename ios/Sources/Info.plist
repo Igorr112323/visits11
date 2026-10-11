@@ -2,35 +2,44 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>ru</string>
-    <key>CFBundleDisplayName</key>
-    <string>Visits11</string>
-    <key>CFBundleExecutable</key>
-    <string>$(EXECUTABLE_NAME)</string>
-    <key>CFBundleIdentifier</key>
-    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleName</key>
-    <string>Visits11 Студент</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>$(MARKETING_VERSION)</string>
-    <key>CFBundleVersion</key>
-    <string>$(CURRENT_PROJECT_VERSION)</string>
-    <key>LSRequiresIPhoneOS</key>
-    <true/>
-    <key>NSCameraUsageDescription</key>
-    <string>Камера нужна, чтобы отсканировать ваш QR-код при входе в приложение.</string>
-    <key>NFCReaderUsageDescription</key>
-    <string>Для отметки на паре поднесите iPhone к телефону преподавателя.</string>
-    <key>UILaunchScreen</key>
-    <dict/>
-    <key>UISupportedInterfaceOrientations</key>
-    <array>
-        <string>UIInterfaceOrientationPortrait</string>
-    </array>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>ru</string>
+	<key>CFBundleDisplayName</key>
+	<string>Студент КубГАУ</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.4</string>
+	<key>CFBundleVersion</key>
+	<string>5</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Камера нужна для сканирования личного QR-кода при входе</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Фотогалерея нужна для выбора сохранённого QR-кода</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Bluetooth нужен для автоматической отметки при поднесении iPhone вплотную к телефону преподавателя</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Bluetooth нужен для автоматической отметки при поднесении iPhone вплотную к телефону преподавателя</string>
+	<key>NFCReaderUsageDescription</key>
+	<string>NFC нужен для отметки о присутствии на паре</string>
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string></string>
+	</dict>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
 </dict>
 </plist>

@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public final class TeacherCardService extends HostApduService {
 
-    /** NFC-запросы, ждущие ПК. */
+    /** NFC/BLE-запросы, ждущие ПК. */
     static final LinkedBlockingQueue<String> requests = new LinkedBlockingQueue<>();
 
     /** Ответ ПК на текущее касание. */
@@ -38,10 +38,10 @@ public final class TeacherCardService extends HostApduService {
     private static final byte[] NFC_AID = {(byte) 0xF0, 0x39, 0x11, 0x01, 0x02, 0x03, 0x04};
 
     /** Коды ответа — те же, что понимают приложения студентов. */
-    private static final int REPLY_MARKED = 0;         // + имя студента
-    private static final int REPLY_UNKNOWN_QR = 2;     // такого QR-кода нет в журнале
-    private static final int REPLY_UNAVAILABLE = 4;    // ПК недоступен / перекличка не идёт
-    private static final int REPLY_DEVICE_BLOCKED = 5; // телефон привязан к другому студенту
+    static final int REPLY_MARKED = 0;         // + имя студента
+    static final int REPLY_UNKNOWN_QR = 2;     // такого QR-кода нет в журнале
+    static final int REPLY_UNAVAILABLE = 4;    // ПК недоступен / перекличка не идёт
+    static final int REPLY_DEVICE_BLOCKED = 5; // телефон привязан к другому студенту
 
     @Override
     public byte[] processCommandApdu(byte[] apdu, Bundle extras) {
@@ -70,15 +70,21 @@ public final class TeacherCardService extends HostApduService {
             return ok(new byte[0]);
         }
         String device = parts.length > 1 ? parts[1] : "";
-        String request = "{\"token\":\"" + escape(parts[0]) + "\",\"device\":\"" + escape(device) + "\"}";
+        byte[] payload = exchangeWithPc(parts[0], device, this::vibrate);
+        return ok(payload);
+    }
+
+    /**
+     * Передаёт данные студента (код из QR + id телефона) на ПК по USB и ждёт ответ.
+     * Используется и для Android (NFC), и для iPhone (BLE при поднесении вплотную).
+     */
+    static byte[] exchangeWithPc(String token, String device, Runnable onMarked) {
+        String request = "{\"token\":\"" + escape(token) + "\",\"device\":\"" + escape(device) + "\"}";
 
         synchronized (TAP_LOCK) {
-            // убираем невостребованные запросы прошлых касаний, чтобы очередь не забивалась
             requests.clear();
             resultBox.poll();
 
-            // отдаём запрос ПК и ждём ответ прямо в момент касания;
-            // чужие (опоздавшие) ответы пропускаем — ждём именно свой
             long id = SEQ.incrementAndGet();
             requests.add("{\"id\":" + id + "," + request.substring(1));
             String result = null;
@@ -105,19 +111,19 @@ public final class TeacherCardService extends HostApduService {
             }
             if (result == null) {
                 requests.clear();
-                return ok(new byte[]{REPLY_UNAVAILABLE});
+                return new byte[]{REPLY_UNAVAILABLE};
             }
 
             int code = codeOf(result);
             String value = extractString(result, "value");
-            if (code == REPLY_MARKED) {
-                vibrate();
+            if (code == REPLY_MARKED && onMarked != null) {
+                onMarked.run();
             }
             byte[] bytes = value == null ? new byte[0] : value.getBytes(StandardCharsets.UTF_8);
             byte[] payload = new byte[1 + bytes.length];
             payload[0] = (byte) code;
             System.arraycopy(bytes, 0, payload, 1, bytes.length);
-            return ok(payload);
+            return payload;
         }
     }
 

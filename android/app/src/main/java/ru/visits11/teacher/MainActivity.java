@@ -1,17 +1,37 @@
 package ru.visits11.teacher;
 
 import android.app.Activity;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothGatt;
+import android.bluetooth.BluetoothGattCharacteristic;
+import android.bluetooth.BluetoothGattDescriptor;
+import android.bluetooth.BluetoothGattServer;
+import android.bluetooth.BluetoothGattServerCallback;
+import android.bluetooth.BluetoothGattService;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.le.AdvertiseCallback;
+import android.bluetooth.le.AdvertiseData;
+import android.bluetooth.le.AdvertiseSettings;
+import android.bluetooth.le.BluetoothLeAdvertiser;
 import android.content.ComponentName;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.nfc.NfcAdapter;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.ParcelUuid;
 import android.os.SystemClock;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.view.WindowManager;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -22,24 +42,34 @@ import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.Enumeration;
 import java.util.Locale;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 /**
  * Телефон преподавателя: логотип КубГАУ на весь экран, экран не гаснет.
  * Держит связь с ПК только по USB-кабелю («USB-модем») — Wi-Fi не используется
  * вовсе: сервер слушает единственный адрес USB-интерфейса, а не всю сеть.
- * Разрешение INTERNET объявлено вынужденно: без него Android не даёт создать
- * даже свой сокет и не показывает список сетевых интерфейсов; наружу трафик не идёт.
- * Через эту связь NFC-сервис (TeacherCardService) пересылает отметки студентов на ПК.
- * Нет связи с ПК — нажмите на экран, откроется тумблер «USB-модем».
+ * Через эту связь NFC-сервис (TeacherCardService) пересылает отметки Android-студентов,
+ * а встроенный BLE-сервер — отметки iPhone при поднесении вплотную.
  */
 public final class MainActivity extends Activity {
 
     private static final int SERVER_PORT = 8090;
     private static final long PC_TIMEOUT_MS = 6000;  // long-poll /event длится 3 с — запас в 2 раза
     private static final String SIGNATURE = "visits11-teacher";
+    private static final int REQ_BLE = 77;
+
+    /** UUID BLE-сервиса и характеристики для отметки iPhone при поднесении вплотную. */
+    private static final UUID BLE_SERVICE_UUID =
+            UUID.fromString("F0391101-0203-0405-0607-08090A0B0C0D");
+    private static final UUID BLE_CHAR_UUID =
+            UUID.fromString("F0391102-0203-0405-0607-08090A0B0C0D");
+    private static final UUID BLE_CCCD_UUID =
+            UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
 
     private TextView statusText;
 
@@ -49,11 +79,20 @@ public final class MainActivity extends Activity {
 
     private volatile long lastClientAt;
 
+    // BLE-сервер для iPhone
+    private BluetoothGattServer gattServer;
+    private BluetoothLeAdvertiser advertiser;
+    private BluetoothGattCharacteristic markCharacteristic;
+    private volatile boolean bleAdvertising;
+    private final ConcurrentHashMap<String, ByteArrayOutputStream> bleBuffers = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, byte[]> bleReplies = new ConcurrentHashMap<>();
+
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final Runnable statusTicker = new Runnable() {
         @Override
         public void run() {
             ensureUsbBinding();
+            ensureBleRunning();
             updateStatus();
             ui.postDelayed(this, 500);
         }
@@ -69,7 +108,8 @@ public final class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         statusText = findViewById(R.id.statusText);
-        // нажатие: выключенный NFC -> настройки NFC, мешает VPN -> настройки VPN, нет ПК -> USB-модем
+        // нажатие: выключенный NFC -> настройки NFC, выключенный Bluetooth -> включить Bluetooth,
+        // мешает VPN -> настройки VPN, нет ПК -> USB-модем
         findViewById(R.id.root).setOnClickListener(v -> {
             NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
             if (adapter != null && !adapter.isEnabled()) {
@@ -77,6 +117,22 @@ public final class MainActivity extends Activity {
                     startActivity(new Intent("android.settings.NFC_SETTINGS"));
                 } catch (Throwable ignored) {
                     toast("Включите NFC в настройках");
+                }
+                return;
+            }
+            if (!hasBlePermissions()) {
+                requestBlePermissionsIfNeeded();
+                return;
+            }
+            if (!isBluetoothEnabled()) {
+                try {
+                    startActivity(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE));
+                } catch (Throwable ignored) {
+                    try {
+                        startActivity(new Intent("android.settings.BLUETOOTH_SETTINGS"));
+                    } catch (Throwable ignored2) {
+                        toast("Включите Bluetooth в настройках");
+                    }
                 }
                 return;
             }
@@ -89,6 +145,7 @@ public final class MainActivity extends Activity {
             }
         });
 
+        requestBlePermissionsIfNeeded();
         startServer();
         ui.post(statusTicker);
     }
@@ -99,6 +156,253 @@ public final class MainActivity extends Activity {
         ui.removeCallbacks(statusTicker);
         serverRunning = false;
         closeQuietly(serverSocket);
+        stopBleServer();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQ_BLE) {
+            ensureBleRunning();
+            updateStatus();
+        }
+    }
+
+    // ------------------------------------------------------------ BLE для iPhone
+
+    private boolean hasBlePermissions() {
+        if (Build.VERSION.SDK_INT >= 31) {
+            return checkSelfPermission("android.permission.BLUETOOTH_ADVERTISE") == PackageManager.PERMISSION_GRANTED
+                    && checkSelfPermission("android.permission.BLUETOOTH_CONNECT") == PackageManager.PERMISSION_GRANTED;
+        }
+        return true;
+    }
+
+    private boolean isBluetoothEnabled() {
+        try {
+            BluetoothManager manager = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
+            BluetoothAdapter adapter = manager != null ? manager.getAdapter() : null;
+            return adapter != null && adapter.isEnabled();
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+    private void requestBlePermissionsIfNeeded() {
+        if (Build.VERSION.SDK_INT >= 31 && !hasBlePermissions()) {
+            try {
+                requestPermissions(new String[]{
+                        "android.permission.BLUETOOTH_ADVERTISE",
+                        "android.permission.BLUETOOTH_CONNECT"
+                }, REQ_BLE);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    private void ensureBleRunning() {
+        if (!isBluetoothEnabled() || !hasBlePermissions()) {
+            if (bleAdvertising) {
+                stopBleServer();
+            }
+            return;
+        }
+        if (bleAdvertising) {
+            return;
+        }
+        try {
+            BluetoothManager manager = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
+            if (manager == null) return;
+            BluetoothAdapter adapter = manager.getAdapter();
+            if (adapter == null || !adapter.isEnabled()) return;
+            BluetoothLeAdvertiser leAdvertiser = adapter.getBluetoothLeAdvertiser();
+            if (leAdvertiser == null) return;
+
+            BluetoothGattServer server = manager.openGattServer(this, gattCallback);
+            if (server == null) return;
+
+            BluetoothGattService service = new BluetoothGattService(
+                    BLE_SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY);
+            BluetoothGattCharacteristic characteristic = new BluetoothGattCharacteristic(
+                    BLE_CHAR_UUID,
+                    BluetoothGattCharacteristic.PROPERTY_WRITE
+                            | BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE
+                            | BluetoothGattCharacteristic.PROPERTY_READ
+                            | BluetoothGattCharacteristic.PROPERTY_NOTIFY,
+                    BluetoothGattCharacteristic.PERMISSION_WRITE
+                            | BluetoothGattCharacteristic.PERMISSION_READ);
+            BluetoothGattDescriptor cccd = new BluetoothGattDescriptor(
+                    BLE_CCCD_UUID,
+                    BluetoothGattDescriptor.PERMISSION_READ | BluetoothGattDescriptor.PERMISSION_WRITE);
+            characteristic.addDescriptor(cccd);
+            service.addCharacteristic(characteristic);
+            server.addService(service);
+
+            AdvertiseSettings settings = new AdvertiseSettings.Builder()
+                    .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
+                    .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
+                    .setConnectable(true)
+                    .build();
+            AdvertiseData data = new AdvertiseData.Builder()
+                    .setIncludeDeviceName(false)
+                    .addServiceUuid(new ParcelUuid(BLE_SERVICE_UUID))
+                    .build();
+
+            gattServer = server;
+            markCharacteristic = characteristic;
+            advertiser = leAdvertiser;
+            bleAdvertising = true;
+            leAdvertiser.startAdvertising(settings, data, advertiseCallback);
+        } catch (Throwable ignored) {
+            bleAdvertising = false;
+        }
+    }
+
+    private void stopBleServer() {
+        bleAdvertising = false;
+        try {
+            if (advertiser != null) {
+                advertiser.stopAdvertising(advertiseCallback);
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (gattServer != null) {
+                gattServer.close();
+            }
+        } catch (Throwable ignored) {
+        }
+        advertiser = null;
+        gattServer = null;
+        markCharacteristic = null;
+    }
+
+    private final AdvertiseCallback advertiseCallback = new AdvertiseCallback() {
+        @Override
+        public void onStartFailure(int errorCode) {
+            bleAdvertising = false;
+        }
+    };
+
+    private final BluetoothGattServerCallback gattCallback = new BluetoothGattServerCallback() {
+        @Override
+        public void onConnectionStateChange(BluetoothDevice device, int status, int newState) {
+            if (device != null && newState == BluetoothGatt.STATE_DISCONNECTED) {
+                String key = device.getAddress();
+                bleBuffers.remove(key);
+                bleReplies.remove(key);
+            }
+        }
+
+        @Override
+        public void onDescriptorWriteRequest(BluetoothDevice device, int requestId,
+                                             BluetoothGattDescriptor descriptor,
+                                             boolean preparedWrite, boolean responseNeeded,
+                                             int offset, byte[] value) {
+            if (responseNeeded && gattServer != null) {
+                try {
+                    gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value);
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+
+        @Override
+        public void onCharacteristicWriteRequest(BluetoothDevice device, int requestId,
+                                                 BluetoothGattCharacteristic characteristic,
+                                                 boolean preparedWrite, boolean responseNeeded,
+                                                 int offset, byte[] value) {
+            if (responseNeeded && gattServer != null) {
+                try {
+                    gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, value);
+                } catch (Throwable ignored) {
+                }
+            }
+            if (device == null || value == null || !BLE_CHAR_UUID.equals(characteristic.getUuid())) {
+                return;
+            }
+            String key = device.getAddress();
+            ByteArrayOutputStream buffer = bleBuffers.computeIfAbsent(key, k -> new ByteArrayOutputStream());
+            int startFrom = 0;
+            if (value.length > 0 && value[0] == 1) {
+                // 0x01 — начало нового пакета от iPhone
+                buffer.reset();
+                startFrom = 1;
+            }
+            int endAt = -1;
+            for (int i = startFrom; i < value.length; i++) {
+                if (value[i] == 0) {
+                    endAt = i;
+                    break;
+                }
+            }
+            if (endAt < 0) {
+                buffer.write(value, startFrom, value.length - startFrom);
+                if (buffer.size() > 2048) {
+                    buffer.reset();
+                }
+                return;
+            }
+            buffer.write(value, startFrom, endAt - startFrom);
+            final String full = new String(buffer.toByteArray(), StandardCharsets.UTF_8);
+            buffer.reset();
+
+            String[] parts = full.split("\n", 2);
+            if (parts.length < 1 || parts[0].isEmpty()) {
+                return;
+            }
+            final String token = parts[0];
+            final String studentDevice = parts.length > 1 ? parts[1] : "";
+            bleReplies.put(key, new byte[]{(byte) 0xFF}); // 0xFF — запрос обрабатывается на ПК
+
+            new Thread(() -> {
+                byte[] reply = TeacherCardService.exchangeWithPc(token, studentDevice, MainActivity.this::vibrate);
+                bleReplies.put(key, reply);
+                try {
+                    BluetoothGattServer server = gattServer;
+                    BluetoothGattCharacteristic ch = markCharacteristic;
+                    if (server != null && ch != null) {
+                        ch.setValue(reply);
+                        server.notifyCharacteristicChanged(device, ch, false);
+                    }
+                } catch (Throwable ignored) {
+                }
+            }, "BleMark").start();
+        }
+
+        @Override
+        public void onCharacteristicReadRequest(BluetoothDevice device, int requestId, int offset,
+                                                BluetoothGattCharacteristic characteristic) {
+            if (gattServer == null || device == null) return;
+            try {
+                byte[] reply = bleReplies.get(device.getAddress());
+                if (reply == null) {
+                    reply = new byte[]{(byte) 0xFF};
+                }
+                byte[] slice = offset >= reply.length
+                        ? new byte[0]
+                        : Arrays.copyOfRange(reply, offset, reply.length);
+                gattServer.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, slice);
+            } catch (Throwable ignored) {
+            }
+        }
+    };
+
+    /** Заметная двойная вибрация при успешной отметке iPhone (такая же, как при NFC). */
+    private void vibrate() {
+        try {
+            Vibrator vibrator;
+            if (Build.VERSION.SDK_INT >= 31) {
+                VibratorManager manager = (VibratorManager) getSystemService(VIBRATOR_MANAGER_SERVICE);
+                vibrator = manager != null ? manager.getDefaultVibrator() : null;
+            } else {
+                vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+            }
+            if (vibrator != null && vibrator.hasVibrator()) {
+                vibrator.vibrate(VibrationEffect.createWaveform(new long[]{0, 90, 70, 90}, -1));
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     // ------------------------------------------------------------ статус связи
@@ -109,7 +413,7 @@ public final class MainActivity extends Activity {
     }
 
     private void updateStatus() {
-        // 1. NFC — без него касания не работают вовсе
+        // 1. NFC — без него касания Android не работают
         NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
         if (adapter == null) {
             statusText.setText("NFC не поддерживается этим телефоном");
@@ -125,7 +429,11 @@ public final class MainActivity extends Activity {
         // 2. связь с ПК (ПК сам забирает отметки с телефона по кабелю)
         InetAddress usb = usbAddress();
         if (pcConnected()) {
-            statusText.setText("ПК подключён, NFC готов (" + versionName() + ")");
+            if (bleAdvertising) {
+                statusText.setText("ПК подключён, NFC + iPhone готовы (" + versionName() + ")");
+            } else {
+                statusText.setText("ПК подключён, NFC готов (включите Bluetooth для iPhone, " + versionName() + ")");
+            }
             statusText.setTextColor(0xFF2E7D32);
         } else if (usb != null && vpnActive()) {
             statusText.setText("USB-модем включён (" + usb.getHostAddress() + "), v" + versionName()
