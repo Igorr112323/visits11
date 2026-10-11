@@ -1,4 +1,5 @@
 import SwiftUI
+import AudioToolbox
 import CoreBluetooth
 import UIKit
 
@@ -253,7 +254,11 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
             lastMarkedAt = Date()
             cooldownUntil = Date().addingTimeInterval(5.0)
             statusOverride = value.isEmpty ? "Вы отмечены" : "Вы отмечены — \(value)"
+            AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+                AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+            }
         case 2:
             cooldownUntil = Date().addingTimeInterval(2.5)
             prefs.removeObject(forKey: keyToken)

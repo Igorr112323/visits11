@@ -800,19 +800,39 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
 
     /** Заметная двойная вибрация — отметка прошла. */
     private void vibrate() {
-        try {
-            Vibrator vibrator;
-            if (Build.VERSION.SDK_INT >= 31) {
-                VibratorManager manager = (VibratorManager) getSystemService(VIBRATOR_MANAGER_SERVICE);
-                vibrator = manager != null ? manager.getDefaultVibrator() : null;
-            } else {
-                vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+        Runnable pulse = () -> {
+            try {
+                if (statusText != null) {
+                    statusText.performHapticFeedback(
+                            android.view.HapticFeedbackConstants.LONG_PRESS,
+                            android.view.HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING);
+                }
+            } catch (Throwable ignored) {
             }
-            if (vibrator != null && vibrator.hasVibrator()) {
-                vibrator.vibrate(VibrationEffect.createWaveform(new long[]{0, 90, 70, 90}, -1));
+            try {
+                Vibrator vibrator;
+                if (Build.VERSION.SDK_INT >= 31) {
+                    VibratorManager manager = (VibratorManager) getSystemService(VIBRATOR_MANAGER_SERVICE);
+                    vibrator = manager != null ? manager.getDefaultVibrator() : null;
+                } else {
+                    vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
+                }
+                if (vibrator != null && vibrator.hasVibrator()) {
+                    android.media.AudioAttributes attrs = new android.media.AudioAttributes.Builder()
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                            .build();
+                    VibrationEffect effect = VibrationEffect.createWaveform(
+                            new long[]{0, 220, 100, 260},
+                            new int[]{0, 255, 0, 255},
+                            -1);
+                    vibrator.vibrate(effect, attrs);
+                }
+            } catch (Throwable ignored) {
             }
-        } catch (Throwable ignored) {
-        }
+        };
+        ui.post(pulse);
+        ui.postDelayed(pulse, 140);
     }
 
     // ------------------------------------------------------------ интерфейс
