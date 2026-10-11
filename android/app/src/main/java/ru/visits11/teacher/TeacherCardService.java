@@ -73,6 +73,10 @@ public final class TeacherCardService extends HostApduService {
         String request = "{\"token\":\"" + escape(parts[0]) + "\",\"device\":\"" + escape(device) + "\"}";
 
         synchronized (TAP_LOCK) {
+            // убираем невостребованные запросы прошлых касаний, чтобы очередь не забивалась
+            requests.clear();
+            resultBox.poll();
+
             // отдаём запрос ПК и ждём ответ прямо в момент касания;
             // чужие (опоздавшие) ответы пропускаем — ждём именно свой
             long id = SEQ.incrementAndGet();
@@ -100,6 +104,7 @@ public final class TeacherCardService extends HostApduService {
                 }
             }
             if (result == null) {
+                requests.clear();
                 return ok(new byte[]{REPLY_UNAVAILABLE});
             }
 
@@ -128,6 +133,9 @@ public final class TeacherCardService extends HostApduService {
                 return 0;
             }
             at += 5;
+            while (at < json.length() && Character.isWhitespace(json.charAt(at))) {
+                at++;
+            }
             int end = at;
             while (end < json.length() && Character.isDigit(json.charAt(end))) {
                 end++;
@@ -146,12 +154,21 @@ public final class TeacherCardService extends HostApduService {
                 return REPLY_UNAVAILABLE;
             }
             at += 7;
+            while (at < json.length() && Character.isWhitespace(json.charAt(at))) {
+                at++;
+            }
             int end = at;
             while (end < json.length() && (Character.isDigit(json.charAt(end)) || json.charAt(end) == '-')) {
                 end++;
             }
             int code = Integer.parseInt(json.substring(at, end));
-            return code == REPLY_UNKNOWN_QR || code == REPLY_UNAVAILABLE || code == REPLY_DEVICE_BLOCKED
+            if (code == 1) {
+                return REPLY_MARKED;
+            }
+            return code == REPLY_MARKED
+                    || code == REPLY_UNKNOWN_QR
+                    || code == REPLY_UNAVAILABLE
+                    || code == REPLY_DEVICE_BLOCKED
                     ? code
                     : REPLY_UNAVAILABLE;
         } catch (Throwable ignored) {

@@ -3,22 +3,33 @@ using System.Net.Http;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
-using System.Windows;
 
 namespace Visits11.Services;
 
 /// <summary>
-/// Связь с телефоном преподавателя — только по USB-кабелю, Wi-Fi не используется.
-/// ПК сам находит телефон (телефон слушает лишь свой USB-интерфейс) и забирает
-/// NFC-касания студентов: GET /event (long-poll) → обработать → POST /event_result.
+/// Связь с телефоном преподавателя по USB-кабелю («USB-модем»).
+/// ПК сам находит телефон и забирает NFC-касания студентов:
+/// GET /event (long-poll) → обработать → POST /event_result.
 /// Все соединения исходящие со стороны ПК — брандмауэр Windows ничего не блокирует.
 /// </summary>
 public sealed class PhoneLink : IDisposable
 {
     private const int Port = 8090;
 
-    /// <summary>Так телефон преподавателя отвечает на GET /info — по этому признаку его узнаём.</summary>
+    /// <summary>Признак телефона преподавателя в ответе GET /info.</summary>
     private const string Signature = "visits11-teacher";
+    private const string LegacySignature = "visits11-camera";
+
+    /// <summary>Стандартные адреса USB-модема Android/iPhone — проверяются первыми за миллисекунды.</summary>
+    private static readonly string[] PriorityUsbHosts =
+    {
+        "192.168.42.129", // стандартный адрес USB-модема Android (RNDIS)
+        "192.168.42.1",
+        "192.168.43.129",
+        "192.168.43.1",
+        "192.168.225.1",
+        "172.20.10.1",
+    };
 
     private CancellationTokenSource? _cts;
     private Task? _worker;
@@ -55,7 +66,7 @@ public sealed class PhoneLink : IDisposable
 
             if (host is null)
             {
-                try { await Task.Delay(3000, token); } catch (OperationCanceledException) { break; }
+                try { await Task.Delay(1500, token); } catch (OperationCanceledException) { break; }
                 continue;
             }
 
@@ -66,34 +77,62 @@ public sealed class PhoneLink : IDisposable
             catch (OperationCanceledException) { break; }
             catch { /* связь оборвалась — ищем телефон заново */ }
 
-            try { await Task.Delay(1000, token); } catch (OperationCanceledException) { break; }
+            try { await Task.Delay(500, token); } catch (OperationCanceledException) { break; }
         }
     }
 
-    /// <summary>Перебирает адреса активных подсетей (USB-модем виден как Ethernet) и ищет наш телефон.</summary>
+    /// <summary>
+    /// Сначала мгновенно проверяет шлюзы и стандартные адреса USB-модема (192.168.42.129 и др.),
+    /// затем при необходимости перебирает подсети активных интерфейсов ПК.
+    /// </summary>
     private static async Task<string?> DiscoverAsync(CancellationToken token)
     {
-        var targets = BuildTargets();
-        foreach (var batch in targets.Chunk(128))
+        var (fastTargets, subnetTargets) = BuildTargets();
+
+        var found = await ProbeBatchAsync(fastTargets, token);
+        if (found is not null) return found;
+
+        foreach (var batch in subnetTargets.Chunk(128))
         {
             if (token.IsCancellationRequested) return null;
+            found = await ProbeBatchAsync(batch, token);
+            if (found is not null) return found;
+        }
+        return null;
+    }
 
-            var probes = batch.Select(host => ProbeAsync(host, token)).ToArray();
-            try { await Task.WhenAll(probes); }
-            catch { /* пробы не бросают исключений — на всякий случай */ }
+    /// <summary>Проверяет пачку адресов параллельно и возвращает первый ответивший телефон, не дожидаясь остальных.</summary>
+    private static async Task<string?> ProbeBatchAsync(IEnumerable<string> hosts, CancellationToken token)
+    {
+        var list = hosts.ToList();
+        if (list.Count == 0) return null;
 
-            foreach (var probe in probes)
+        using var batchCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var pending = list.Select(host => ProbeAsync(host, batchCts.Token)).ToList();
+
+        while (pending.Count > 0 && !token.IsCancellationRequested)
+        {
+            Task<string?> finished;
+            try
             {
-                if (probe.IsCompletedSuccessfully && probe.Result is not null)
-                {
-                    return probe.Result;
-                }
+                finished = await Task.WhenAny(pending);
+            }
+            catch
+            {
+                break;
+            }
+            pending.Remove(finished);
+
+            if (finished.IsCompletedSuccessfully && finished.Result is string match)
+            {
+                try { batchCts.Cancel(); } catch { }
+                return match;
             }
         }
         return null;
     }
 
-    /// <summary>Подключается к кандидату и проверяет, что это телефон Visits11.</summary>
+    /// <summary>Подключается к кандидату и проверяет, что это телефон преподавателя Visits11.</summary>
     private static async Task<string?> ProbeAsync(string host, CancellationToken token)
     {
         var text = new StringBuilder();
@@ -110,8 +149,6 @@ public sealed class PhoneLink : IDisposable
                 $"GET /info HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
             await stream.WriteAsync(request, timeout.Token);
 
-            // читаем ответ ДО КОНЦА (телефон закрывает соединение): ответ может
-            // прийти несколькими кусками, одного чтения мало
             var buffer = new byte[2048];
             while (text.Length <= 4096)
             {
@@ -122,11 +159,12 @@ public sealed class PhoneLink : IDisposable
                 }
                 catch (OperationCanceledException)
                 {
-                    break; // время вышло — проверяем то, что успели прочитать
+                    break;
                 }
                 if (read == 0) break;
                 text.Append(Encoding.ASCII.GetString(buffer, 0, read));
-                if (text.ToString().Contains(Signature)) break;
+                var current = text.ToString();
+                if (current.Contains(Signature) || current.Contains(LegacySignature)) break;
             }
         }
         catch
@@ -134,7 +172,9 @@ public sealed class PhoneLink : IDisposable
             // этот адрес не наш — просто пропускаем
         }
         var response = text.ToString();
-        return response.Contains("200") && response.Contains(Signature) ? host : null;
+        return response.Contains("200") && (response.Contains(Signature) || response.Contains(LegacySignature))
+            ? host
+            : null;
     }
 
     /// <summary>
@@ -187,60 +227,76 @@ public sealed class PhoneLink : IDisposable
 
     // ------------------------------------------------------------- адреса сети
 
-    /// <summary>Слова, по которым Windows показывает USB-модем телефона в списке адаптеров.</summary>
-    private static readonly string[] UsbAdapterMarks =
-    {
-        "rndis", "remote ndis", "usb", "tether", "android", "apple mobile", "iphone",
-    };
-
     /// <summary>
-    /// Адреса подсетей (/24 и мельче) только USB-модема телефона (в Windows он виден
-    /// как Ethernet-адаптер с пометкой RNDIS/USB). Wi-Fi и обычный Ethernet пропускаем:
-    /// программа не должна ни искать телефон в сети, ни обращаться к посторонним адресам.
+    /// В русской Windows драйвер USB-модема называется «Удаленное устройство для совместного
+    /// доступа к Интернету на основе NDIS» (без букв USB или RNDIS), а интерфейс — «Ethernet 2».
+    /// Поэтому сначала берём стандартные адреса USB-модема и шлюзы всех активных адаптеров,
+    /// а затем перебираем подсети /24 всех кабельных/NDIS/USB интерфейсов ПК.
     /// </summary>
-    private static List<string> BuildTargets()
+    private static (List<string> Fast, List<string> Subnets) BuildTargets()
     {
-        var targets = new List<string>();
+        var fast = new List<string>(PriorityUsbHosts);
+        var subnets = new List<string>();
         var own = new HashSet<string>();
+
         try
         {
-            foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+            var interfaces = NetworkInterface.GetAllNetworkInterfaces()
+                .Where(n => n.OperationalStatus == OperationalStatus.Up
+                            && n.NetworkInterfaceType != NetworkInterfaceType.Loopback
+                            && n.NetworkInterfaceType != NetworkInterfaceType.Tunnel)
+                // кабельные и NDIS/USB-адаптеры проверяем раньше Wi-Fi
+                .OrderBy(n => n.NetworkInterfaceType == NetworkInterfaceType.Wireless80211 ? 1 : 0)
+                .ToList();
+
+            foreach (var nic in interfaces)
             {
-                if (nic.OperationalStatus != OperationalStatus.Up) continue;
-                if (nic.NetworkInterfaceType != NetworkInterfaceType.Ethernet) continue;
+                var props = nic.GetIPProperties();
 
-                var description = nic.Description + " " + nic.Name;
-                if (!UsbAdapterMarks.Any(mark => description.Contains(mark, StringComparison.OrdinalIgnoreCase)))
-                    continue;
+                // В режиме USB-модема телефон сам выдаёт ПК адрес по DHCP и числится шлюзом
+                foreach (var gateway in props.GatewayAddresses)
+                {
+                    if (gateway.Address.AddressFamily == AddressFamily.InterNetwork &&
+                        !IPAddress.IsLoopback(gateway.Address))
+                    {
+                        fast.Add(gateway.Address.ToString());
+                    }
+                }
 
-                if (description.Contains("Hyper-V", StringComparison.OrdinalIgnoreCase) ||
-                    description.Contains("Virtual", StringComparison.OrdinalIgnoreCase) ||
-                    description.Contains("VMware", StringComparison.OrdinalIgnoreCase) ||
-                    description.Contains("Loopback", StringComparison.OrdinalIgnoreCase)) continue;
-
-                foreach (var address in nic.GetIPProperties().UnicastAddresses)
+                foreach (var address in props.UnicastAddresses)
                 {
                     if (address.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                    var ipBytes = address.Address.GetAddressBytes();
+                    if (ipBytes[0] == 169 && ipBytes[1] == 254) continue; // APIPA без DHCP
+
                     own.Add(address.Address.ToString());
 
-                    // только /24 и мельче — иначе перебор адресов затянется
-                    var prefix = address.PrefixLength is >= 24 and <= 32 ? address.PrefixLength : 24;
-                    var ip = ToUint(address.Address.GetAddressBytes());
+                    // На любой подсети Android/iOS телефон почти всегда сидит на .129 или .1
+                    var ip = ToUint(ipBytes);
+                    var slash24 = ip & 0xFFFFFF00u;
+                    fast.Add(ToStringIp(slash24 | 129u));
+                    fast.Add(ToStringIp(slash24 | 1u));
+
+                    var prefix = address.PrefixLength is >= 24 and <= 30 ? address.PrefixLength : 24;
                     var mask = uint.MaxValue << (32 - prefix);
                     var network = ip & mask;
                     var broadcast = network | ~mask;
                     for (var host = network + 1; host < broadcast; host++)
                     {
-                        targets.Add(ToStringIp(host));
+                        subnets.Add(ToStringIp(host));
                     }
                 }
             }
         }
         catch
         {
-            // сетевые интерфейсы недоступны — вернём что есть
+            // сетевые интерфейсы недоступны — останутся стандартные адреса PriorityUsbHosts
         }
-        return targets.Where(t => !own.Contains(t)).Distinct().ToList();
+
+        var cleanFast = fast.Where(t => !own.Contains(t)).Distinct().ToList();
+        var fastSet = new HashSet<string>(cleanFast);
+        var cleanSubnets = subnets.Where(t => !own.Contains(t) && !fastSet.Contains(t)).Distinct().ToList();
+        return (cleanFast, cleanSubnets);
     }
 
     private static uint ToUint(byte[] bytes)

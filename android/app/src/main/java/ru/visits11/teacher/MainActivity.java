@@ -17,6 +17,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Inet4Address;
 import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -37,7 +38,7 @@ import java.util.concurrent.TimeUnit;
 public final class MainActivity extends Activity {
 
     private static final int SERVER_PORT = 8090;
-    private static final long PC_TIMEOUT_MS = 3000;  // связь считается потерянной
+    private static final long PC_TIMEOUT_MS = 6000;  // long-poll /event длится 3 с — запас в 2 раза
     private static final String SIGNATURE = "visits11-teacher";
 
     private TextView statusText;
@@ -68,7 +69,7 @@ public final class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         statusText = findViewById(R.id.statusText);
-        // нажатие: выключенный NFC -> настройки NFC, нет ПК -> тумблер USB-модема
+        // нажатие: выключенный NFC -> настройки NFC, мешает VPN -> настройки VPN, нет ПК -> USB-модем
         findViewById(R.id.root).setOnClickListener(v -> {
             NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
             if (adapter != null && !adapter.isEnabled()) {
@@ -80,7 +81,11 @@ public final class MainActivity extends Activity {
                 return;
             }
             if (!pcConnected()) {
-                openTetherSettings();
+                if (usbAddress() != null && vpnActive()) {
+                    openVpnSettings();
+                } else {
+                    openTetherSettings();
+                }
             }
         });
 
@@ -99,7 +104,8 @@ public final class MainActivity extends Activity {
     // ------------------------------------------------------------ статус связи
 
     private boolean pcConnected() {
-        return serverRunning && SystemClock.elapsedRealtime() - lastClientAt < PC_TIMEOUT_MS;
+        return serverRunning && lastClientAt > 0
+                && SystemClock.elapsedRealtime() - lastClientAt < PC_TIMEOUT_MS;
     }
 
     private void updateStatus() {
@@ -121,6 +127,10 @@ public final class MainActivity extends Activity {
         if (pcConnected()) {
             statusText.setText("ПК подключён, NFC готов (" + versionName() + ")");
             statusText.setTextColor(0xFF2E7D32);
+        } else if (usb != null && vpnActive()) {
+            statusText.setText("USB-модем включён (" + usb.getHostAddress() + "), v" + versionName()
+                    + ".\nВыключите VPN на телефоне (нажмите сюда) и запустите «Журнал КубГАУ» на ПК");
+            statusText.setTextColor(0xFFB34A4A);
         } else if (usb != null) {
             // адрес на экране: сразу видно, что USB-модем действительно работает
             statusText.setText("USB-модем включён (" + usb.getHostAddress() + "), v" + versionName()
@@ -146,6 +156,15 @@ public final class MainActivity extends Activity {
             {"com.android.settings", "com.android.settings.Settings$TetherSettings"},
             {"com.android.settings", "com.android.settings.Settings$WirelessSettingsActivity"},
     };
+
+    private void openVpnSettings() {
+        try {
+            startActivity(new Intent("android.net.vpn.SETTINGS"));
+            return;
+        } catch (Throwable ignored) {
+        }
+        openTetherSettings();
+    }
 
     /**
      * Открывает сразу экран с тумблером «USB-модем».
@@ -199,6 +218,23 @@ public final class MainActivity extends Activity {
         return null;
     }
 
+    /** Включён ли VPN на телефоне (туннель tun/ppp/wg может уводить пакеты от USB-кабеля). */
+    private boolean vpnActive() {
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces != null && interfaces.hasMoreElements()) {
+                NetworkInterface nic = interfaces.nextElement();
+                if (!nic.isUp()) continue;
+                String name = nic.getName().toLowerCase(Locale.ROOT);
+                if (name.startsWith("tun") || name.startsWith("ppp") || name.startsWith("wg") || name.startsWith("tap")) {
+                    return true;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
     /** USB-модем это или посторонний интерфейс (Wi-Fi, мобильная сеть, точка доступа). */
     private static boolean isUsbInterface(String rawName) {
         String name = rawName.toLowerCase(Locale.ROOT);
@@ -236,7 +272,10 @@ public final class MainActivity extends Activity {
                 continue;
             }
             try {
-                serverSocket = new ServerSocket(SERVER_PORT, 8, address);
+                ServerSocket socket = new ServerSocket();
+                socket.setReuseAddress(true);
+                socket.bind(new InetSocketAddress(address, SERVER_PORT), 16);
+                serverSocket = socket;
                 boundAddress = address;
             } catch (IOException e) {
                 boundAddress = null;
@@ -285,13 +324,19 @@ public final class MainActivity extends Activity {
 
             if ("/info".equals(path)) {
                 respond(client, "200 OK", "application/json",
-                        ("{\"app\":\"" + SIGNATURE + "\"}").getBytes(StandardCharsets.US_ASCII));
+                        ("{\"app\":\"" + SIGNATURE + "\",\"legacy\":\"visits11-camera\"}").getBytes(StandardCharsets.US_ASCII));
             } else if ("/event".equals(path) && "GET".equals(method)) {
                 // ПК забирает NFC-запросы (long-poll 3 сек)
                 serveEvent(client);
+                lastClientAt = SystemClock.elapsedRealtime();
             } else if ("/event_result".equals(path) && "POST".equals(method)) {
                 // ПК возвращает ответ на касание
                 acceptEventResult(client, headers);
+            } else if ("/frame".equals(path) && "GET".equals(method)) {
+                // совместимость со старыми версиями ПК
+                sleepQuietly(800);
+                lastClientAt = SystemClock.elapsedRealtime();
+                respond(client, "204 No Content", "text/plain", new byte[0]);
             } else {
                 respond(client, "404 Not Found", "text/plain", new byte[0]);
             }
@@ -339,7 +384,9 @@ public final class MainActivity extends Activity {
                 filled += read;
             }
             if (filled > 0) {
-                TeacherCardService.resultBox.offer(new String(body, 0, filled, StandardCharsets.UTF_8));
+                TeacherCardService.resultBox.offer(
+                        new String(body, 0, filled, StandardCharsets.UTF_8),
+                        1, TimeUnit.SECONDS);
             }
             respond(client, "200 OK", "text/plain", new byte[0]);
         } catch (Throwable ignored) {
