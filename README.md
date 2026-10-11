@@ -219,12 +219,15 @@ Password: K7M2QX9P
 
 ## Сборка из исходников
 
+Полные команды, требования и решение типичных проблем — в **[BUILD.md](BUILD.md)**.
+Коротко:
+
 **ПК (Windows, [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)):**
 ```bash
 dotnet publish -c Release -r win-x64 -p:PublishSingleFile=true -p:SelfContained=true -p:IncludeNativeLibrariesForSelfExtract=true
 ```
 
-**Android (JDK 17, Gradle 8.9, SDK 34):**
+**Android (JDK 17, Gradle 8.9, SDK 34)** — два модуля, `app` и `student`, без flavor'ов:
 ```bash
 cd android && gradle assembleRelease
 # app/build/outputs/apk/release/app-release.apk       — преподаватель
@@ -256,6 +259,9 @@ Apple Developer Account.
 
 ```
 ├── Visits11.csproj
+├── BUILD.md                        — как собрать все четыре файла (APK/EXE/IPA)
+├── PLAN.md                         — план работ: вход студента по QR-коду
+├── SECURITY.md                     — отчёт по безопасности (аудит кода)
 ├── App.xaml / App.xaml.cs          — точка входа, композиция сервисов
 ├── Assets/                         — app.ico (логотип КубГАУ), шрифт Manrope
 ├── branding/                       — исходные картинки брендинга
