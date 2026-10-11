@@ -148,13 +148,11 @@ final class MarkModel: NSObject, ObservableObject, NFCTagReaderSessionDelegate {
 struct ContentView: View {
     @StateObject private var nfc = MarkModel()
     @State private var showLogin = false
+    @AppStorage(keyToken) private var savedToken = ""
+    @AppStorage(keyName) private var studentName = ""
 
     private var loggedIn: Bool {
-        !(prefs.string(forKey: keyToken) ?? "").isEmpty
-    }
-
-    private var studentName: String {
-        prefs.string(forKey: keyName) ?? ""
+        !savedToken.isEmpty
     }
 
     var body: some View {
@@ -259,7 +257,9 @@ struct LoginView: View {
     /// Код, распознанный камерой.
     private func importCode(_ text: String) {
         showCamera = false
-        apply(text)
+        DispatchQueue.main.async {
+            apply(text)
+        }
     }
 
     /// Картинка из галереи: распознаём в фоне, чтобы не подвешивать интерфейс.

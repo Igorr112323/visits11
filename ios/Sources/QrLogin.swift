@@ -74,7 +74,11 @@ struct StudentQrCredentials {
 /// ни интернета, ни разрешений, ни сторонних библиотек.
 enum QrImageDecoder {
     static func text(from image: UIImage) -> String? {
-        guard let cgImage = image.cgImage else { return nil }
+        let cgImage: CGImage? = image.cgImage ?? {
+            let renderer = UIGraphicsImageRenderer(size: image.size)
+            return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: image.size)) }.cgImage
+        }()
+        guard let cgImage else { return nil }
 
         let request = VNDetectBarcodesRequest()
         request.symbologies = [.qr]
