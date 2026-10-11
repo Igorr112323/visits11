@@ -88,8 +88,8 @@
                                Margin="10,4,0,0" VerticalAlignment="Bottom" />
                 </StackPanel>
 
-                <!-- действия -->
-                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,16,0,0">
+                <!-- действия (WrapPanel: на узком окне кнопки переходят на вторую строку, а не обрезаются) -->
+                <WrapPanel Grid.Row="1" Orientation="Horizontal" Margin="0,16,0,0">
                     <Button Style="{StaticResource Btn.Green}" Command="{Binding AddStudentCommand}">
                         <StackPanel Orientation="Horizontal">
                             <Path Data="{StaticResource Icon.UserPlus}" Width="15" Height="15" Stretch="Uniform"
@@ -114,6 +114,14 @@
                             <TextBlock Text="Экспорт в Word" Margin="8,0,0,0" />
                         </StackPanel>
                     </Button>
+                    <Button Style="{StaticResource Btn.Violet}" Command="{Binding ExportQrCommand}" Margin="10,0,0,0">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="{StaticResource Icon.Qr}" Width="15" Height="15" Stretch="Uniform"
+                                  Stroke="#FFFFFF" StrokeThickness="1.8"
+                                  StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                            <TextBlock Text="Экспорт QR-кодов" Margin="8,0,0,0" />
+                        </StackPanel>
+                    </Button>
                     <Button Style="{StaticResource Btn.Soft}" Command="{Binding DeleteGroupCommand}" Margin="10,0,0,0">
                         <StackPanel Orientation="Horizontal">
                             <Path Data="{StaticResource Icon.X}" Width="12" Height="12" Stretch="Uniform"
@@ -123,7 +131,7 @@
                                        Foreground="{DynamicResource Brush.Red}" />
                         </StackPanel>
                     </Button>
-                </StackPanel>
+                </WrapPanel>
 
                 <!-- таблица -->
                 <Grid Grid.Row="2" Margin="0,18,0,0">

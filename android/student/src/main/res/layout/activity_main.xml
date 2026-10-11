@@ -90,6 +90,19 @@
             android:textAllCaps="false"
             android:textColor="#FFFFFF"
             android:textSize="15sp" />
+
+        <!-- вход по QR-картинке: студент сохраняет свою картинку в галерею и выбирает её здесь -->
+        <Button
+            android:id="@+id/qrLoginButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/button_soft_bg"
+            android:stateListAnimator="@null"
+            android:text="Войти по QR из галереи"
+            android:textAllCaps="false"
+            android:textColor="@color/text"
+            android:textSize="15sp" />
     </LinearLayout>
 
     <!-- индикатор связи с ПК -->

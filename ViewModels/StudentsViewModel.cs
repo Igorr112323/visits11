@@ -39,20 +39,24 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
     private readonly ToastService _toasts;
     private readonly AuthService _auth;
     private readonly WordService _word;
+    private readonly QrExportService _qrExport;
     private readonly MainViewModel _main;
 
-    public StudentsViewModel(DatabaseService database, ToastService toasts, AuthService auth, WordService word, MainViewModel main)
+    public StudentsViewModel(DatabaseService database, ToastService toasts, AuthService auth, WordService word,
+        QrExportService qrExport, MainViewModel main)
     {
         _database = database;
         _toasts = toasts;
         _auth = auth;
         _word = word;
+        _qrExport = qrExport;
         _main = main;
 
         NewGroupCommand = new RelayCommand(_ => CreateGroupDialog());
         AddStudentCommand = new RelayCommand(_ => AddStudentDialog(), _ => SelectedGroup is not null);
         ImportWordCommand = new RelayCommand(_ => ImportFromWord());
         ExportWordCommand = new RelayCommand(_ => ExportToWord(), _ => SelectedGroup is not null && Students.Count > 0);
+        ExportQrCommand = new RelayCommand(_ => ExportQrCodes(), _ => SelectedGroup is not null && Students.Count > 0);
         CopyTextCommand = new RelayCommand(param => CopyToClipboard(param as string));
         DeleteStudentCommand = new RelayCommand(param => DeleteStudentDialog(param as StudentTableItem));
         DeleteGroupCommand = new RelayCommand(_ => DeleteGroupDialog(), _ => SelectedGroup is not null);
@@ -94,6 +98,7 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
     public RelayCommand AddStudentCommand { get; }
     public RelayCommand ImportWordCommand { get; }
     public RelayCommand ExportWordCommand { get; }
+    public RelayCommand ExportQrCommand { get; }
     public RelayCommand CopyTextCommand { get; }
     public RelayCommand SelectGroupCommand { get; }
     public RelayCommand DeleteStudentCommand { get; }
@@ -351,6 +356,36 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
         catch (Exception exception)
         {
             _toasts.Error("Не удалось сохранить файл", exception.Message);
+        }
+    }
+
+    /// <summary>
+    /// «Экспорт QR-кодов»: в выбранной папке создаётся подпапка «QR-коды &lt;группа&gt;»
+    /// с картинкой на каждого студента. Картинку студент сохраняет в галерею и
+    /// входит в приложение через «Войти по QR из галереи» — сервер для этого не нужен.
+    /// </summary>
+    private void ExportQrCodes()
+    {
+        if (SelectedGroup is null || Students.Count == 0) return;
+
+        var dialog = new OpenFolderDialog
+        {
+            Title = "Куда сохранить QR-коды студентов",
+            Multiselect = false,
+        };
+        if (dialog.ShowDialog() != true) return;
+
+        try
+        {
+            var students = _database.GetStudents(SelectedGroup.Id);
+            var (folder, count) = _qrExport.Export(dialog.FolderName, SelectedGroup.Name, students);
+            _toasts.Success("QR-коды готовы",
+                $"Папка «{Path.GetFileName(folder)}» · {count} {Pluralize(count, "файл", "файла", "файлов")}. " +
+                "Отправьте каждому студенту его картинку.");
+        }
+        catch (Exception exception)
+        {
+            _toasts.Error("Не удалось сохранить QR-коды", exception.Message);
         }
     }
 

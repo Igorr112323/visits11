@@ -32,6 +32,8 @@ android {
     }
 }
 
-// приложение чисто на framework API — зависимостей нет
+// приложение работает на framework API; zxing нужен только чтобы распознать
+// QR-код студента из картинки галереи (вход по QR, без сервера)
 dependencies {
+    implementation 'com.google.zxing:core:3.5.3'
 }

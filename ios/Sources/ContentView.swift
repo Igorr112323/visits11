@@ -193,6 +193,8 @@ struct LoginView: View {
 
     @State private var login = ""
     @State private var password = ""
+    @State private var showQrPicker = false
+    @State private var qrMessage: String?
 
     var body: some View {
         VStack(spacing: 14) {
@@ -217,6 +219,47 @@ struct LoginView: View {
             }
             .buttonStyle(.borderedProminent)
             .padding(.top, 8)
+
+            // Вход по картинке из галереи: преподаватель присылает студенту
+            // его QR-код, студент сохраняет картинку и выбирает её здесь.
+            Button {
+                qrMessage = nil
+                showQrPicker = true
+            } label: {
+                Text("Войти по QR из галереи")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, minHeight: 52)
+            }
+            .buttonStyle(.bordered)
+
+            if let qrMessage {
+                Text(qrMessage)
+                    .font(.footnote)
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+        .sheet(isPresented: $showQrPicker) {
+            PhotoPicker(onPick: importQr, onFinish: { showQrPicker = false })
+        }
+    }
+
+    /// Картинка с QR-кодом из галереи: распознаём, сохраняем логин с паролем и входим.
+    private func importQr(_ image: UIImage) {
+        qrMessage = "Читаю QR-код…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            let text = QrImageDecoder.text(from: image)
+            DispatchQueue.main.async {
+                guard let text, let credentials = StudentQrCredentials.parse(text) else {
+                    qrMessage = "В этой картинке нет кода для входа"
+                    return
+                }
+                prefs.set(credentials.login, forKey: keyLogin)
+                prefs.set(credentials.password, forKey: keyPassword)
+                prefs.removeObject(forKey: keyToken)
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                done()
+            }
         }
     }
 }

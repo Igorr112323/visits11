@@ -40,7 +40,8 @@ public partial class App : Application
             args.Handled = true;
         };
 
-        var viewModel = new MainViewModel(Db, Toasts, Theme, new AuthService(), new WordService(), Server, Camera);
+        var viewModel = new MainViewModel(Db, Toasts, Theme, new AuthService(), new WordService(),
+            new QrExportService(), Server, Camera);
         var window = new MainWindow(viewModel);
         window.Show();
     }

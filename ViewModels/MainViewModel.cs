@@ -15,6 +15,7 @@ public sealed class MainViewModel : ObservableObject
         ThemeService theme,
         AuthService auth,
         WordService word,
+        QrExportService qrExport,
         PhoneServer server,
         CameraLink camera)
     {
@@ -22,7 +23,7 @@ public sealed class MainViewModel : ObservableObject
         Toasts = toasts;
 
         Lesson = new LessonViewModel(database, toasts, server, camera);
-        Students = new StudentsViewModel(database, toasts, auth, word, this);
+        Students = new StudentsViewModel(database, toasts, auth, word, qrExport, this);
         Journal = new JournalViewModel(database, toasts, word);
 
         ToggleThemeCommand = new RelayCommand(_ => _theme.Toggle());

@@ -1,11 +1,13 @@
 package ru.visits11.student;
 
 import android.app.Activity;
+import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.net.Uri;
 import android.nfc.NfcAdapter;
 import android.nfc.Tag;
 import android.nfc.tech.IsoDep;
@@ -16,7 +18,9 @@ import android.os.Looper;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
+import android.provider.MediaStore;
 import android.provider.Settings;
+import android.util.Base64;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.Button;
@@ -24,6 +28,14 @@ import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
+
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.BinaryBitmap;
+import com.google.zxing.DecodeHintType;
+import com.google.zxing.LuminanceSource;
+import com.google.zxing.MultiFormatReader;
+import com.google.zxing.RGBLuminanceSource;
+import com.google.zxing.common.HybridBinarizer;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -36,13 +48,17 @@ import java.net.NetworkInterface;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.EnumMap;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.zip.CRC32;
 
 /**
  * Приложение студента: первый запуск — логин и пароль, дальше открываешь
@@ -60,6 +76,10 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
     private static final byte[] NFC_AID = {(byte) 0xF0, 0x39, 0x11, 0x01, 0x02, 0x03, 0x04};
     private static final int PORT = 8090;
     private static final long POLL_MS = 5000;
+    private static final int REQ_PICK_QR = 41;
+
+    /** Версия формата QR-кода студента — та же строка, что на ПК (Services/StudentQr.cs). */
+    private static final String QR_PREFIX = "V11S1";
 
     private static final int LOGIN_OK = 0;
     private static final int LOGIN_REJECTED = 1;
@@ -127,6 +147,11 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
                 wake();
             }
         });
+
+        // вход по QR-картинке из галереи: логин и пароль лежат в самом коде,
+        // ни сервер, ни интернет для этого не нужны
+        Button qrLoginButton = findViewById(R.id.qrLoginButton);
+        qrLoginButton.setOnClickListener(v -> pickQrImage());
 
         // смена студента — только долгим нажатием (чтобы не открыть случайно)
         statusText.setOnLongClickListener(v -> {
@@ -430,6 +455,215 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
             } catch (Throwable ignored) {
                 sleepQuietly(2000);
             }
+        }
+    }
+
+    // ------------------------------------------------------------ вход по QR
+
+    /**
+     * Открывает системный выбор картинки. Разрешения не нужны: картинку
+     * отдаёт сам системный пикер (Android 13+ — «выбор фото», ниже — «Документы»/галерея).
+     */
+    private void pickQrImage() {
+        try {
+            Intent intent;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent = new Intent(MediaStore.ACTION_PICK_IMAGES);
+            } else {
+                intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+            }
+            intent.setType("image/*");
+            startActivityForResult(intent, REQ_PICK_QR);
+        } catch (Throwable first) {
+            try {
+                startActivityForResult(
+                        new Intent(Intent.ACTION_GET_CONTENT).setType("image/*"), REQ_PICK_QR);
+            } catch (Throwable second) {
+                toast("Не нашлось приложения с галереей");
+            }
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_PICK_QR || resultCode != RESULT_OK || data == null) {
+            return;
+        }
+        Uri uri = data.getData();
+        if (uri == null) {
+            return;
+        }
+        // фото может быть большим: распознаём в фоне, интерфейс не подвисает
+        new Thread(() -> {
+            String text = null;
+            try {
+                text = readQrText(uri);
+            } catch (Throwable ignored) {
+            }
+            final String payload = text;
+            ui.post(() -> applyQrPayload(payload));
+        }, "QrLogin").start();
+    }
+
+    /** Применяет распознанный QR: сохраняет логин и пароль, как кнопка «Войти». */
+    private void applyQrPayload(String text) {
+        Credentials credentials = parsePayload(text);
+        if (credentials == null) {
+            toast("В этой картинке нет кода для входа");
+            return;
+        }
+
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putString(KEY_LOGIN, credentials.login)
+                .putString(KEY_PASSWORD, credentials.password)
+                .remove(KEY_TOKEN)
+                .apply();
+        token = null;
+        loginInput.setText(credentials.login);
+        passwordInput.setText(credentials.password);
+
+        if (useNfc) {
+            updateNfcStatus();
+        } else {
+            wake();
+        }
+        vibrate();
+        toast(credentials.name.isEmpty()
+                ? "Вход выполнен: " + credentials.login
+                : "Вход выполнен: " + credentials.name);
+    }
+
+    /** Логин, пароль и ФИО из QR-кода. */
+    private static final class Credentials {
+        final String login;
+        final String password;
+        final String name;
+
+        Credentials(String login, String password, String name) {
+            this.login = login;
+            this.password = password;
+            this.name = name;
+        }
+    }
+
+    /**
+     * Разбор содержимого QR (формат ПК, Services/StudentQr.cs):
+     * <pre>
+     *   V11S1.&lt;логин&gt;.&lt;пароль&gt;.&lt;ФИО&gt;.&lt;CRC32&gt;   — всё в base64url
+     *   Login: ARHIPOV_II
+     *   Password: K7M2QX9P
+     * </pre>
+     * Читается только первая строка; строки ниже — для человека (можно отсканировать
+     * любым QR-сканером и ввести логин с паролем руками).
+     */
+    private static Credentials parsePayload(String text) {
+        if (text == null) {
+            return null;
+        }
+        int lineEnd = text.indexOf('\n');
+        String machine = (lineEnd >= 0 ? text.substring(0, lineEnd) : text).trim();
+
+        String[] parts = machine.split("\\.", -1);
+        if (parts.length != 5 || !QR_PREFIX.equals(parts[0])) {
+            return null;
+        }
+        String body = parts[0] + "." + parts[1] + "." + parts[2] + "." + parts[3];
+        if (!crc32Hex(body).equalsIgnoreCase(parts[4])) {
+            return null;
+        }
+
+        String login = fromBase64Url(parts[1]);
+        String password = fromBase64Url(parts[2]);
+        String name = fromBase64Url(parts[3]);
+        if (login == null || password == null || login.isEmpty() || password.isEmpty()) {
+            return null;
+        }
+        return new Credentials(login, password, name == null ? "" : name);
+    }
+
+    private static String fromBase64Url(String value) {
+        try {
+            byte[] bytes = Base64.decode(value, Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
+            return new String(bytes, StandardCharsets.UTF_8);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /** CRC32 (IEEE 802.3), 8 hex-символов — тот же алгоритм на ПК и на iPhone. */
+    private static String crc32Hex(String value) {
+        CRC32 crc = new CRC32();
+        crc.update(value.getBytes(StandardCharsets.UTF_8));
+        return String.format(Locale.ROOT, "%08x", crc.getValue());
+    }
+
+    // ------------------------------------------------------------ чтение картинки
+
+    /** Картинка из галереи → содержимое QR-кода (или null, если кода нет). */
+    private String readQrText(Uri uri) throws IOException {
+        Bitmap bitmap = loadBitmap(uri);
+        if (bitmap == null) {
+            return null;
+        }
+        try {
+            return decodeQr(bitmap);
+        } finally {
+            bitmap.recycle();
+        }
+    }
+
+    /** Картинка, ужатая до разумного размера: большие фото декодеру не нужны, а память едят. */
+    private Bitmap loadBitmap(Uri uri) throws IOException {
+        ContentResolver resolver = getContentResolver();
+
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        try (InputStream input = resolver.openInputStream(uri)) {
+            if (input == null) {
+                return null;
+            }
+            BitmapFactory.decodeStream(input, null, bounds);
+        }
+
+        int sample = 1;
+        while (bounds.outWidth / (sample * 2) >= 720 && bounds.outHeight / (sample * 2) >= 720) {
+            sample *= 2; // длинная сторона остаётся около 720–1400 px
+        }
+
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inSampleSize = sample;
+        try (InputStream input = resolver.openInputStream(uri)) {
+            return input == null ? null : BitmapFactory.decodeStream(input, null, options);
+        }
+    }
+
+    /** QR-код с картинки: обычный и «негатив» (скриншот тёмной темы — белое на чёрном). */
+    private static String decodeQr(Bitmap bitmap) {
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        if (width < 8 || height < 8) {
+            return null;
+        }
+        int[] pixels = new int[width * height];
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height);
+
+        Map<DecodeHintType, Object> hints = new EnumMap<>(DecodeHintType.class);
+        hints.put(DecodeHintType.TRY_HARDER, Boolean.TRUE);
+        hints.put(DecodeHintType.POSSIBLE_FORMATS, Collections.singletonList(BarcodeFormat.QR_CODE));
+
+        RGBLuminanceSource source = new RGBLuminanceSource(width, height, pixels);
+        String text = tryDecode(source, hints);
+        return text != null ? text : tryDecode(source.invert(), hints);
+    }
+
+    private static String tryDecode(LuminanceSource source, Map<DecodeHintType, Object> hints) {
+        try {
+            BinaryBitmap bitmap = new BinaryBitmap(new HybridBinarizer(source));
+            return new MultiFormatReader().decode(bitmap, hints).getText();
+        } catch (Throwable ignored) {
+            return null;
         }
     }
 
