@@ -2,14 +2,20 @@ import SwiftUI
 import CoreBluetooth
 import UIKit
 
-// MARK: - константы
+// MARK: - константы и цвета (1-в-1 с Android Student res/values/colors.xml)
 
 private let prefs = UserDefaults.standard
 private let keyToken = "token"   // код студента из QR-кода — заменяет логин и пароль
 private let keyName = "name"     // ФИО студента (показываем на экране)
 private let keyDevice = "device" // id устройства: аккаунт привязывается к телефону
 
-private let green = Color(red: 0.29, green: 0.78, blue: 0.42)
+private let colorBg      = Color(red: 0x0A / 255.0, green: 0x0D / 255.0, blue: 0x1A / 255.0)
+private let colorPanel   = Color(red: 0x14 / 255.0, green: 0x18 / 255.0, blue: 0x27 / 255.0)
+private let colorPanel2  = Color(red: 0x1C / 255.0, green: 0x21 / 255.0, blue: 0x36 / 255.0)
+private let colorBorder  = Color(red: 0x2A / 255.0, green: 0x31 / 255.0, blue: 0x50 / 255.0)
+private let colorText    = Color(red: 0xF0 / 255.0, green: 0xF2 / 255.0, blue: 0xFA / 255.0)
+private let colorTextDim = Color(red: 0x90 / 255.0, green: 0x99 / 255.0, blue: 0xB8 / 255.0)
+private let colorAccent  = Color(red: 0x63 / 255.0, green: 0x66 / 255.0, blue: 0xF1 / 255.0)
 
 /// Уникальный ID устройства — аккаунт привязывается к первому телефону.
 private func deviceId() -> String {
@@ -21,17 +27,19 @@ private func deviceId() -> String {
     return id
 }
 
-// MARK: - модель бесконтактной отметки (вплотную к телефону преподавателя)
+// MARK: - модель бесконтактной отметки (только касание вплотную 0–2 см)
 //
-// На бесплатном Apple ID (Sideloadly) Apple блокирует CoreNFC (NFCTagReaderSession),
-// поэтому передача «код-из-QR \n id-устройства» на телефон преподавателя идёт по BLE
-// со строгим фильтром мощности сигнала (RSSI >= -55 dBm — только физическое поднесение
-// телефонов вплотную 1–5 см; из коридора или с парты срабатывание невозможно).
+// На телефоне преподавателя выставлена минимальная аппаратная мощность
+// передатчика (ADVERTISE_TX_POWER_ULTRA_LOW), а на iPhone — жёсткий порог
+// сигнала RSSI >= -46 dBm при активном экране: срабатывает только при
+// физическом прикладывании корпуса iPhone к телефону преподавателя (0–2 см),
+// из рюкзака или кармана сигнал не проходит.
 
 final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
 
-    /// Результат последнего касания («Вы отмечены — Иванов И. И.»).
-    @Published var status = "Приложите iPhone вплотную к телефону преподавателя"
+    /// Пустая строка = показываем стандартное «ФИО \n Приложите телефон к телефону преподавателя».
+    /// После касания здесь появляется «Вы отмечены — ФИО» или текст ошибки.
+    @Published var statusOverride = ""
 
     /// QR-код не найден в журнале — нужно войти заново.
     @Published var needsLogin = false
@@ -39,8 +47,9 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
     private let serviceUUID = CBUUID(string: "F0391101-0203-0405-0607-08090A0B0C0D")
     private let charUUID    = CBUUID(string: "F0391102-0203-0405-0607-08090A0B0C0D")
 
-    // Порог мощности сигнала для срабатывания только вплотную (1–5 см от телефона преподавателя).
-    private let closeProximityRssiThreshold = -55
+    // Жёсткий порог мощности сигнала при минимальной мощности передатчика (ULTRA_LOW):
+    // достигается только при касании телефонов вплотную (0–2 см).
+    private let touchOnlyRssiThreshold = -46
 
     private var central: CBCentralManager?
     private var activePeripheral: CBPeripheral?
@@ -48,6 +57,7 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
 
     private var scanningWanted = false
     private var busy = false
+    private var lastMarkedAt: Date = .distantPast
     private var cooldownUntil: Date = .distantPast
 
     private var writeChunks: [Data] = []
@@ -55,7 +65,6 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
     private var timeoutWork: DispatchWorkItem?
     private var pollTimer: Timer?
 
-    /// Запускает автоматическое ожидание поднесения к телефону преподавателя (как на Android).
     func startAuto() {
         guard let token = prefs.string(forKey: keyToken), !token.isEmpty else {
             return
@@ -65,34 +74,6 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
             central = CBCentralManager(delegate: self, queue: .main)
         } else {
             beginScanIfNeeded()
-        }
-    }
-
-    /// Ручное нажатие на кнопку «Отметиться» — сбрасывает паузу и ждёт поднесения вплотную.
-    func start() {
-        guard let token = prefs.string(forKey: keyToken), !token.isEmpty else {
-            needsLogin = true
-            return
-        }
-        cooldownUntil = .distantPast
-        scanningWanted = true
-        if central == nil {
-            status = "Приложите iPhone вплотную к телефону преподавателя"
-            central = CBCentralManager(delegate: self, queue: .main)
-            return
-        }
-        switch central?.state {
-        case .poweredOn:
-            status = "Приложите iPhone вплотную к телефону преподавателя"
-            beginScanIfNeeded()
-        case .poweredOff:
-            status = "Включите Bluetooth в настройках iPhone"
-        case .unauthorized:
-            status = "Разрешите Bluetooth для приложения в Настройках"
-        case .unsupported:
-            status = "Bluetooth недоступен на этом iPhone"
-        default:
-            status = "Приложите iPhone вплотную к телефону преподавателя"
         }
     }
 
@@ -117,16 +98,16 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn:
-            if status.isEmpty || status.contains("Bluetooth") {
-                status = "Приложите iPhone вплотную к телефону преподавателя"
+            if statusOverride.contains("Bluetooth") {
+                statusOverride = ""
             }
             beginScanIfNeeded()
         case .poweredOff:
-            status = "Включите Bluetooth в настройках iPhone"
+            statusOverride = "Включите Bluetooth в настройках телефона"
         case .unauthorized:
-            status = "Разрешите Bluetooth для приложения в Настройках"
+            statusOverride = "Разрешите Bluetooth в настройках телефона"
         case .unsupported:
-            status = "Bluetooth недоступен на этом iPhone"
+            statusOverride = "Bluetooth на этом телефоне недоступен"
         default:
             break
         }
@@ -137,16 +118,16 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
                         advertisementData: [String: Any],
                         rssi RSSI: NSNumber) {
         guard scanningWanted, !busy else { return }
+        guard UIApplication.shared.applicationState == .active else { return }
         guard let token = prefs.string(forKey: keyToken), !token.isEmpty else { return }
         if Date() < cooldownUntil { return }
 
         let rssiValue = RSSI.intValue
-        // Отсекаем любые сигналы дальше нескольких сантиметров (а также 127 = неизвестный RSSI)
-        guard rssiValue < 0 && rssiValue >= closeProximityRssiThreshold else { return }
+        // Срабатываем только при физическом касании телефонов вплотную (0–2 см)
+        guard rssiValue < 0 && rssiValue >= touchOnlyRssiThreshold else { return }
 
         busy = true
         central.stopScan()
-        status = "Отмечаем…"
 
         activePeripheral = peripheral
         peripheral.delegate = self
@@ -269,23 +250,28 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
 
         switch code {
         case 0:
+            lastMarkedAt = Date()
             cooldownUntil = Date().addingTimeInterval(5.0)
-            status = value.isEmpty ? "Вы отмечены" : "Вы отмечены — \(value)"
+            statusOverride = value.isEmpty ? "Вы отмечены" : "Вы отмечены — \(value)"
             UINotificationFeedbackGenerator().notificationOccurred(.success)
         case 2:
             cooldownUntil = Date().addingTimeInterval(2.5)
             prefs.removeObject(forKey: keyToken)
+            prefs.removeObject(forKey: keyName)
             needsLogin = true
-            status = "Такого QR-кода нет в журнале — войдите заново"
+            statusOverride = ""
             UINotificationFeedbackGenerator().notificationOccurred(.error)
         case 5:
             cooldownUntil = Date().addingTimeInterval(2.5)
-            status = "Этот телефон привязан к другому студенту"
+            statusOverride = "Этот телефон привязан к другому студенту"
             UINotificationFeedbackGenerator().notificationOccurred(.error)
         default:
-            cooldownUntil = Date().addingTimeInterval(2.5)
-            status = "Не получилось: перекличка не идёт"
-            UINotificationFeedbackGenerator().notificationOccurred(.error)
+            cooldownUntil = Date().addingTimeInterval(2.0)
+            // Как на Android: если только что успешно отметились, не затираем «Вы отмечены» при отведении руки
+            if Date().timeIntervalSince(lastMarkedAt) >= 5.0 {
+                statusOverride = "Не получилось: перекличка не идёт"
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+            }
         }
 
         let delay = max(0.5, cooldownUntil.timeIntervalSinceNow)
@@ -310,11 +296,10 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
     }
 }
 
-// MARK: - интерфейс
+// MARK: - интерфейс (точная копия Android Student activity_main.xml)
 
 struct ContentView: View {
     @StateObject private var nfc = MarkModel()
-    @State private var showLogin = false
     @AppStorage(keyToken) private var savedToken = ""
     @AppStorage(keyName) private var studentName = ""
 
@@ -322,60 +307,64 @@ struct ContentView: View {
         !savedToken.isEmpty
     }
 
+    private var defaultPrompt: String {
+        studentName.isEmpty
+            ? "Приложите телефон к телефону преподавателя"
+            : "\(studentName)\nПриложите телефон к телефону преподавателя"
+    }
+
     var body: some View {
-        VStack(spacing: 18) {
-            if showLogin || !loggedIn || nfc.needsLogin {
+        ZStack {
+            colorBg.ignoresSafeArea()
+
+            // Логотип КубГАУ сверху по центру (110x110, отступ сверху 40 — как в activity_main.xml)
+            VStack {
+                if let uiLogo = UIImage(named: "logo") ?? UIImage(contentsOfFile: Bundle.main.path(forResource: "logo", ofType: "png") ?? "") {
+                    Image(uiImage: uiLogo)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 110, height: 110)
+                        .padding(.top, 40)
+                }
+                Spacer()
+            }
+
+            // По центру: либо карточка входа по QR-коду, либо текст статуса (без лишних кнопок)
+            if !loggedIn || nfc.needsLogin {
                 LoginView(done: {
-                    showLogin = false
                     nfc.needsLogin = false
-                    nfc.status = "Приложите iPhone вплотную к телефону преподавателя"
+                    nfc.statusOverride = ""
                     nfc.startAuto()
                 })
                 .onAppear {
                     nfc.stop()
                 }
             } else {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 84))
-                    .foregroundColor(green)
-                Text("Visits11")
-                    .font(.title.bold())
-                if !studentName.isEmpty {
-                    Text(studentName)
-                        .font(.headline)
-                }
-                Text(nfc.status.isEmpty ? "Приложите iPhone вплотную к телефону преподавателя" : nfc.status)
-                    .font(.body)
+                Text(nfc.statusOverride.isEmpty ? defaultPrompt : nfc.statusOverride)
+                    .font(.system(size: 15))
+                    .foregroundColor(colorTextDim)
                     .multilineTextAlignment(.center)
-                    .foregroundColor(.secondary)
-                    .animation(.easeInOut, value: nfc.status)
-
-                Button {
-                    nfc.start()
-                } label: {
-                    Text("Отметиться")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 52)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(green)
-                .padding(.top, 8)
-
-                Button("Сменить студента") {
-                    nfc.stop()
-                    showLogin = true
-                }
-                .font(.footnote)
-                .onAppear {
-                    nfc.startAuto()
-                }
+                    .padding(32)
+                    .contentShape(Rectangle())
+                    // Как на Android: долгое нажатие на текст статуса сбрасывает студента для входа по новому QR
+                    .onLongPressGesture(minimumDuration: 0.7) {
+                        nfc.stop()
+                        nfc.statusOverride = ""
+                        savedToken = ""
+                        studentName = ""
+                        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                    }
+                    .onAppear {
+                        UIApplication.shared.isIdleTimerDisabled = true
+                        nfc.startAuto()
+                    }
             }
         }
-        .padding(24)
+        .preferredColorScheme(.dark)
     }
 }
 
-/// Вход: логина и пароля нет — только QR-код (камерой или из галереи).
+/// Карточка входа по QR-коду — точная копия entryPanel в Android Student.
 struct LoginView: View {
     var done: () -> Void
 
@@ -384,43 +373,59 @@ struct LoginView: View {
     @State private var qrMessage: String?
 
     var body: some View {
-        VStack(spacing: 14) {
-            Text("Вход")
-                .font(.title.bold())
-            Text("Отсканируйте свой QR-код или выберите картинку из галереи")
-                .font(.footnote)
-                .foregroundColor(.secondary)
+        VStack(spacing: 0) {
+            Text("Вход по QR-коду студента")
+                .font(.system(size: 16))
+                .foregroundColor(colorText)
                 .multilineTextAlignment(.center)
+                .frame(width: 260)
+                .padding(.bottom, 16)
+
+            Text(qrMessage ?? "Свой код можно отсканировать камерой или сохранить картинкой и выбрать её из галереи")
+                .font(.system(size: 13))
+                .foregroundColor(colorTextDim)
+                .multilineTextAlignment(.center)
+                .frame(width: 260)
+                .padding(.bottom, 18)
 
             Button {
                 qrMessage = nil
                 showCamera = true
             } label: {
                 Text("Сканировать QR-код")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(.white)
+                    .frame(width: 260, height: 48)
+                    .background(colorAccent)
+                    .cornerRadius(12)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(green)
-            .padding(.top, 8)
 
             Button {
                 qrMessage = nil
                 showQrPicker = true
             } label: {
                 Text("Загрузить из галереи")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity, minHeight: 52)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundColor(colorText)
+                    .frame(width: 260, height: 48)
+                    .background(colorPanel2)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(colorBorder, lineWidth: 1)
+                    )
+                    .cornerRadius(12)
             }
-            .buttonStyle(.bordered)
-
-            if let qrMessage {
-                Text(qrMessage)
-                    .font(.footnote)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-            }
+            .padding(.top, 10)
         }
+        .padding(.horizontal, 24)
+        .padding(.top, 26)
+        .padding(.bottom, 24)
+        .background(colorPanel)
+        .overlay(
+            RoundedRectangle(cornerRadius: 20)
+                .stroke(colorBorder, lineWidth: 1)
+        )
+        .cornerRadius(20)
         .sheet(isPresented: $showQrPicker) {
             PhotoPicker(onPick: importImage, onFinish: { showQrPicker = false })
         }
@@ -449,7 +454,7 @@ struct LoginView: View {
     /// Общий шаг для обоих способов: сохраняем код студента — это и есть вход.
     private func apply(_ text: String?) {
         guard let text, let credentials = StudentQrCredentials.parse(text) else {
-            qrMessage = "В этой картинке нет кода для входа"
+            qrMessage = "Это не QR-код студента"
             return
         }
         prefs.set(credentials.token, forKey: keyToken)
