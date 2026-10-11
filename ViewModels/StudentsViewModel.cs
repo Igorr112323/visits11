@@ -62,6 +62,7 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
         ImportWordCommand = new RelayCommand(_ => ImportFromWord());
         ExportQrCommand = new RelayCommand(_ => ExportQrCodes(), _ => SelectedGroup is not null && Students.Count > 0);
         ShowQrCommand = new RelayCommand(param => ShowQrCode(param as StudentTableItem), _ => SelectedGroup is not null);
+        ResetDeviceCommand = new RelayCommand(param => ResetDevice(param as StudentTableItem));
         DeleteStudentCommand = new RelayCommand(param => DeleteStudentDialog(param as StudentTableItem));
         DeleteGroupCommand = new RelayCommand(_ => DeleteGroupDialog(), _ => SelectedGroup is not null);
         SelectGroupCommand = new RelayCommand(param =>
@@ -101,6 +102,7 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
     public RelayCommand ImportWordCommand { get; }
     public RelayCommand ExportQrCommand { get; }
     public RelayCommand ShowQrCommand { get; }
+    public RelayCommand ResetDeviceCommand { get; }
     public RelayCommand SelectGroupCommand { get; }
     public RelayCommand DeleteStudentCommand { get; }
     public RelayCommand DeleteGroupCommand { get; }
@@ -110,6 +112,13 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
     public ObservableCollection<StudentTableItem> Students { get; } = new();
 
     // ---------------------------------------------------------------- команды
+
+    private void ResetDevice(StudentTableItem? student)
+    {
+        if (student is null || student.DeviceId is null) return;
+        _database.ResetDeviceId(student.Id);
+        _toasts.Success("Привязка сброшена", $"«{student.FullName}» может войти и отметиться с нового телефона.");
+    }
 
     private void CreateGroupDialog()
     {

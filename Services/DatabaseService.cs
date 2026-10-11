@@ -203,6 +203,18 @@ public sealed class DatabaseService
         command.Parameters.AddWithValue("@device", deviceId);
         command.Parameters.AddWithValue("@id", studentId);
         command.ExecuteNonQuery();
+        RaiseDataChanged();
+    }
+
+    /// <summary>Сбрасывает привязку телефона у студента (чтобы он мог войти с нового устройства).</summary>
+    public void ResetDeviceId(int studentId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE Students SET DeviceId = NULL WHERE Id = @id";
+        command.Parameters.AddWithValue("@id", studentId);
+        command.ExecuteNonQuery();
+        RaiseDataChanged();
     }
 
     /// <summary>Студент, к чьему аккаунту привязано устройство; null — устройство неизвестно.</summary>

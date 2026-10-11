@@ -137,7 +137,7 @@
                                 <ColumnDefinition Width="40" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="160" />
-                                <ColumnDefinition Width="120" />
+                                <ColumnDefinition Width="200" />
                                 <ColumnDefinition Width="46" />
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="№" Style="{StaticResource Txt.Label}" />
@@ -164,7 +164,7 @@
                                                 <ColumnDefinition Width="40" />
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="160" />
-                                                <ColumnDefinition Width="120" />
+                                                <ColumnDefinition Width="200" />
                                                 <ColumnDefinition Width="46" />
                                             </Grid.ColumnDefinitions>
 
@@ -192,23 +192,31 @@
                                                 </StackPanel>
                                             </Button>
 
-                                            <!-- привязан ли студент к телефону (защита от отметок с чужого устройства) -->
-                                            <TextBlock Grid.Column="3"
-                                                       Text="{Binding DeviceLabel}"
-                                                       VerticalAlignment="Center"
-                                                       FontSize="12"
-                                                       Foreground="{DynamicResource Brush.TextSoft}">
-                                                <TextBlock.Style>
-                                                    <Style TargetType="TextBlock">
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding DeviceId, Converter={StaticResource Conv.NullToVis}}" Value="Visible">
-                                                                <Setter Property="Foreground" Value="{DynamicResource Brush.Green}" />
-                                                                <Setter Property="FontFamily" Value="{StaticResource Font.SemiBold}" />
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBlock.Style>
-                                            </TextBlock>
+                                            <!-- привязан ли студент к телефону (и кнопка сброса привязки) -->
+                                            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding DeviceLabel}"
+                                                           VerticalAlignment="Center"
+                                                           FontSize="12"
+                                                           Foreground="{DynamicResource Brush.TextSoft}">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding DeviceId, Converter={StaticResource Conv.NullToVis}}" Value="Visible">
+                                                                    <Setter Property="Foreground" Value="{DynamicResource Brush.Green}" />
+                                                                    <Setter Property="FontFamily" Value="{StaticResource Font.SemiBold}" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                <Button Style="{StaticResource Btn.Soft}"
+                                                        Content="Сбросить"
+                                                        Margin="10,0,0,0"
+                                                        Visibility="{Binding DeviceId, Converter={StaticResource Conv.NullToVis}}"
+                                                        Command="{Binding DataContext.ResetDeviceCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                        CommandParameter="{Binding}"
+                                                        ToolTip="Сбросить привязку телефона" />
+                                            </StackPanel>
 
                                             <Button Grid.Column="4"
                                                     Style="{StaticResource Btn.Icon}"
