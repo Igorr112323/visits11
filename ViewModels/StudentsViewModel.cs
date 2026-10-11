@@ -94,9 +94,7 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
 
     public string HeaderTitle => SelectedGroup?.Name ?? "";
 
-    public string HeaderCount => SelectedGroup is null
-        ? ""
-        : $" {Pluralize(Students.Count, "студент", "студента", "студентов")}";
+    public string HeaderCount => string.Empty;
 
     public RelayCommand NewGroupCommand { get; }
     public RelayCommand AddStudentCommand { get; }
@@ -347,7 +345,6 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
         _main.ShowModal(new ModalViewModel
         {
             Title = "QR-код студента",
-            Message = student.FullName + " — вход в приложение «КубГАУ Студент»",
             Image = image,
             ConfirmText = "Сохранить картинку",
             OnConfirm = _ => SaveQrImage(student, content),

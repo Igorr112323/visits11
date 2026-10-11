@@ -62,6 +62,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
     private readonly PhoneLink _phone;
 
     private DispatcherTimer? _resetTimer;
+    private DateTime _lastFinishedAt = DateTime.MinValue;
     private string _lessonStartedAt = string.Empty;
     private bool _savingLesson;
 
@@ -71,7 +72,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         _toasts = toasts;
         _phone = phone;
 
-        StartStopCommand = new RelayCommand(_ => StartOrStop(), _ => RollcallState != StateFinished);
+        StartStopCommand = new RelayCommand(_ => StartOrStop());
         TogglePresentCommand = new RelayCommand(
             row => TogglePresent((StudentRow)row!), _ => RollcallState == StateActive);
         _database.DataChanged += OnDataChanged;
@@ -161,7 +162,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
 
         // если последний студент только что закрыл перекличку и его телефон ещё не убрали —
         // повторно подтверждаем его же отметку
-        if (RollcallState == StateFinished && row.IsPresent)
+        if ((RollcallState == StateFinished || (DateTime.UtcNow - _lastFinishedAt).TotalSeconds < 4) && row.IsPresent)
         {
             return (true, false, row.FullName);
         }
@@ -277,6 +278,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
             {
                 OnPropertyChanged(nameof(IsGroupSelectorEnabled));
                 OnPropertyChanged(nameof(ButtonText));
+                System.Windows.Input.CommandManager.InvalidateRequerySuggested();
             }
         }
     }
@@ -295,13 +297,14 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
 
     private void StartOrStop()
     {
-        if (RollcallState == StateFinished) return;
-
         if (RollcallState == StateActive)
         {
             Finish();
             return;
         }
+
+        _resetTimer?.Stop();
+        _resetTimer = null;
 
         if (SelectedGroup is null)
         {
@@ -358,7 +361,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
     private void Finish()
     {
         var now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-        RollcallState = StateFinished;
+        _lastFinishedAt = DateTime.UtcNow;
 
         if (SelectedGroup is not null)
         {
@@ -378,14 +381,8 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         _toasts.Success("Перекличка завершена", $"Присутствуют {PresentCount} из {Rows.Count}.");
 
         _resetTimer?.Stop();
-        _resetTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
-        _resetTimer.Tick += (_, _) =>
-        {
-            _resetTimer?.Stop();
-            _resetTimer = null;
-            RollcallState = StateIdle;
-        };
-        _resetTimer.Start();
+        _resetTimer = null;
+        RollcallState = StateIdle;
     }
 
     private void RecalcStats()
