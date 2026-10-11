@@ -1,7 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- сеть приложению не нужна: связь с ПК идёт по USB-кабелю, Wi-Fi не используется -->
+    <!--
+      Интернета приложению не нужно: связь с ПК идёт по USB-кабелю, Wi-Fi не используется.
+      Но разрешение INTERNET обязательно даже для своих сокетов: без него Android
+      запрещает создавать любой сокет (EACCES) и не отдаёт список сетевых интерфейсов,
+      поэтому сервер связи с ПК просто не мог открыться.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.NFC" />
     <uses-permission android:name="android.permission.VIBRATE" />
 

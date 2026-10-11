@@ -66,10 +66,10 @@ adb install -r android/student/build/outputs/apk/release/student-release.apk
 - **Релиз подписан debug-ключом** (`signingConfig signingConfigs.debug` в
   `android/{app,student}/build.gradle`) — это сделано намеренно, чтобы APK ставился
   в обход магазина. Для Google Play нужен свой keystore и `signingConfigs.release`.
-- Студенческий APK тянет из Maven Central `com.google.zxing:core:3.5.3`
-  (распознавание QR из картинки) и `com.journeyapps:zxing-android-embedded:4.3.0`
-  (сканирование камерой) — первая сборка требует интернета. Версия `4.3.0` —
-  последняя выпущенная; `4.3.1` не существует.
+- Студенческий APK тянет из Maven Central **только** `com.google.zxing:core:3.5.3`
+  (разбор QR-кода — и кадра камеры, и картинки из галереи); первая сборка требует
+  интернета. Экран сканирования — свой, внутри приложения: сторонние
+  библиотеки-сканеры ему не нужны (их экран и вылетал на новых Android).
 - Проект собирается без Android Studio: достаточно Gradle + SDK. В Android Studio
   проект открывается как обычно (папка `android/`), модули `app` и `student` уже настроены.
 
@@ -164,7 +164,6 @@ sha256sum KubGAU-Teacher.apk KubGAU-Student.apk KubGAU-Journal.exe
 |---|---|
 | `SDK location not found` | Указать `ANDROID_HOME` или создать `android/local.properties` с `sdk.dir=/path/to/Android/sdk` |
 | Студенческий APK не собирается, «не найден com.google.zxing» | Нет доступа в интернет для Maven Central (первая сборка модуля `:student`) |
-| Студенческий APK не собирается, «не найден com.journeyapps» | То же: `zxing-android-embedded` тянется из Maven Central |
 | `dotnet publish` падает вне Windows | WPF собирается только на Windows — используйте CI (`build.yml`) |
 | `xcodegen: command not found` | `brew install xcodegen` |
 | `objectVersion 77` не поддерживается Xcode 15 | `sed` из раздела 3 (как в CI) |

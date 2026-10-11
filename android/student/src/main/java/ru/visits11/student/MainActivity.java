@@ -7,6 +7,8 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.ImageFormat;
+import android.hardware.Camera;
 import android.net.Uri;
 import android.nfc.NfcAdapter;
 import android.nfc.Tag;
@@ -21,9 +23,13 @@ import android.os.VibratorManager;
 import android.provider.MediaStore;
 import android.provider.Settings;
 import android.util.Base64;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -32,17 +38,19 @@ import com.google.zxing.BinaryBitmap;
 import com.google.zxing.DecodeHintType;
 import com.google.zxing.LuminanceSource;
 import com.google.zxing.MultiFormatReader;
+import com.google.zxing.PlanarYUVLuminanceSource;
 import com.google.zxing.RGBLuminanceSource;
 import com.google.zxing.common.HybridBinarizer;
-import com.google.zxing.integration.android.IntentIntegrator;
-import com.google.zxing.integration.android.IntentResult;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.CRC32;
 
 /**
@@ -51,6 +59,9 @@ import java.util.zip.CRC32;
  * («Загрузить из галереи»). Дальше отметка — прикладывание телефона
  * к телефону преподавателя (NFC). Интернет и Wi-Fi приложению не нужны:
  * разрешения INTERNET у него нет вовсе.
+ *
+ * Камера работает внутри этого же окна (системная камера + ZXing) — никаких
+ * сторонних экранов и библиотек-сканеров: меньше деталей, которым можно сломаться.
  */
 public final class MainActivity extends Activity implements NfcAdapter.ReaderCallback {
 
@@ -59,9 +70,6 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
     private static final String KEY_NAME = "name";
 
     private static final byte[] NFC_AID = {(byte) 0xF0, 0x39, 0x11, 0x01, 0x02, 0x03, 0x04};
-
-    private static final int REQ_PICK_QR = 41;
-    private static final int REQ_CAMERA = 42;
 
     /** Версия формата QR-кода студента — та же строка, что на ПК (Services/StudentQr.cs). */
     private static final String QR_PREFIX = "V11S2";
@@ -74,6 +82,22 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
 
     private View entryPanel;
     private TextView statusText;
+    private FrameLayout scannerPanel;
+    private FrameLayout previewFrame;
+    private SurfaceView cameraPreview;
+
+    /** Камера-сканер внутри приложения: своя система координат вместо чужого экрана. */
+    private Camera camera;
+    private Thread decodeThread;
+    private volatile boolean cameraRunning;
+    private volatile int frameWidth;
+    private volatile int frameHeight;
+
+    /** Последний кадр камеры: в очереди всегда не больше одного — старые не нужны. */
+    private final ArrayBlockingQueue<byte[]> frames = new ArrayBlockingQueue<>(1);
+
+    private static final int REQ_PICK_QR = 41;
+    private static final int REQ_CAMERA = 42;
 
     /** true — NFC есть: отметка «телефон к телефону», сеть не нужна вовсе. */
     private boolean useNfc;
@@ -90,8 +114,15 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
 
         entryPanel = findViewById(R.id.entryPanel);
         statusText = findViewById(R.id.statusText);
+        scannerPanel = findViewById(R.id.scannerPanel);
+        previewFrame = findViewById(R.id.previewFrame);
+        cameraPreview = findViewById(R.id.cameraPreview);
         Button scanButton = findViewById(R.id.scanButton);
         Button galleryButton = findViewById(R.id.galleryButton);
+
+        // камера включается, когда её окно уже на экране, и гаснет вместе с ним
+        cameraPreview.getHolder().addCallback(surfaceCallback);
+        findViewById(R.id.cancelScanButton).setOnClickListener(v -> closeScanner(null));
 
         // два и только два способа входа: камера и картинка из галереи
         scanButton.setOnClickListener(v -> scanWithCamera());
@@ -147,6 +178,8 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
     @Override
     protected void onPause() {
         super.onPause();
+        // ушли с экрана — камера больше не нужна
+        stopCamera();
         if (!useNfc) {
             return;
         }
@@ -157,6 +190,12 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
             }
         } catch (Throwable ignored) {
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        stopCamera();
     }
 
     // ------------------------------------------------------------ экран
@@ -223,26 +262,220 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
 
     // ------------------------------------------------------------ камера
 
-    /** Вход сканированием: сначала разрешение на камеру, потом сам сканер. */
+    /** Вход сканированием: сначала разрешение на камеру, потом своя камера на экране. */
     private void scanWithCamera() {
         if (checkSelfPermission(android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(new String[]{android.Manifest.permission.CAMERA}, REQ_CAMERA);
             return;
         }
-        launchScanner();
+        openScanner();
     }
 
-    private void launchScanner() {
+    /**
+     * Показывает экран сканирования. Камера живёт внутри этого же окна:
+     * системная камера плюс ZXing — ни сторонних экранов, ни чужих оформлений,
+     * которым можно сломаться на новом Android.
+     */
+    private void openScanner() {
+        if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
+            toast("На этом телефоне нет камеры — загрузите картинку из галереи");
+            return;
+        }
+        scannerPanel.setVisibility(View.VISIBLE);
+    }
+
+    private void closeScanner(String message) {
+        scannerPanel.setVisibility(View.GONE);
+        stopCamera();
+        if (message != null) {
+            toast(message);
+        }
+    }
+
+    /** Камера включается, когда её окно уже на экране, и гаснет вместе с ним. */
+    private final SurfaceHolder.Callback surfaceCallback = new SurfaceHolder.Callback() {
+        @Override
+        public void surfaceCreated(SurfaceHolder holder) {
+            if (scannerPanel.getVisibility() == View.VISIBLE) {
+                startCamera(holder);
+            }
+        }
+
+        @Override
+        public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+            sizePreview();
+        }
+
+        @Override
+        public void surfaceDestroyed(SurfaceHolder holder) {
+            stopCamera();
+        }
+    };
+
+    private void startCamera(SurfaceHolder holder) {
+        if (camera != null) {
+            return;
+        }
         try {
-            IntentIntegrator integrator = new IntentIntegrator(this);
-            integrator.setDesiredBarcodeFormats(IntentIntegrator.QR_CODE);
-            integrator.setPrompt("Наведите камеру на QR-код студента");
-            integrator.setBeepEnabled(false);
-            integrator.setBarcodeImageEnabled(false);
-            integrator.setOrientationLocked(true);
-            integrator.initiateScan();
+            Camera opened = Camera.open();
+            Camera.Parameters parameters = opened.getParameters();
+            parameters.setPreviewFormat(ImageFormat.NV21);
+
+            // кадр поменьше — распознавание быстрее: берём самый крупный до 1280 px
+            // (16:9 предпочтительнее: в портрете такое превью занимает экран целиком)
+            Camera.Size chosen = null;
+            Camera.Size widest = null;
+            List<Camera.Size> sizes = parameters.getSupportedPreviewSizes();
+            if (sizes != null) {
+                for (Camera.Size size : sizes) {
+                    if (size.width > 1280 || size.height > 1024) {
+                        continue;
+                    }
+                    boolean is16to9 = Math.abs((double) size.width / size.height - 16.0 / 9.0) < 0.03;
+                    if (is16to9 && (chosen == null || size.width * size.height > chosen.width * chosen.height)) {
+                        chosen = size;
+                    }
+                    if (widest == null || size.width * size.height > widest.width * widest.height) {
+                        widest = size;
+                    }
+                }
+            }
+            if (chosen == null) {
+                chosen = widest;
+            }
+            if (chosen != null) {
+                parameters.setPreviewSize(chosen.width, chosen.height);
+            }
+
+            List<String> focusModes = parameters.getSupportedFocusModes();
+            if (focusModes != null) {
+                if (focusModes.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE)) {
+                    parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE);
+                } else if (focusModes.contains(Camera.Parameters.FOCUS_MODE_AUTO)) {
+                    parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_AUTO);
+                }
+            }
+
+            opened.setParameters(parameters);
+            opened.setDisplayOrientation(90); // телефон держат портретом
+            opened.setPreviewDisplay(holder);
+
+            frameWidth = parameters.getPreviewSize().width;
+            frameHeight = parameters.getPreviewSize().height;
+
+            camera = opened;
+            cameraRunning = true;
+            camera.setPreviewCallback((data, source) -> {
+                if (cameraRunning) {
+                    frames.offer(data); // в очереди только свежий кадр, старые пропускаем
+                }
+            });
+            camera.startPreview();
+
+            decodeThread = new Thread(this::decodeLoop, "QrCamera");
+            decodeThread.start();
+            sizePreview();
+        } catch (Throwable error) {
+            stopCamera();
+            closeScanner("Камера не открылась — загрузите картинку из галереи");
+        }
+    }
+
+    private void stopCamera() {
+        cameraRunning = false;
+        frames.clear();
+
+        Camera current = camera;
+        camera = null;
+        if (current != null) {
+            try {
+                current.setPreviewCallback(null);
+            } catch (Throwable ignored) {
+            }
+            try {
+                current.stopPreview();
+            } catch (Throwable ignored) {
+            }
+            try {
+                current.release();
+            } catch (Throwable ignored) {
+            }
+        }
+
+        Thread worker = decodeThread;
+        decodeThread = null;
+        if (worker != null) {
+            worker.interrupt();
+        }
+        frameWidth = 0;
+        frameHeight = 0;
+    }
+
+    /**
+     * Подгоняет окно камеры под экран с сохранением пропорций: картинка не
+     * растягивается (иначе квадратный QR-код перестаёт распознаваться),
+     * а по краям остаются чёрные поля.
+     */
+    private void sizePreview() {
+        final int width = frameWidth;
+        final int height = frameHeight;
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+        previewFrame.post(() -> {
+            int targetWidth = previewFrame.getWidth();
+            int targetHeight = previewFrame.getHeight();
+            if (targetWidth == 0 || targetHeight == 0) {
+                return;
+            }
+            // кадр приходит «лёжа», а на экране повёрнут — стороны меняем местами
+            float scale = Math.min((float) targetWidth / height, (float) targetHeight / width);
+            ViewGroup.LayoutParams params = cameraPreview.getLayoutParams();
+            params.width = Math.round(height * scale);
+            params.height = Math.round(width * scale);
+            cameraPreview.setLayoutParams(params);
+        });
+    }
+
+    /** Кадры камеры разбираем в отдельном потоке, чтобы экран не подвисал. */
+    private void decodeLoop() {
+        Map<DecodeHintType, Object> hints = qrHints();
+        while (cameraRunning) {
+            byte[] frame;
+            try {
+                frame = frames.poll(200, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            if (frame == null) {
+                continue;
+            }
+            int width = frameWidth;
+            int height = frameHeight;
+            if (width <= 0 || height <= 0) {
+                continue;
+            }
+            String text = decodeNv21(frame, width, height, hints);
+            if (text != null) {
+                final String payload = text;
+                ui.post(() -> {
+                    closeScanner(null);
+                    applyQrPayload(payload);
+                });
+                return;
+            }
+        }
+    }
+
+    /** QR на кадре камеры (формат NV21): яркость берётся из Y-плоскости кадра. */
+    private static String decodeNv21(byte[] frame, int width, int height, Map<DecodeHintType, Object> hints) {
+        try {
+            LuminanceSource source =
+                    new PlanarYUVLuminanceSource(frame, width, height, 0, 0, width, height, false);
+            return tryDecode(source, hints);
         } catch (Throwable ignored) {
-            toast("Не удалось открыть камеру — загрузите картинку из галереи");
+            return null;
         }
     }
 
@@ -253,7 +486,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
             return;
         }
         if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
-            launchScanner();
+            openScanner();
         } else {
             toast("Без камеры можно загрузить картинку из галереи");
         }
@@ -289,13 +522,6 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-
-        // результат сканирования камерой
-        IntentResult scan = IntentIntegrator.parseActivityResult(requestCode, resultCode, data);
-        if (scan != null) {
-            applyQrPayload(scan.getContents());
-            return;
-        }
 
         // результат выбора картинки из галереи
         if (requestCode != REQ_PICK_QR || resultCode != RESULT_OK || data == null) {
@@ -449,13 +675,19 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         int[] pixels = new int[width * height];
         bitmap.getPixels(pixels, 0, width, 0, 0, width, height);
 
-        Map<DecodeHintType, Object> hints = new EnumMap<>(DecodeHintType.class);
-        hints.put(DecodeHintType.TRY_HARDER, Boolean.TRUE);
-        hints.put(DecodeHintType.POSSIBLE_FORMATS, Collections.singletonList(BarcodeFormat.QR_CODE));
+        Map<DecodeHintType, Object> hints = qrHints();
 
         RGBLuminanceSource source = new RGBLuminanceSource(width, height, pixels);
         String text = tryDecode(source, hints);
         return text != null ? text : tryDecode(source.invert(), hints);
+    }
+
+    /** Что и как ищем в любом изображении: только QR-код, но старательно. */
+    private static Map<DecodeHintType, Object> qrHints() {
+        Map<DecodeHintType, Object> hints = new EnumMap<>(DecodeHintType.class);
+        hints.put(DecodeHintType.TRY_HARDER, Boolean.TRUE);
+        hints.put(DecodeHintType.POSSIBLE_FORMATS, Collections.singletonList(BarcodeFormat.QR_CODE));
+        return hints;
     }
 
     private static String tryDecode(LuminanceSource source, Map<DecodeHintType, Object> hints) {

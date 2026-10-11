@@ -82,4 +82,58 @@
             android:textSize="15sp" />
     </LinearLayout>
 
+    <!--
+      Сканирование камерой — внутри этого же окна: своя системная камера,
+      без сторонних экранов и библиотек-сканеров.
+    -->
+    <FrameLayout
+        android:id="@+id/scannerPanel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000"
+        android:visibility="gone">
+
+        <!-- кадр камеры: заполняет окно целиком, без растяжения (размер считает код) -->
+        <FrameLayout
+            android:id="@+id/previewFrame"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent">
+
+            <SurfaceView
+                android:id="@+id/cameraPreview"
+                android:layout_width="1dp"
+                android:layout_height="1dp"
+                android:layout_gravity="center" />
+        </FrameLayout>
+
+        <TextView
+            android:id="@+id/scanHint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top"
+            android:background="#99000000"
+            android:gravity="center"
+            android:paddingStart="24dp"
+            android:paddingEnd="24dp"
+            android:paddingTop="22dp"
+            android:paddingBottom="22dp"
+            android:text="Наведите камеру на QR-код студента"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp" />
+
+        <Button
+            android:id="@+id/cancelScanButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="36dp"
+            android:background="@drawable/button_soft_bg"
+            android:minWidth="170dp"
+            android:stateListAnimator="@null"
+            android:text="Отмена"
+            android:textAllCaps="false"
+            android:textColor="@color/text"
+            android:textSize="15sp" />
+    </FrameLayout>
+
 </FrameLayout>

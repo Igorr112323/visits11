@@ -29,6 +29,8 @@ import java.util.concurrent.TimeUnit;
  * Телефон преподавателя: логотип КубГАУ на весь экран, экран не гаснет.
  * Держит связь с ПК только по USB-кабелю («USB-модем») — Wi-Fi не используется
  * вовсе: сервер слушает единственный адрес USB-интерфейса, а не всю сеть.
+ * Разрешение INTERNET объявлено вынужденно: без него Android не даёт создать
+ * даже свой сокет и не показывает список сетевых интерфейсов; наружу трафик не идёт.
  * Через эту связь NFC-сервис (TeacherCardService) пересылает отметки студентов на ПК.
  * Нет связи с ПК — нажмите на экран, откроется тумблер «USB-модем».
  */
@@ -115,15 +117,27 @@ public final class MainActivity extends Activity {
         }
 
         // 2. связь с ПК (ПК сам забирает отметки с телефона по кабелю)
+        InetAddress usb = usbAddress();
         if (pcConnected()) {
-            statusText.setText("ПК подключён, NFC готов");
+            statusText.setText("ПК подключён, NFC готов (" + versionName() + ")");
             statusText.setTextColor(0xFF2E7D32);
-        } else if (usbAddress() != null) {
-            statusText.setText("Кабель подключён — запустите Журнал на ПК");
+        } else if (usb != null) {
+            // адрес на экране: сразу видно, что USB-модем действительно работает
+            statusText.setText("USB-модем включён (" + usb.getHostAddress() + "), v" + versionName()
+                    + ".\nЗапустите «Журнал КубГАУ» на ПК");
             statusText.setTextColor(0xFF8A8A8A);
         } else {
             statusText.setText("Нет связи с ПК — нажмите, чтобы включить USB-модем");
             statusText.setTextColor(0xFFB34A4A);
+        }
+    }
+
+    /** Версия приложения — видна на экране, чтобы понимать, какая сборка установлена. */
+    private String versionName() {
+        try {
+            return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+        } catch (Throwable ignored) {
+            return "?";
         }
     }
 
@@ -161,16 +175,16 @@ public final class MainActivity extends Activity {
     }
 
     /**
-     * Адрес USB-модема (usb0/rndis0). Именно его слушает сервер: из Wi-Fi телефон
-     * недоступен вообще, отметки ходят только по кабелю.
+     * Адрес USB-модема. Именно его слушает сервер: из Wi-Fi телефон недоступен вообще,
+     * отметки ходят только по кабелю. Имя интерфейса у разных телефонов своё —
+     * usb0, rndis0, ncm0, изредка eth0; Wi-Fi и мобильную сеть не слушаем никогда.
      */
     private InetAddress usbAddress() {
         try {
             Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
             while (interfaces != null && interfaces.hasMoreElements()) {
                 NetworkInterface nic = interfaces.nextElement();
-                String name = nic.getName().toLowerCase(Locale.ROOT);
-                if (!name.contains("usb") && !name.contains("rndis")) continue;
+                if (!isUsbInterface(nic.getName())) continue;
                 if (!nic.isUp()) continue;
                 Enumeration<InetAddress> addresses = nic.getInetAddresses();
                 while (addresses.hasMoreElements()) {
@@ -183,6 +197,16 @@ public final class MainActivity extends Activity {
         } catch (Throwable ignored) {
         }
         return null;
+    }
+
+    /** USB-модем это или посторонний интерфейс (Wi-Fi, мобильная сеть, точка доступа). */
+    private static boolean isUsbInterface(String rawName) {
+        String name = rawName.toLowerCase(Locale.ROOT);
+        if (name.contains("usb") || name.contains("rndis") || name.contains("ncm")) {
+            return true;
+        }
+        // на части телефонов USB-модем называется eth0/eth1 — но не мобильная сеть
+        return name.startsWith("eth") && !name.contains("rmnet");
     }
 
     /** Адрес USB-модема изменился — пересоздаём сервер на новом адресе. */
