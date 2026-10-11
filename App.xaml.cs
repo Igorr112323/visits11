@@ -11,8 +11,7 @@ public partial class App : Application
     public static DatabaseService Db { get; private set; } = null!;
     public static ThemeService Theme { get; private set; } = null!;
     public static ToastService Toasts { get; private set; } = null!;
-    public static PhoneServer Server { get; private set; } = null!;
-    public static CameraLink Camera { get; private set; } = null!;
+    public static PhoneLink Phone { get; private set; } = null!;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -28,11 +27,9 @@ public partial class App : Application
 
         Toasts = new ToastService();
 
-        Server = new PhoneServer();
-        Server.Start();
-
-        Camera = new CameraLink(Server.Port);
-        Camera.Start();
+        // связь с телефоном преподавателя — только по USB-кабелю, Wi-Fi не используется
+        Phone = new PhoneLink();
+        Phone.Start();
 
         DispatcherUnhandledException += (_, args) =>
         {
@@ -40,16 +37,15 @@ public partial class App : Application
             args.Handled = true;
         };
 
-        var viewModel = new MainViewModel(Db, Toasts, Theme, new AuthService(), new WordService(),
-            new QrExportService(), Server, Camera);
+        var viewModel = new MainViewModel(Db, Toasts, Theme, new WordService(),
+            new QrExportService(), Phone);
         var window = new MainWindow(viewModel);
         window.Show();
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
-        Camera.Dispose();
-        Server.Dispose();
+        Phone.Dispose();
         base.OnExit(e);
     }
 

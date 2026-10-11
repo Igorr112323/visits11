@@ -22,6 +22,8 @@
     <string>$(CURRENT_PROJECT_VERSION)</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
+    <key>NSCameraUsageDescription</key>
+    <string>Камера нужна, чтобы отсканировать ваш QR-код при входе в приложение.</string>
     <key>NFCReaderUsageDescription</key>
     <string>Для отметки на паре поднесите iPhone к телефону преподавателя.</string>
     <key>UILaunchScreen</key>

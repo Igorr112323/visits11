@@ -8,30 +8,23 @@ using System.Windows;
 namespace Visits11.Services;
 
 /// <summary>
-/// Автопоиск телефона-камеры в сети (USB-модем или Wi-Fi) и приём кадров.
-/// Телефон отдаёт JPEG по GET /frame?since=N (long-poll ~0.8с), поэтому
-/// соединение инициирует ПК — файрвол Windows для камеры не спрашивает.
+/// Связь с телефоном преподавателя — только по USB-кабелю, Wi-Fi не используется.
+/// ПК сам находит телефон (телефон слушает лишь свой USB-интерфейс) и забирает
+/// NFC-касания студентов: GET /event (long-poll) → обработать → POST /event_result.
+/// Все соединения исходящие со стороны ПК — брандмауэр Windows ничего не блокирует.
 /// </summary>
-public sealed class CameraLink : IDisposable
+public sealed class PhoneLink : IDisposable
 {
     private const int Port = 8090;
 
-    private readonly int _serverPort;
+    /// <summary>Так телефон преподавателя отвечает на GET /info — по этому признаку его узнаём.</summary>
+    private const string Signature = "visits11-teacher";
 
     private CancellationTokenSource? _cts;
     private Task? _worker;
 
-    /// <summary>Кадр (JPEG, поворот в градусах). Вызывается в потоке UI.</summary>
-    public event Action<byte[], int>? FrameReceived;
-
     /// <summary>NFC-запрос с телефона (json) → ответ (json). Блокирующий, потокобезопасный.</summary>
     public event Func<string, string>? NfcRelay;
-
-    /// <param name="serverPort">порт встроенного сервера — телефон передаёт его студентам для NFC-отметок.</param>
-    public CameraLink(int serverPort)
-    {
-        _serverPort = serverPort;
-    }
 
     public void Start()
     {
@@ -68,23 +61,16 @@ public sealed class CameraLink : IDisposable
 
             try
             {
-                // кадры и NFC-события — два параллельных исходящих соединения;
-                // оборвалось видео — пересканируем и NFC тоже
-                using var linked = CancellationTokenSource.CreateLinkedTokenSource(token);
-                var cameraTask = StreamAsync(host, linked.Token);
-                var eventTask = EventStreamAsync(host, linked.Token);
-                await cameraTask;
-                linked.Cancel();
-                try { await eventTask; } catch { /* отменено — нормально */ }
+                await EventStreamAsync(host, token);
             }
             catch (OperationCanceledException) { break; }
-            catch { /* поток оборвался — пересканируем */ }
+            catch { /* связь оборвалась — ищем телефон заново */ }
 
             try { await Task.Delay(1000, token); } catch (OperationCanceledException) { break; }
         }
     }
 
-    /// <summary>Перебирает адреса всех активных подсетей, ищет наш телефон по /info.</summary>
+    /// <summary>Перебирает адреса активных подсетей (USB-модем виден как Ethernet) и ищет наш телефон.</summary>
     private static async Task<string?> DiscoverAsync(CancellationToken token)
     {
         var targets = BuildTargets();
@@ -107,7 +93,7 @@ public sealed class CameraLink : IDisposable
         return null;
     }
 
-    /// <summary>Подключается к кандидату и проверяет, что это Visits11-камера.</summary>
+    /// <summary>Подключается к кандидату и проверяет, что это телефон Visits11.</summary>
     private static async Task<string?> ProbeAsync(string host, CancellationToken token)
     {
         var text = new StringBuilder();
@@ -140,7 +126,7 @@ public sealed class CameraLink : IDisposable
                 }
                 if (read == 0) break;
                 text.Append(Encoding.ASCII.GetString(buffer, 0, read));
-                if (text.ToString().Contains("visits11-camera")) break;
+                if (text.ToString().Contains(Signature)) break;
             }
         }
         catch
@@ -148,12 +134,11 @@ public sealed class CameraLink : IDisposable
             // этот адрес не наш — просто пропускаем
         }
         var response = text.ToString();
-        return response.Contains("200") && response.Contains("visits11-camera") ? host : null;
+        return response.Contains("200") && response.Contains(Signature) ? host : null;
     }
 
     /// <summary>
     /// Забирает NFC-события с телефона: GET /event (long-poll) → обработать → POST /event_result.
-    /// Всё исходящее со стороны ПК — брандмауэр Windows ничего не спрашивает.
     /// </summary>
     private async Task EventStreamAsync(string host, CancellationToken token)
     {
@@ -173,7 +158,6 @@ public sealed class CameraLink : IDisposable
                 }
                 if (!response.IsSuccessStatusCode)
                 {
-                    // старый APK преподавателя без /event — подождём и повторим
                     failures++;
                     try { await Task.Delay(1000, token); } catch (OperationCanceledException) { break; }
                     continue;
@@ -201,72 +185,19 @@ public sealed class CameraLink : IDisposable
         }
     }
 
-    /// <summary>Цикл кадров: запрашивает /frame?since=N один за другим.</summary>
-    private async Task StreamAsync(string host, CancellationToken token)
-    {
-        // сообщаем телефону адрес ПК (для NFC-отметок) — IP этого соединения + порт сервера
-        var localHost = GetLocalHostFor(host);
-
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(4) };
-        client.DefaultRequestHeaders.ConnectionClose = true;
-        if (localHost.Length > 0)
-        {
-            client.DefaultRequestHeaders.Add("X-Host", $"{localHost}:{_serverPort}");
-        }
-
-        var failures = 0;
-        long seq = 0;
-
-        while (!token.IsCancellationRequested && failures < 4)
-        {
-            try
-            {
-                using var response = await client.GetAsync($"http://{host}:{Port}/frame?since={seq}", token);
-                if (response.StatusCode == HttpStatusCode.NoContent)
-                {
-                    // телефон жив, кадра пока нет
-                    failures = 0;
-                    continue;
-                }
-                if (!response.IsSuccessStatusCode)
-                {
-                    failures++;
-                    continue;
-                }
-
-                var rotation = 0;
-                if (response.Headers.TryGetValues("X-Rot", out var rotValues) &&
-                    int.TryParse(rotValues.FirstOrDefault(), out var parsedRot))
-                {
-                    rotation = ((parsedRot % 360) + 360) % 360;
-                }
-                if (response.Headers.TryGetValues("X-Seq", out var seqValues))
-                {
-                    long.TryParse(seqValues.FirstOrDefault(), out seq);
-                }
-
-                var jpeg = await response.Content.ReadAsByteArrayAsync(token);
-                if (jpeg.Length > 0)
-                {
-                    RaiseFrame(jpeg, rotation);
-                    failures = 0;
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
-            catch
-            {
-                failures++;
-                try { await Task.Delay(500, token); } catch (OperationCanceledException) { break; }
-            }
-        }
-    }
-
     // ------------------------------------------------------------- адреса сети
 
-    /// <summary>Адреса всех подсетей (/24 и мельче) активных Ethernet/Wi-Fi интерфейсов.</summary>
+    /// <summary>Слова, по которым Windows показывает USB-модем телефона в списке адаптеров.</summary>
+    private static readonly string[] UsbAdapterMarks =
+    {
+        "rndis", "remote ndis", "usb", "tether", "android", "apple mobile", "iphone",
+    };
+
+    /// <summary>
+    /// Адреса подсетей (/24 и мельче) только USB-модема телефона (в Windows он виден
+    /// как Ethernet-адаптер с пометкой RNDIS/USB). Wi-Fi и обычный Ethernet пропускаем:
+    /// программа не должна ни искать телефон в сети, ни обращаться к посторонним адресам.
+    /// </summary>
     private static List<string> BuildTargets()
     {
         var targets = new List<string>();
@@ -276,10 +207,12 @@ public sealed class CameraLink : IDisposable
             foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
             {
                 if (nic.OperationalStatus != OperationalStatus.Up) continue;
-                if (nic.NetworkInterfaceType is not (NetworkInterfaceType.Ethernet
-                                                     or NetworkInterfaceType.Wireless80211)) continue;
+                if (nic.NetworkInterfaceType != NetworkInterfaceType.Ethernet) continue;
 
-                var description = nic.Description;
+                var description = nic.Description + " " + nic.Name;
+                if (!UsbAdapterMarks.Any(mark => description.Contains(mark, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+
                 if (description.Contains("Hyper-V", StringComparison.OrdinalIgnoreCase) ||
                     description.Contains("Virtual", StringComparison.OrdinalIgnoreCase) ||
                     description.Contains("VMware", StringComparison.OrdinalIgnoreCase) ||
@@ -313,32 +246,6 @@ public sealed class CameraLink : IDisposable
     private static uint ToUint(byte[] bytes)
         => (uint)(bytes[0] << 24 | bytes[1] << 16 | bytes[2] << 8 | bytes[3]);
 
-    /// <summary>Локальный IP, которым ПК выходит на телефон — телефон будет отвечать на него.</summary>
-    private static string GetLocalHostFor(string host)
-    {
-        try
-        {
-            using var probe = new TcpClient();
-            probe.Connect(host, Port);
-            if (probe.Client.LocalEndPoint is IPEndPoint endPoint)
-            {
-                return endPoint.Address.ToString();
-            }
-        }
-        catch
-        {
-            // не получилось — телефон узнает адрес иначе
-        }
-        return "";
-    }
-
     private static string ToStringIp(uint value)
         => $"{(value >> 24) & 0xFF}.{(value >> 16) & 0xFF}.{(value >> 8) & 0xFF}.{value & 0xFF}";
-
-    private void RaiseFrame(byte[] jpeg, int rotation)
-    {
-        var dispatcher = Application.Current?.Dispatcher;
-        if (dispatcher is null) return;
-        dispatcher.BeginInvoke(() => FrameReceived?.Invoke(jpeg, rotation));
-    }
 }

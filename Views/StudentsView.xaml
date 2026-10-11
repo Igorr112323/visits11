@@ -106,14 +106,6 @@
                             <TextBlock Text="Импорт из Word" Margin="8,0,0,0" />
                         </StackPanel>
                     </Button>
-                    <Button Style="{StaticResource Btn.Violet}" Command="{Binding ExportWordCommand}" Margin="10,0,0,0">
-                        <StackPanel Orientation="Horizontal">
-                            <Path Data="{StaticResource Icon.Export}" Width="15" Height="15" Stretch="Uniform"
-                                  Stroke="#FFFFFF" StrokeThickness="1.8"
-                                  StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
-                            <TextBlock Text="Экспорт в Word" Margin="8,0,0,0" />
-                        </StackPanel>
-                    </Button>
                     <Button Style="{StaticResource Btn.Violet}" Command="{Binding ExportQrCommand}" Margin="10,0,0,0">
                         <StackPanel Orientation="Horizontal">
                             <Path Data="{StaticResource Icon.Qr}" Width="15" Height="15" Stretch="Uniform"
@@ -147,16 +139,14 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="40" />
                                 <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="130" />
-                                <ColumnDefinition Width="110" />
+                                <ColumnDefinition Width="160" />
                                 <ColumnDefinition Width="120" />
                                 <ColumnDefinition Width="46" />
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="№" Style="{StaticResource Txt.Label}" />
                             <TextBlock Grid.Column="1" Text="ФИО" Style="{StaticResource Txt.Label}" />
-                            <TextBlock Grid.Column="2" Text="Логин" Style="{StaticResource Txt.Label}" />
-                            <TextBlock Grid.Column="3" Text="Пароль" Style="{StaticResource Txt.Label}" />
-                            <TextBlock Grid.Column="4" Text="ID телефона" Style="{StaticResource Txt.Label}" />
+                            <TextBlock Grid.Column="2" Text="Вход по QR-коду" Style="{StaticResource Txt.Label}" />
+                            <TextBlock Grid.Column="3" Text="Телефон" Style="{StaticResource Txt.Label}" />
                         </Grid>
                     </Border>
 
@@ -176,8 +166,7 @@
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="40" />
                                                 <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="130" />
-                                                <ColumnDefinition Width="110" />
+                                                <ColumnDefinition Width="160" />
                                                 <ColumnDefinition Width="120" />
                                                 <ColumnDefinition Width="46" />
                                             </Grid.ColumnDefinitions>
@@ -191,38 +180,40 @@
                                                        TextTrimming="CharacterEllipsis"
                                                        VerticalAlignment="Center" />
 
+                                            <!-- кнопка напротив студента: показать его QR-код -->
                                             <Button Grid.Column="2"
-                                                    Style="{StaticResource Btn.Chip}"
-                                                    Content="{Binding Login}"
-                                                    Command="{Binding DataContext.CopyTextCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                    CommandParameter="{Binding Login}"
-                                                    HorizontalAlignment="Left" />
-                                            <Button Grid.Column="3"
-                                                    Style="{StaticResource Btn.Chip}"
-                                                    Content="{Binding Password}"
-                                                    Command="{Binding DataContext.CopyTextCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                    CommandParameter="{Binding Password}"
-                                                    HorizontalAlignment="Left" />
+                                                    Style="{StaticResource Btn.Soft}"
+                                                    HorizontalAlignment="Left"
+                                                    Command="{Binding DataContext.ShowQrCommand, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                    CommandParameter="{Binding}"
+                                                    ToolTip="Показать QR-код студента">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <Path Data="{StaticResource Icon.Qr}" Width="12" Height="12" Stretch="Uniform"
+                                                          Stroke="{DynamicResource Brush.Accent}" StrokeThickness="2"
+                                                          StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                                                    <TextBlock Text="QR-код" Margin="6,0,0,0" />
+                                                </StackPanel>
+                                            </Button>
 
-                                            <Grid Grid.Column="4">
-                                                <TextBlock Text="{Binding PhoneId}"
-                                                           Style="{StaticResource Txt.Mono}"
-                                                           VerticalAlignment="Center"
-                                                           Visibility="{Binding PhoneId, Converter={StaticResource Conv.NullToVis}}" />
-                                                <Grid Visibility="{Binding PhoneId, Converter={StaticResource Conv.NullToVis}, ConverterParameter=invert}"
-                                                      Height="24">
-                                                    <Rectangle RadiusX="8" RadiusY="8"
-                                                               Stroke="{DynamicResource Brush.BorderStrong}"
-                                                               StrokeDashArray="3 2" StrokeThickness="1"
-                                                               Fill="Transparent" />
-                                                    <TextBlock Text="не привязан" FontSize="11"
-                                                               Foreground="{DynamicResource Brush.TextSoft}"
-                                                               HorizontalAlignment="Center"
-                                                               VerticalAlignment="Center" />
-                                                </Grid>
-                                            </Grid>
+                                            <!-- привязан ли студент к телефону (защита от отметок с чужого устройства) -->
+                                            <TextBlock Grid.Column="3"
+                                                       Text="{Binding DeviceLabel}"
+                                                       VerticalAlignment="Center"
+                                                       FontSize="12"
+                                                       Foreground="{DynamicResource Brush.TextSoft}">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding DeviceId, Converter={StaticResource Conv.NullToVis}}" Value="Visible">
+                                                                <Setter Property="Foreground" Value="{DynamicResource Brush.Green}" />
+                                                                <Setter Property="FontFamily" Value="{StaticResource Font.SemiBold}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
 
-                                            <Button Grid.Column="5"
+                                            <Button Grid.Column="4"
                                                     Style="{StaticResource Btn.Icon}"
                                                     Width="30" Height="30"
                                                     HorizontalAlignment="Center"

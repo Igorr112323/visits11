@@ -1,6 +1,5 @@
 using System.IO;
 using System.Text;
-using QRCoder;
 using Visits11.Models;
 
 namespace Visits11.Services;
@@ -11,10 +10,9 @@ namespace Visits11.Services;
 /// и файл-инструкция «Как войти.txt».
 ///
 /// Картинку студенту пересылает преподаватель (мессенджер, почта, флешка).
-/// Студент сохраняет её в галерею и входит через «Войти по QR из галереи» —
-/// или сканирует любым QR-сканером и вводит логин с паролем руками (в коде
-/// есть эти строки). Никакой сервер для этого не нужен: в QR лежит только
-/// логин, пароль и ФИО студента.
+/// Студент сохраняет её в галерею и входит через «Загрузить из галереи» или
+/// показывает другому телефону, чтобы войти сканированием камерой.
+/// Ни сервер, ни интернет для этого не нужны: в QR лежит только код студента.
 /// </summary>
 public sealed class QrExportService
 {
@@ -26,7 +24,7 @@ public sealed class QrExportService
     /// </summary>
     /// <param name="parentDirectory">Папка, выбранная преподавателем в диалоге.</param>
     /// <param name="groupName">Название группы — попадает в имя подпапки.</param>
-    /// <param name="students">Студенты группы (логин и пароль уже сгенерированы).</param>
+    /// <param name="students">Студенты группы (код QR у каждого уже есть).</param>
     public (string Folder, int Count) Export(string parentDirectory, string groupName, IReadOnlyList<Student> students)
     {
         var folder = Path.Combine(parentDirectory, $"QR-коды {Sanitize(groupName)}");
@@ -48,7 +46,7 @@ public sealed class QrExportService
         var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var student in students)
         {
-            var text = StudentQr.Build(student.Login, student.Password, student.FullName);
+            var text = StudentQr.Build(student.QrToken, student.FullName);
 
             // страховка от опечатки в формате: картинки не должны разойтись с тем,
             // что разбирают приложения студента (сборка кода и проверка CRC32)
@@ -57,22 +55,12 @@ public sealed class QrExportService
                 throw new InvalidDataException($"Некорректный QR-код для «{student.FullName}».");
             }
 
-            var png = Render(text);
-            var fileName = Unique($"{student.FullName} ({student.Login})", used) + ".png";
-            File.WriteAllBytes(Path.Combine(folder, fileName), png);
+            var fileName = Unique($"{student.FullName}", used) + ".png";
+            File.WriteAllBytes(Path.Combine(folder, fileName), StudentQr.RenderPng(text));
         }
 
         File.WriteAllText(Path.Combine(folder, "Как войти.txt"), Instructions(groupName), Utf8Bom);
         return (folder, students.Count);
-    }
-
-    /// <summary>PNG с QR-кодом: module size 12 px — код читается даже с фотографии экрана.</summary>
-    private static byte[] Render(string text)
-    {
-        var generator = new QRCodeGenerator();
-        var data = generator.CreateQrCode(text, QRCodeGenerator.ECCLevel.M);
-        var qr = new PngByteQRCode(data);
-        return qr.GetGraphic(12);
     }
 
     /// <summary>Имя файла без символов, которые запрещены в Windows.</summary>
@@ -104,26 +92,22 @@ public sealed class QrExportService
         => $"""
             QR-коды для входа в приложение «КубГАУ Студент»
             Группа: {groupName}
-            
+
             В этой папке — по одной картинке PNG на каждого студента.
-            Имя файла: «ФИО (логин).png». Свою картинку нужно передать студенту
+            Имя файла: «ФИО.png». Свою картинку нужно передать студенту
             (мессенджер, почта, флешка) — каждый студент получает только свой файл.
-            
+            Логинов и паролей в системе больше нет: вход выполняет QR-код.
+
             КАК ВОЙТИ (телефон студента)
             1. Сохраните картинку со своим QR-кодом в галерею телефона.
             2. Откройте приложение «КубГАУ Студент».
-            3. На экране входа нажмите «Войти по QR из галереи» и выберите картинку.
-               На iPhone на экране входа — такая же кнопка.
-            Приложение распознает код само, вход выполнится сразу.
-            
-            ЗАПАСНОЙ СПОСОБ
-            Любым QR-сканером отсканируйте картинку: под машинной строкой в коде
-            напечатаны «Login:» и «Password:» — эти логин и пароль можно ввести
-            в приложении руками.
-            
+            3. Нажмите «Загрузить из галереи» и выберите картинку —
+               или нажмите «Сканировать QR-код» и наведите камеру на код с экрана ПК.
+               На iPhone — такие же две кнопки.
+
             ВАЖНО
-            • QR-код содержит ваш личный логин и пароль — не пересылайте его другим.
-            • Аккаунт привязывается к первому телефону, с которого был вход:
+            • QR-код нельзя пересылать другим: он заменяет логин и пароль.
+            • Аккаунт привязывается к первому телефону, с которого была отметка:
               отметить кого-то «за другого» с чужого телефона не получится.
             • QR-код постоянный: его достаточно сохранить один раз.
             """;

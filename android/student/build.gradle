@@ -32,8 +32,9 @@ android {
     }
 }
 
-// приложение работает на framework API; zxing нужен только чтобы распознать
-// QR-код студента из картинки галереи (вход по QR, без сервера)
+// приложение работает на framework API. zxing нужен, чтобы распознать QR-код
+// студента: core — из картинки галереи, embedded — камерой на экране входа.
 dependencies {
     implementation 'com.google.zxing:core:3.5.3'
+    implementation 'com.journeyapps:zxing-android-embedded:4.3.0'
 }

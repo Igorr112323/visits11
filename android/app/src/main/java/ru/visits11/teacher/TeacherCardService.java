@@ -9,19 +9,21 @@ import android.os.VibratorManager;
 
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Телефон преподавателя «притворяется картой»: студенты прикладывают свои
- * телефоны-считыватели, мы кладём их данные в очередь — ПК сам забирает
- * их по /event и возвращает ответ в /event_result (все соединения исходящие
- * со стороны ПК, брандмауэр Windows ничего не блокирует).
+ * телефоны-считыватели. Касание кладём в очередь — ПК забирает его по USB
+ * (см. MainActivity, /event и /event_result) и возвращает ответ.
+ *
+ * Протокол (AID F0391101020304, команда INS 0x10): данные студента —
+ * «код-из-QR-кода \n id-устройства». Логина и пароля больше нет.
  */
 public final class TeacherCardService extends HostApduService {
 
-    /** NFC-запросы, ждущие ПК: {"type":1|2,...}. */
+    /** NFC-запросы, ждущие ПК. */
     static final LinkedBlockingQueue<String> requests = new LinkedBlockingQueue<>();
 
     /** Ответ ПК на текущее касание. */
@@ -35,12 +37,11 @@ public final class TeacherCardService extends HostApduService {
 
     private static final byte[] NFC_AID = {(byte) 0xF0, 0x39, 0x11, 0x01, 0x02, 0x03, 0x04};
 
-    private static final int REPLY_LOGIN_TOKEN = 0;    // + токен сессии
-    private static final int REPLY_MARKED = 1;         // + имя студента
-    private static final int REPLY_BAD_CREDENTIALS = 2;
-    private static final int REPLY_RELOGIN = 3;        // токен устарел
+    /** Коды ответа — те же, что понимают приложения студентов. */
+    private static final int REPLY_MARKED = 0;         // + имя студента
+    private static final int REPLY_UNKNOWN_QR = 2;     // такого QR-кода нет в журнале
     private static final int REPLY_UNAVAILABLE = 4;    // ПК недоступен / перекличка не идёт
-    private static final int REPLY_DEVICE_BLOCKED = 5; // аккаунт привязан к другому телефону
+    private static final int REPLY_DEVICE_BLOCKED = 5; // телефон привязан к другому студенту
 
     @Override
     public byte[] processCommandApdu(byte[] apdu, Bundle extras) {
@@ -54,82 +55,65 @@ public final class TeacherCardService extends HostApduService {
             return ok(new byte[0]);
         }
 
-        if (instruction == 0x10) {
-            // данные студента: логин\nпароль\nid-устройства (первый раз) или токен\nid-устройства
-            int length = apdu.length >= 5 ? apdu[4] & 0xFF : 0;
-            if (length < 1 || apdu.length < 5 + length) {
-                return ok(new byte[0]);
-            }
-            int type = apdu[5] & 0xFF;
-            String data = new String(apdu, 6, length - 1, StandardCharsets.UTF_8);
-
-            String request;
-            if (type == 1) {
-                String[] parts = data.split("\n", 3);
-                if (parts.length < 2) {
-                    return ok(new byte[0]);
-                }
-                String device = parts.length > 2 ? parts[2] : "";
-                request = "{\"type\":1,\"login\":\"" + escape(parts[0])
-                        + "\",\"password\":\"" + escape(parts[1])
-                        + "\",\"device\":\"" + escape(device) + "\"}";
-            } else if (type == 2) {
-                String[] parts = data.split("\n", 2);
-                if (parts.length < 1 || parts[0].isEmpty()) {
-                    return ok(new byte[0]);
-                }
-                String device = parts.length > 1 ? parts[1] : "";
-                request = "{\"type\":2,\"token\":\"" + escape(parts[0])
-                        + "\",\"device\":\"" + escape(device) + "\"}";
-            } else {
-                return ok(new byte[0]);
-            }
-
-            synchronized (TAP_LOCK) {
-                // отдаём запрос ПК и ждём ответ прямо в момент касания;
-                // чужие (опоздавшие) ответы пропускаем — ждём именно свой
-                long id = SEQ.incrementAndGet();
-                requests.add("{\"id\":" + id + "," + request.substring(1));
-                String result = null;
-                long deadline = System.nanoTime() + 4_000_000_000L;
-                while (true) {
-                    long remain = deadline - System.nanoTime();
-                    if (remain <= 0) {
-                        break;
-                    }
-                    String candidate;
-                    try {
-                        candidate = resultBox.poll(remain, TimeUnit.NANOSECONDS);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    }
-                    if (candidate == null) {
-                        break;
-                    }
-                    if (idOf(candidate) == id) {
-                        result = candidate;
-                        break;
-                    }
-                }
-                if (result == null) {
-                    return ok(new byte[]{REPLY_UNAVAILABLE});
-                }
-
-                int code = codeOf(result);
-                String value = extractString(result, "value");
-                if (code == REPLY_LOGIN_TOKEN || code == REPLY_MARKED) {
-                    vibrate();
-                }
-                byte[] bytes = value == null ? new byte[0] : value.getBytes(StandardCharsets.UTF_8);
-                byte[] payload = new byte[1 + bytes.length];
-                payload[0] = (byte) code;
-                System.arraycopy(bytes, 0, payload, 1, bytes.length);
-                return ok(payload);
-            }
+        if (instruction != 0x10) {
+            return new byte[]{(byte) 0x6D, (byte) 0x00};
         }
 
-        return new byte[]{(byte) 0x6D, (byte) 0x00};
+        // данные студента: код из QR-кода \n id-устройства
+        int length = apdu.length >= 5 ? apdu[4] & 0xFF : 0;
+        if (length < 1 || apdu.length < 5 + length) {
+            return ok(new byte[0]);
+        }
+        String data = new String(apdu, 5, length, StandardCharsets.UTF_8);
+        String[] parts = data.split("\n", 2);
+        if (parts.length < 1 || parts[0].isEmpty()) {
+            return ok(new byte[0]);
+        }
+        String device = parts.length > 1 ? parts[1] : "";
+        String request = "{\"token\":\"" + escape(parts[0]) + "\",\"device\":\"" + escape(device) + "\"}";
+
+        synchronized (TAP_LOCK) {
+            // отдаём запрос ПК и ждём ответ прямо в момент касания;
+            // чужие (опоздавшие) ответы пропускаем — ждём именно свой
+            long id = SEQ.incrementAndGet();
+            requests.add("{\"id\":" + id + "," + request.substring(1));
+            String result = null;
+            long deadline = System.nanoTime() + 4_000_000_000L;
+            while (true) {
+                long remain = deadline - System.nanoTime();
+                if (remain <= 0) {
+                    break;
+                }
+                String candidate;
+                try {
+                    candidate = resultBox.poll(remain, TimeUnit.NANOSECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                if (candidate == null) {
+                    break;
+                }
+                if (idOf(candidate) == id) {
+                    result = candidate;
+                    break;
+                }
+            }
+            if (result == null) {
+                return ok(new byte[]{REPLY_UNAVAILABLE});
+            }
+
+            int code = codeOf(result);
+            String value = extractString(result, "value");
+            if (code == REPLY_MARKED) {
+                vibrate();
+            }
+            byte[] bytes = value == null ? new byte[0] : value.getBytes(StandardCharsets.UTF_8);
+            byte[] payload = new byte[1 + bytes.length];
+            payload[0] = (byte) code;
+            System.arraycopy(bytes, 0, payload, 1, bytes.length);
+            return ok(payload);
+        }
     }
 
     @Override
@@ -163,10 +147,13 @@ public final class TeacherCardService extends HostApduService {
             }
             at += 7;
             int end = at;
-            while (end < json.length() && Character.isDigit(json.charAt(end))) {
+            while (end < json.length() && (Character.isDigit(json.charAt(end)) || json.charAt(end) == '-')) {
                 end++;
             }
-            return Integer.parseInt(json.substring(at, end));
+            int code = Integer.parseInt(json.substring(at, end));
+            return code == REPLY_UNKNOWN_QR || code == REPLY_UNAVAILABLE || code == REPLY_DEVICE_BLOCKED
+                    ? code
+                    : REPLY_UNAVAILABLE;
         } catch (Throwable ignored) {
             return REPLY_UNAVAILABLE;
         }

@@ -25,29 +25,34 @@ public sealed class StudentTableItem
     public int Id { get; init; }
     public int Number { get; init; }
     public string FullName { get; init; } = string.Empty;
-    public string Login { get; init; } = string.Empty;
-    public string Password { get; init; } = string.Empty;
-    public string? PhoneId { get; init; }
+
+    /// <summary>Код из QR-кода студента — он же заменяет логин и пароль.</summary>
+    public string QrToken { get; init; } = string.Empty;
+
+    /// <summary>Телефон, к которому привязан студент; null — ещё не привязывался.</summary>
+    public string? DeviceId { get; init; }
+
+    /// <summary>Подпись для колонки «Телефон».</summary>
+    public string DeviceLabel => DeviceId is null ? "не привязан" : "привязан";
 }
 
 /// <summary>
-/// Вкладка «Студенты»: группы, таблица студентов, импорт/экспорт Word.
+/// Вкладка «Студенты»: группы, таблица студентов с QR-кодами, импорт из Word.
+/// Логинов и паролей в системе нет: вход студента выполняет его QR-код.
 /// </summary>
 public sealed class StudentsViewModel : ObservableObject, ITabViewModel
 {
     private readonly DatabaseService _database;
     private readonly ToastService _toasts;
-    private readonly AuthService _auth;
     private readonly WordService _word;
     private readonly QrExportService _qrExport;
     private readonly MainViewModel _main;
 
-    public StudentsViewModel(DatabaseService database, ToastService toasts, AuthService auth, WordService word,
+    public StudentsViewModel(DatabaseService database, ToastService toasts, WordService word,
         QrExportService qrExport, MainViewModel main)
     {
         _database = database;
         _toasts = toasts;
-        _auth = auth;
         _word = word;
         _qrExport = qrExport;
         _main = main;
@@ -55,9 +60,8 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
         NewGroupCommand = new RelayCommand(_ => CreateGroupDialog());
         AddStudentCommand = new RelayCommand(_ => AddStudentDialog(), _ => SelectedGroup is not null);
         ImportWordCommand = new RelayCommand(_ => ImportFromWord());
-        ExportWordCommand = new RelayCommand(_ => ExportToWord(), _ => SelectedGroup is not null && Students.Count > 0);
         ExportQrCommand = new RelayCommand(_ => ExportQrCodes(), _ => SelectedGroup is not null && Students.Count > 0);
-        CopyTextCommand = new RelayCommand(param => CopyToClipboard(param as string));
+        ShowQrCommand = new RelayCommand(param => ShowQrCode(param as StudentTableItem), _ => SelectedGroup is not null);
         DeleteStudentCommand = new RelayCommand(param => DeleteStudentDialog(param as StudentTableItem));
         DeleteGroupCommand = new RelayCommand(_ => DeleteGroupDialog(), _ => SelectedGroup is not null);
         SelectGroupCommand = new RelayCommand(param =>
@@ -97,9 +101,8 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
     public RelayCommand NewGroupCommand { get; }
     public RelayCommand AddStudentCommand { get; }
     public RelayCommand ImportWordCommand { get; }
-    public RelayCommand ExportWordCommand { get; }
     public RelayCommand ExportQrCommand { get; }
-    public RelayCommand CopyTextCommand { get; }
+    public RelayCommand ShowQrCommand { get; }
     public RelayCommand SelectGroupCommand { get; }
     public RelayCommand DeleteStudentCommand { get; }
     public RelayCommand DeleteGroupCommand { get; }
@@ -197,15 +200,13 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
                     return false;
                 }
 
-                var login = _auth.GenerateLogin(fullName, _database.LoginExists);
                 _database.AddStudent(new Student
                 {
                     GroupId = SelectedGroup.Id,
                     FullName = fullName,
-                    Login = login,
-                    Password = AuthService.GeneratePassword(),
+                    QrToken = AuthService.GenerateQrToken(),
                 });
-                _toasts.Success("Студент добавлен", $"{fullName} · {login}");
+                _toasts.Success("Студент добавлен", $"{fullName} · QR-код готов (кнопка «QR-код»)»");
                 return true;
             },
         });
@@ -310,20 +311,21 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
             return;
         }
 
-        // логины уникальны и внутри партии: два разных ФИО могут дать одинаковый логин
-        var usedLogins = new HashSet<string>(StringComparer.Ordinal);
+        var usedTokens = new HashSet<string>(StringComparer.Ordinal);
         var students = new List<Student>();
         foreach (var name in fresh)
         {
-            var student = new Student
+            var token = AuthService.GenerateQrToken();
+            while (!usedTokens.Add(token))
+            {
+                token = AuthService.GenerateQrToken(); // совпадение 128-битных кодов — практически невозможно
+            }
+            students.Add(new Student
             {
                 GroupId = group.Id,
                 FullName = name,
-                Login = _auth.GenerateLogin(name, login => _database.LoginExists(login) || usedLogins.Contains(login)),
-                Password = AuthService.GeneratePassword(),
-            };
-            usedLogins.Add(student.Login);
-            students.Add(student);
+                QrToken = token,
+            });
         }
         _database.AddStudents(students);
 
@@ -331,38 +333,67 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
             $"Добавлено {fresh.Count} {Pluralize(fresh.Count, "студент", "студента", "студентов")} в группу «{groupName}».");
     }
 
-    private void ExportToWord()
+    /// <summary>
+    /// «Показать QR-код» у студента: окно с картинкой кода — студент может
+    /// навести камеру прямо на экран или сохранить картинку и прислать её.
+    /// </summary>
+    private void ShowQrCode(StudentTableItem? student)
     {
-        if (SelectedGroup is null || Students.Count == 0) return;
+        if (student is null || student.QrToken.Length == 0) return;
 
+        var content = StudentQr.Build(student.QrToken, student.FullName);
+        var image = StudentQr.RenderImage(content);
+
+        _main.ShowModal(new ModalViewModel
+        {
+            Title = "QR-код студента",
+            Message = student.FullName + " — вход в приложение «КубГАУ Студент»",
+            Image = image,
+            ConfirmText = "Сохранить картинку",
+            OnConfirm = _ => SaveQrImage(student, content),
+        });
+    }
+
+    /// <summary>Сохраняет картинку QR-кода в файл PNG (для отправки студенту).</summary>
+    private bool SaveQrImage(StudentTableItem student, string content)
+    {
         var dialog = new SaveFileDialog
         {
-            Title = "Экспорт в Word",
-            Filter = "Документы Word (*.docx)|*.docx",
-            FileName = $"{SelectedGroup.Name}.docx",
+            Title = "Куда сохранить QR-код",
+            Filter = "Картинка PNG (*.png)|*.png",
+            FileName = SanitizeFileName(student.FullName) + ".png",
         };
-        if (dialog.ShowDialog() != true) return;
+        if (dialog.ShowDialog() != true) return false;
 
         try
         {
-            _word.ExportStudents(dialog.FileName, Students.Select(s => new Student
-            {
-                FullName = s.FullName,
-                Login = s.Login,
-                Password = s.Password,
-            }).ToList());
-            _toasts.Success("Файл сохранён", dialog.FileName);
+            File.WriteAllBytes(dialog.FileName, StudentQr.RenderPng(content));
+            _toasts.Success("QR-код сохранён", dialog.FileName);
+            return true;
         }
         catch (Exception exception)
         {
             _toasts.Error("Не удалось сохранить файл", exception.Message);
+            return false;
         }
+    }
+
+    /// <summary>Имя файла без символов, запрещённых в Windows.</summary>
+    private static string SanitizeFileName(string name)
+    {
+        var builder = new System.Text.StringBuilder(name.Length);
+        foreach (var ch in name)
+        {
+            builder.Append(ch is '<' or '>' or ':' or '"' or '/' or '\\' or '|' or '?' or '*' ? '-' : ch);
+        }
+        var clean = builder.ToString().Trim().TrimEnd('.');
+        return clean.Length == 0 ? "QR-код" : clean;
     }
 
     /// <summary>
     /// «Экспорт QR-кодов»: в выбранной папке создаётся подпапка «QR-коды &lt;группа&gt;»
     /// с картинкой на каждого студента. Картинку студент сохраняет в галерею и
-    /// входит в приложение через «Войти по QR из галереи» — сервер для этого не нужен.
+    /// входит в приложение через «Загрузить из галереи» — сервер для этого не нужен.
     /// </summary>
     private void ExportQrCodes()
     {
@@ -386,20 +417,6 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
         catch (Exception exception)
         {
             _toasts.Error("Не удалось сохранить QR-коды", exception.Message);
-        }
-    }
-
-    private void CopyToClipboard(string? text)
-    {
-        if (string.IsNullOrEmpty(text)) return;
-        try
-        {
-            Clipboard.SetText(text);
-            _toasts.Info("Скопировано", text);
-        }
-        catch
-        {
-            _toasts.Error("Не удалось скопировать", "Буфер обмена занят другой программой.");
         }
     }
 
@@ -445,9 +462,8 @@ public sealed class StudentsViewModel : ObservableObject, ITabViewModel
                 Id = student.Id,
                 Number = number++,
                 FullName = student.FullName,
-                Login = student.Login,
-                Password = student.Password,
-                PhoneId = student.PhoneId,
+                QrToken = student.QrToken,
+                DeviceId = student.DeviceId,
             });
         }
         OnPropertyChanged(nameof(HeaderCount));

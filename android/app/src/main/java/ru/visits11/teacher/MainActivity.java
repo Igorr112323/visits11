@@ -1,13 +1,13 @@
 package ru.visits11.teacher;
 
 import android.app.Activity;
+import android.content.ComponentName;
 import android.content.Intent;
 import android.nfc.NfcAdapter;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
-import android.view.View;
 import android.view.WindowManager;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -27,19 +27,21 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * Телефон преподавателя: логотип КубГАУ на весь экран, экран не гаснет.
- * Невидимо держит связь с ПК по USB (ПК сам находит телефон) — через неё
- * NFC-сервис (TeacherCardService) пересылает отметки студентов на ПК.
+ * Держит связь с ПК только по USB-кабелю («USB-модем») — Wi-Fi не используется
+ * вовсе: сервер слушает единственный адрес USB-интерфейса, а не всю сеть.
+ * Через эту связь NFC-сервис (TeacherCardService) пересылает отметки студентов на ПК.
  * Нет связи с ПК — нажмите на экран, откроется тумблер «USB-модем».
  */
 public final class MainActivity extends Activity {
 
     private static final int SERVER_PORT = 8090;
-    private static final long FRAME_WAIT_MS = 800;   // pacing для /frame (кадров больше нет)
     private static final long PC_TIMEOUT_MS = 3000;  // связь считается потерянной
+    private static final String SIGNATURE = "visits11-teacher";
 
     private TextView statusText;
 
-    private ServerSocket serverSocket;
+    private volatile ServerSocket serverSocket;
+    private volatile InetAddress boundAddress;
     private volatile boolean serverRunning;
 
     private volatile long lastClientAt;
@@ -48,6 +50,7 @@ public final class MainActivity extends Activity {
     private final Runnable statusTicker = new Runnable() {
         @Override
         public void run() {
+            ensureUsbBinding();
             updateStatus();
             ui.postDelayed(this, 500);
         }
@@ -111,12 +114,12 @@ public final class MainActivity extends Activity {
             return;
         }
 
-        // 2. связь с ПК (ПК сам забирает отметки с телефона — брандмауэр не мешает)
+        // 2. связь с ПК (ПК сам забирает отметки с телефона по кабелю)
         if (pcConnected()) {
             statusText.setText("ПК подключён, NFC готов");
             statusText.setTextColor(0xFF2E7D32);
-        } else if (isUsbTethered()) {
-            statusText.setText("Кабель подключён — запустите Visits11 на ПК");
+        } else if (usbAddress() != null) {
+            statusText.setText("Кабель подключён — запустите Журнал на ПК");
             statusText.setTextColor(0xFF8A8A8A);
         } else {
             statusText.setText("Нет связи с ПК — нажмите, чтобы включить USB-модем");
@@ -139,7 +142,7 @@ public final class MainActivity extends Activity {
         for (String[] screen : TETHER_SCREENS) {
             try {
                 Intent intent = new Intent();
-                intent.setComponent(new android.content.ComponentName(screen[0], screen[1]));
+                intent.setComponent(new ComponentName(screen[0], screen[1]));
                 startActivity(intent);
                 return;
             } catch (Throwable ignored) {
@@ -157,8 +160,11 @@ public final class MainActivity extends Activity {
         }
     }
 
-    /** Появилась ли сеть USB-модема (usb0/rndis0). */
-    private boolean isUsbTethered() {
+    /**
+     * Адрес USB-модема (usb0/rndis0). Именно его слушает сервер: из Wi-Fi телефон
+     * недоступен вообще, отметки ходят только по кабелю.
+     */
+    private InetAddress usbAddress() {
         try {
             Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
             while (interfaces != null && interfaces.hasMoreElements()) {
@@ -170,13 +176,21 @@ public final class MainActivity extends Activity {
                 while (addresses.hasMoreElements()) {
                     InetAddress address = addresses.nextElement();
                     if (address instanceof Inet4Address && !address.isLoopbackAddress()) {
-                        return true;
+                        return address;
                     }
                 }
             }
         } catch (Throwable ignored) {
         }
-        return false;
+        return null;
+    }
+
+    /** Адрес USB-модема изменился — пересоздаём сервер на новом адресе. */
+    private void ensureUsbBinding() {
+        InetAddress current = boundAddress;
+        if (current != null && !current.equals(usbAddress())) {
+            closeQuietly(serverSocket); // accept бросит исключение, цикл поднимет сокет заново
+        }
     }
 
     // ------------------------------------------------------------ связь с ПК
@@ -190,19 +204,33 @@ public final class MainActivity extends Activity {
     }
 
     private void serverLoop() {
-        try {
-            serverSocket = new ServerSocket(SERVER_PORT);
-        } catch (IOException e) {
-            serverRunning = false;
-            toast("Не удалось занять порт 8090");
-            return;
-        }
         while (serverRunning) {
+            InetAddress address = usbAddress();
+            if (address == null) {
+                // кабеля нет — Wi-Fi не слушаем вовсе
+                sleepQuietly(400);
+                continue;
+            }
             try {
-                Socket client = serverSocket.accept();
-                new Thread(() -> handleClient(client), "Http").start();
+                serverSocket = new ServerSocket(SERVER_PORT, 8, address);
+                boundAddress = address;
             } catch (IOException e) {
-                break;
+                boundAddress = null;
+                sleepQuietly(400);
+                continue;
+            }
+
+            try {
+                while (serverRunning) {
+                    Socket client = serverSocket.accept();
+                    new Thread(() -> handleClient(client), "Http").start();
+                }
+            } catch (IOException e) {
+                // сокет закрыли (сменился адрес) или сервер останавливают
+            } finally {
+                closeQuietly(serverSocket);
+                serverSocket = null;
+                boundAddress = null;
             }
         }
     }
@@ -219,7 +247,7 @@ public final class MainActivity extends Activity {
 
             lastClientAt = SystemClock.elapsedRealtime();
 
-            // "GET /frame?since=0 HTTP/1.1"
+            // "GET /event?wait=3000 HTTP/1.1"
             String[] parts = requestLine.split(" ");
             if (parts.length < 2) {
                 return;
@@ -233,11 +261,7 @@ public final class MainActivity extends Activity {
 
             if ("/info".equals(path)) {
                 respond(client, "200 OK", "application/json",
-                        "{\"app\":\"visits11-camera\"}".getBytes(StandardCharsets.US_ASCII));
-            } else if ("/frame".equals(path) && "GET".equals(method)) {
-                // кадров больше нет: немного ждём, чтобы ПК не крутил запросы вхолостую
-                Thread.sleep(FRAME_WAIT_MS);
-                respond(client, "204 No Content", "text/plain", new byte[0]);
+                        ("{\"app\":\"" + SIGNATURE + "\"}").getBytes(StandardCharsets.US_ASCII));
             } else if ("/event".equals(path) && "GET".equals(method)) {
                 // ПК забирает NFC-запросы (long-poll 3 сек)
                 serveEvent(client);
@@ -371,6 +395,14 @@ public final class MainActivity extends Activity {
                 socket.close();
             } catch (IOException ignored) {
             }
+        }
+    }
+
+    private static void sleepQuietly(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 

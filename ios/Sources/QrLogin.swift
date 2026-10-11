@@ -6,24 +6,24 @@ import Vision
 
 // MARK: - формат QR-кода студента
 
-/// QR-код, который экспортирует ПК (см. Services/StudentQr.cs):
+/// QR-код, который выдаёт ПК преподавателя (см. Services/StudentQr.cs):
 ///
-///     V11S1.<логин>.<пароль>.<ФИО>.<CRC32>   — все поля в base64url
-///     Login: ARHIPOV_II
-///     Password: K7M2QX9P
+///     V11S2.<код>.<ФИО>.<CRC32>   — поля в base64url
+///     Student: Ivanov Ivan Ivanovich
+///     Code: QVJISVBPVl9JSQ
 ///
-/// Приложение читает первую строку; две нижние — для человека: можно
-/// отсканировать код любым QR-сканером и ввести логин с паролем руками.
+/// Приложение читает первую строку; две нижние — для человека.
+/// Логина и пароля в системе нет: вход выполняет код из QR-кода,
+/// а от передачи чужого кода защищает привязка к телефону.
 struct StudentQrCredentials {
-    let login: String
-    let password: String
+    let token: String
     let name: String
 
     /// Версия формата — та же строка, что на ПК и в Android-приложении.
-    static let prefix = "V11S1"
+    static let prefix = "V11S2"
 
     /// Разбирает содержимое QR. Возвращает nil, если это не наш код
-    /// (чужая картинка, обрезанный снимок, QR переклички и т.п.).
+    /// (чужая картинка, обрезанный снимок и т.п.).
     static func parse(_ text: String) -> StudentQrCredentials? {
         let firstLine = text
             .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false)
@@ -32,17 +32,16 @@ struct StudentQrCredentials {
         let machine = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let parts = machine.components(separatedBy: ".")
-        guard parts.count == 5, parts[0] == prefix else { return nil }
+        guard parts.count == 4, parts[0] == prefix else { return nil }
 
         // CRC считается от машинной строки без последнего поля — так отсеиваются
         // чужие картинки и кривые распознавания
-        let body = parts[0...3].joined(separator: ".")
-        guard crc32Hex(body) == parts[4].lowercased() else { return nil }
+        let body = parts[0...2].joined(separator: ".")
+        guard crc32Hex(body) == parts[3].lowercased() else { return nil }
 
-        guard let login = base64UrlDecode(parts[1]), !login.isEmpty,
-              let password = base64UrlDecode(parts[2]), !password.isEmpty else { return nil }
+        guard let token = base64UrlDecode(parts[1]), !token.isEmpty else { return nil }
 
-        return StudentQrCredentials(login: login, password: password, name: base64UrlDecode(parts[3]) ?? "")
+        return StudentQrCredentials(token: token, name: base64UrlDecode(parts[2]) ?? "")
     }
 
     /// base64url без выравнивания.

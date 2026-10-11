@@ -6,10 +6,11 @@ import UIKit
 
 private let aid: [UInt8] = [0xF0, 0x39, 0x11, 0x01, 0x02, 0x03, 0x04]
 private let prefs = UserDefaults.standard
-private let keyLogin = "login"
-private let keyPassword = "password"
-private let keyToken = "token"
-private let keyDevice = "device"
+private let keyToken = "token"   // код студента из QR-кода — заменяет логин и пароль
+private let keyName = "name"     // ФИО студента (показываем на экране)
+private let keyDevice = "device" // id устройства: аккаунт привязывается к телефону
+
+private let green = Color(red: 0.29, green: 0.78, blue: 0.42)
 
 /// Уникальный ID устройства — аккаунт привязывается к первому телефону.
 private func deviceId() -> String {
@@ -25,13 +26,21 @@ private func deviceId() -> String {
 
 final class MarkModel: NSObject, ObservableObject, NFCTagReaderSessionDelegate {
 
+    /// Результат последнего касания («Вы отмечены — Иванов И. И.»).
     @Published var status = ""
+
+    /// QR-код не найден в журнале — нужно войти заново.
+    @Published var needsLogin = false
 
     private var session: NFCTagReaderSession?
 
     func start() {
         guard NFCTagReaderSession.readingAvailable else {
             status = "NFC на этом iPhone недоступен"
+            return
+        }
+        guard let token = prefs.string(forKey: keyToken), !token.isEmpty else {
+            needsLogin = true
             return
         }
         status = ""
@@ -78,27 +87,21 @@ final class MarkModel: NSObject, ObservableObject, NFCTagReaderSessionDelegate {
                 session.invalidate(errorMessage: "Это не телефон преподавателя")
                 return
             }
-            self.sendIdentity(tag: tag, session: session, allowRelogin: true)
+            self.sendToken(tag: tag, session: session)
         }
     }
 
-    private func sendIdentity(tag: NFCISO7816Tag, session: NFCTagReaderSession, allowRelogin: Bool) {
-        guard let login = prefs.string(forKey: keyLogin),
-              let password = prefs.string(forKey: keyPassword) else {
-            session.invalidate(errorMessage: "Сначала войдите по логину и паролю")
+    /// Отправляет код студента и id устройства — логина и пароля больше нет.
+    private func sendToken(tag: NFCISO7816Tag, session: NFCTagReaderSession) {
+        guard let token = prefs.string(forKey: keyToken), !token.isEmpty else {
+            session.invalidate(errorMessage: "Сначала войдите по QR-коду")
             return
         }
 
-        let device = deviceId()
-        var type: UInt8 = 1
-        var payload = login + "\n" + password + "\n" + device
-        if let token = prefs.string(forKey: keyToken), !token.isEmpty {
-            type = 2
-            payload = token + "\n" + device
-        }
+        let payload = token + "\n" + deviceId()
         let command = NFCISO7816APDU(instructionClass: 0x00, instructionCode: 0x10,
                                      p1Parameter: 0x00, p2Parameter: 0x00,
-                                     data: Data([type] + Array(payload.utf8)),
+                                     data: Data(payload.utf8),
                                      expectedResponseLength: 256)
         tag.sendCommand(apdu: command) { [weak self] data, sw1, sw2, error in
             guard let self, error == nil, sw1 == 0x90, sw2 == 0x00, !data.isEmpty else {
@@ -109,24 +112,23 @@ final class MarkModel: NSObject, ObservableObject, NFCTagReaderSessionDelegate {
             let value = String(data: data.dropFirst(), encoding: .utf8) ?? ""
 
             switch result {
-            case 0 where !value.isEmpty:
-                prefs.set(value, forKey: keyToken)
-                self.finish(session: session, message: "Готово! Вы отмечены")
-            case 1:
+            case 0:
+                // отмечен: дальше имя студента
                 self.finish(session: session,
                             message: value.isEmpty ? "Вы отмечены" : "Вы отмечены — \(value)")
             case 2:
-                DispatchQueue.main.async { self.status = "Неверный логин или пароль" }
-                session.invalidate(errorMessage: "Неверный логин или пароль")
-            case 3 where allowRelogin:
-                // сессия устарела — этим же касанием перелогинимся
-                prefs.removeObject(forKey: keyToken)
-                self.sendIdentity(tag: tag, session: session, allowRelogin: false)
+                // кода нет в журнале: стираем его и просим войти заново
+                DispatchQueue.main.async {
+                    prefs.removeObject(forKey: keyToken)
+                    self.needsLogin = true
+                }
+                session.invalidate(errorMessage: "Такого QR-кода нет в журнале — войдите заново")
             case 5:
-                DispatchQueue.main.async { self.status = "Аккаунт привязан к другому телефону" }
-                session.invalidate(errorMessage: "Аккаунт привязан к другому телефону")
+                DispatchQueue.main.async { self.status = "Этот телефон привязан к другому студенту" }
+                session.invalidate(errorMessage: "Этот телефон привязан к другому студенту")
             default:
-                session.invalidate(errorMessage: "Не получилось, попробуйте ещё раз")
+                DispatchQueue.main.async { self.status = "Не получилось: перекличка не идёт" }
+                session.invalidate(errorMessage: "Не получилось: перекличка не идёт")
             }
         }
     }
@@ -148,19 +150,31 @@ struct ContentView: View {
     @State private var showLogin = false
 
     private var loggedIn: Bool {
-        (prefs.string(forKey: keyLogin) ?? "").isEmpty == false
+        !(prefs.string(forKey: keyToken) ?? "").isEmpty
+    }
+
+    private var studentName: String {
+        prefs.string(forKey: keyName) ?? ""
     }
 
     var body: some View {
         VStack(spacing: 18) {
-            if showLogin || !loggedIn {
-                LoginView(done: { showLogin = false })
+            if showLogin || !loggedIn || nfc.needsLogin {
+                LoginView(done: {
+                    showLogin = false
+                    nfc.needsLogin = false
+                    nfc.status = ""
+                })
             } else {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 84))
-                    .foregroundColor(Color(red: 0.29, green: 0.78, blue: 0.42))
+                    .foregroundColor(green)
                 Text("Visits11")
                     .font(.title.bold())
+                if !studentName.isEmpty {
+                    Text(studentName)
+                        .font(.headline)
+                }
                 Text(nfc.status.isEmpty ? "Отметка на паре" : nfc.status)
                     .font(.body)
                     .multilineTextAlignment(.center)
@@ -175,7 +189,7 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, minHeight: 52)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(Color(red: 0.29, green: 0.78, blue: 0.42))
+                .tint(green)
                 .padding(.top, 8)
 
                 Button("Сменить студента") {
@@ -188,45 +202,40 @@ struct ContentView: View {
     }
 }
 
+/// Вход: логина и пароля нет — только QR-код (камерой или из галереи).
 struct LoginView: View {
     var done: () -> Void
 
-    @State private var login = ""
-    @State private var password = ""
     @State private var showQrPicker = false
+    @State private var showCamera = false
     @State private var qrMessage: String?
 
     var body: some View {
         VStack(spacing: 14) {
             Text("Вход")
                 .font(.title.bold())
-            TextField("Логин", text: $login)
-                .textFieldStyle(.roundedBorder)
-                .autocapitalization(.none)
-                .disableAutocorrection(true)
-            SecureField("Пароль", text: $password)
-                .textFieldStyle(.roundedBorder)
+            Text("Отсканируйте свой QR-код или выберите картинку из галереи")
+                .font(.footnote)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+
             Button {
-                guard !login.trimmingCharacters(in: .whitespaces).isEmpty, !password.isEmpty else { return }
-                prefs.set(login.trimmingCharacters(in: .whitespaces), forKey: keyLogin)
-                prefs.set(password, forKey: keyPassword)
-                prefs.removeObject(forKey: keyToken)
-                done()
+                qrMessage = nil
+                showCamera = true
             } label: {
-                Text("Войти")
+                Text("Сканировать QR-код")
                     .font(.headline)
                     .frame(maxWidth: .infinity, minHeight: 52)
             }
             .buttonStyle(.borderedProminent)
+            .tint(green)
             .padding(.top, 8)
 
-            // Вход по картинке из галереи: преподаватель присылает студенту
-            // его QR-код, студент сохраняет картинку и выбирает её здесь.
             Button {
                 qrMessage = nil
                 showQrPicker = true
             } label: {
-                Text("Войти по QR из галереи")
+                Text("Загрузить из галереи")
                     .font(.headline)
                     .frame(maxWidth: .infinity, minHeight: 52)
             }
@@ -240,26 +249,37 @@ struct LoginView: View {
             }
         }
         .sheet(isPresented: $showQrPicker) {
-            PhotoPicker(onPick: importQr, onFinish: { showQrPicker = false })
+            PhotoPicker(onPick: importImage, onFinish: { showQrPicker = false })
+        }
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraScanner(onCode: importCode, onCancel: { showCamera = false })
         }
     }
 
-    /// Картинка с QR-кодом из галереи: распознаём, сохраняем логин с паролем и входим.
-    private func importQr(_ image: UIImage) {
+    /// Код, распознанный камерой.
+    private func importCode(_ text: String) {
+        showCamera = false
+        apply(text)
+    }
+
+    /// Картинка из галереи: распознаём в фоне, чтобы не подвешивать интерфейс.
+    private func importImage(_ image: UIImage) {
         qrMessage = "Читаю QR-код…"
         DispatchQueue.global(qos: .userInitiated).async {
             let text = QrImageDecoder.text(from: image)
-            DispatchQueue.main.async {
-                guard let text, let credentials = StudentQrCredentials.parse(text) else {
-                    qrMessage = "В этой картинке нет кода для входа"
-                    return
-                }
-                prefs.set(credentials.login, forKey: keyLogin)
-                prefs.set(credentials.password, forKey: keyPassword)
-                prefs.removeObject(forKey: keyToken)
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-                done()
-            }
+            DispatchQueue.main.async { apply(text) }
         }
+    }
+
+    /// Общий шаг для обоих способов: сохраняем код студента — это и есть вход.
+    private func apply(_ text: String?) {
+        guard let text, let credentials = StudentQrCredentials.parse(text) else {
+            qrMessage = "В этой картинке нет кода для входа"
+            return
+        }
+        prefs.set(credentials.token, forKey: keyToken)
+        prefs.set(credentials.name, forKey: keyName)
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        done()
     }
 }
