@@ -177,12 +177,19 @@ public final class TeacherCardService extends HostApduService {
     }
 
     private static String extractString(String json, String key) {
-        String marker = "\"" + key + "\":\"";
-        int start = json.indexOf(marker);
-        if (start < 0) {
+        String marker = "\"" + key + "\":";
+        int at = json.indexOf(marker);
+        if (at < 0) {
             return null;
         }
-        start += marker.length();
+        at += marker.length();
+        while (at < json.length() && Character.isWhitespace(json.charAt(at))) {
+            at++;
+        }
+        if (at >= json.length() || json.charAt(at) != '"') {
+            return null;
+        }
+        int start = at + 1;
         int end = json.indexOf('"', start);
         if (end < 0) {
             return null;

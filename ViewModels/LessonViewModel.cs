@@ -63,6 +63,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
 
     private DispatcherTimer? _resetTimer;
     private string _lessonStartedAt = string.Empty;
+    private bool _savingLesson;
 
     public LessonViewModel(DatabaseService database, ToastService toasts, PhoneLink phone)
     {
@@ -114,6 +115,23 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
             return Reply(id, ReplyUnavailable, string.Empty);
         }
 
+        try
+        {
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher is not null && !dispatcher.CheckAccess())
+            {
+                return dispatcher.Invoke(() => ProcessNfcTap(id, token, device));
+            }
+            return ProcessNfcTap(id, token, device);
+        }
+        catch
+        {
+            return Reply(id, ReplyUnavailable, string.Empty);
+        }
+    }
+
+    private string ProcessNfcTap(long id, string token, string device)
+    {
         var student = token.Length == 0 ? null : _database.FindByQrToken(token);
         if (student is null)
         {
@@ -138,9 +156,16 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
     /// <summary>Отметка студента по id (NFC «телефон к телефону») или ручным кликом.</summary>
     private (bool Ok, bool DeviceBlocked, string Name) MarkStudentInternal(int studentId, string device)
     {
-        if (RollcallState != StateActive) return (false, false, string.Empty);
         var row = Rows.FirstOrDefault(r => r.StudentId == studentId);
         if (row is null) return (false, false, string.Empty);
+
+        // если последний студент только что закрыл перекличку и его телефон ещё не убрали —
+        // повторно подтверждаем его же отметку
+        if (RollcallState == StateFinished && row.IsPresent)
+        {
+            return (true, false, row.FullName);
+        }
+        if (RollcallState != StateActive) return (false, false, string.Empty);
 
         // отметка с чужого телефона не проходит
         if (device.Length > 0)
@@ -164,12 +189,13 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
             }
         }
 
+        var fullName = row.FullName;
         if (!row.IsPresent)
         {
+            _toasts.Success("Отмечен", fullName);
             MarkRow(row);
-            _toasts.Success("Отмечен", row.FullName);
         }
-        return (true, false, row.FullName);
+        return (true, false, fullName);
     }
 
     /// <summary>Телефон студента пытались использовать для отметки другого — подсвечиваем его строку.</summary>
@@ -332,14 +358,23 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
     private void Finish()
     {
         var now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+        RollcallState = StateFinished;
+
         if (SelectedGroup is not null)
         {
-            var lessonId = _database.AddLesson(SelectedGroup.Id, _lessonStartedAt, now);
-            _database.AddAttendance(lessonId, Rows.Select(r =>
-                (r.StudentId, r.IsPresent, r.MarkedAt ?? now)));
+            var snapshot = Rows.Select(r => (r.StudentId, r.IsPresent, r.MarkedAt ?? now)).ToList();
+            _savingLesson = true;
+            try
+            {
+                var lessonId = _database.AddLesson(SelectedGroup.Id, _lessonStartedAt, now);
+                _database.AddAttendance(lessonId, snapshot);
+            }
+            finally
+            {
+                _savingLesson = false;
+            }
         }
 
-        RollcallState = StateFinished;
         _toasts.Success("Перекличка завершена", $"Присутствуют {PresentCount} из {Rows.Count}.");
 
         _resetTimer?.Stop();
@@ -376,6 +411,8 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
 
     private void OnDataChanged()
     {
+        if (_savingLesson) return;
+
         // снимок отметок ДО перезагрузки (ReloadGroups сам сбрасывает список)
         var marked = Rows.Where(r => r.IsPresent).ToDictionary(r => r.StudentId, r => r.MarkedAt);
 

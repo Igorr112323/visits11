@@ -17,6 +17,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
@@ -101,6 +102,9 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
 
     /** true — NFC есть: отметка «телефон к телефону», сеть не нужна вовсе. */
     private boolean useNfc;
+
+    /** Момент последней успешной отметки: не даёт отрыву руки затереть «Вы отмечены». */
+    private volatile long lastMarkedAt;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
 
@@ -704,6 +708,11 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
     /** Приложили телефон к телефону преподавателя: отправляем код студента. */
     @Override
     public void onTagDiscovered(Tag tag) {
+        // после успешной отметки 5 секунд игнорируем повторные касания,
+        // чтобы при отведении руки обрыв NFC-поля не затёр «Вы отмечены» ошибкой
+        if (lastMarkedAt > 0 && SystemClock.elapsedRealtime() - lastMarkedAt < 5000) {
+            return;
+        }
         IsoDep isoDep = IsoDep.get(tag);
         if (isoDep == null) {
             return;
@@ -738,7 +747,9 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
             String value = new String(answer, 1, answer.length - 3, StandardCharsets.UTF_8);
             handleReply(result, value);
         } catch (Throwable ignored) {
-            ui.post(() -> setStatus("Не получилось, попробуйте ещё раз"));
+            if (lastMarkedAt == 0 || SystemClock.elapsedRealtime() - lastMarkedAt >= 5000) {
+                ui.post(() -> setStatus("Не получилось, попробуйте ещё раз"));
+            }
         } finally {
             try {
                 isoDep.close();
@@ -750,6 +761,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
     /** Ответ телефона преподавателя: показываем результат и вибрируем при успехе. */
     private void handleReply(int result, String value) {
         if (result == REPLY_MARKED) {
+            lastMarkedAt = SystemClock.elapsedRealtime();
             vibrate();
             ui.post(() -> setStatus(value.isEmpty() ? "Вы отмечены" : "Вы отмечены — " + value));
             return;

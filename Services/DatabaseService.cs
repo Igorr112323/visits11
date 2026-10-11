@@ -248,7 +248,16 @@ public sealed class DatabaseService
         return command.ExecuteScalar() as string;
     }
 
-    private void RaiseDataChanged() => DataChanged?.Invoke();
+    private void RaiseDataChanged()
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess())
+        {
+            dispatcher.Invoke(() => DataChanged?.Invoke());
+            return;
+        }
+        DataChanged?.Invoke();
+    }
 
     // ------------------------------------------------------------------ группы
 
@@ -482,5 +491,6 @@ public sealed class DatabaseService
             command.ExecuteNonQuery();
         }
         transaction.Commit();
+        RaiseDataChanged();
     }
 }

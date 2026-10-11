@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
+using System.Windows;
 
 namespace Visits11.Services;
 
@@ -208,7 +209,7 @@ public sealed class PhoneLink : IDisposable
                 if (request.Length == 0) continue;
 
                 var handler = NfcRelay;
-                var result = handler is not null ? handler(request) : "{\"code\":4}";
+                var result = handler is not null ? InvokeOnUi(handler, request) : "{\"code\":4}";
 
                 using var content = new StringContent(result, Encoding.UTF8, "application/json");
                 await client.PostAsync($"http://{host}:{Port}/event_result", content, token);
@@ -297,6 +298,23 @@ public sealed class PhoneLink : IDisposable
         var fastSet = new HashSet<string>(cleanFast);
         var cleanSubnets = subnets.Where(t => !own.Contains(t) && !fastSet.Contains(t)).Distinct().ToList();
         return (cleanFast, cleanSubnets);
+    }
+
+    private static string InvokeOnUi(Func<string, string> handler, string request)
+    {
+        try
+        {
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher is null || dispatcher.CheckAccess())
+            {
+                return handler(request);
+            }
+            return dispatcher.Invoke(() => handler(request));
+        }
+        catch
+        {
+            return "{\"code\":4}";
+        }
     }
 
     private static uint ToUint(byte[] bytes)
