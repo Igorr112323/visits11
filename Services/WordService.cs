@@ -9,7 +9,7 @@ using Visits11.Models;
 namespace Visits11.Services;
 
 /// <summary>
-/// Импорт и экспорт списков студентов / журнала в формате Word (.docx).
+/// Импорт списков студентов и экспорт журнала в формате Word (.docx).
 /// </summary>
 public sealed class WordService
 {
@@ -161,26 +161,6 @@ public sealed class WordService
     }
 
     // ----------------------------------------------------------------- экспорт
-
-    public void ExportStudents(string path, IReadOnlyList<Student> students)
-    {
-        using var document = WordprocessingDocument.Create(path, WordprocessingDocumentType.Document);
-        var mainPart = document.AddMainDocumentPart();
-        var doc = new Document();
-        var body = new Body();
-        doc.Append(body);
-        mainPart.Document = doc;
-
-        var table = CreateTable("№", "ФИО", "Логин", "Пароль");
-        for (var i = 0; i < students.Count; i++)
-        {
-            table.Append(CreateRow(
-                new[] { (i + 1).ToString(), students[i].FullName, students[i].Login, students[i].Password },
-                new[] { 2, 3 }));
-        }
-        body.Append(table);
-        document.Save();
-    }
 
     public void ExportLesson(string path, string title, IReadOnlyList<LessonDetail> rows)
     {

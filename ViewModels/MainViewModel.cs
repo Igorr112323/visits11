@@ -13,16 +13,15 @@ public sealed class MainViewModel : ObservableObject
         DatabaseService database,
         ToastService toasts,
         ThemeService theme,
-        AuthService auth,
         WordService word,
-        PhoneServer server,
-        CameraLink camera)
+        QrExportService qrExport,
+        PhoneLink phone)
     {
         _theme = theme;
         Toasts = toasts;
 
-        Lesson = new LessonViewModel(database, toasts, server, camera);
-        Students = new StudentsViewModel(database, toasts, auth, word, this);
+        Lesson = new LessonViewModel(database, toasts, phone);
+        Students = new StudentsViewModel(database, toasts, word, qrExport, this);
         Journal = new JournalViewModel(database, toasts, word);
 
         ToggleThemeCommand = new RelayCommand(_ => _theme.Toggle());

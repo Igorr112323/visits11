@@ -47,9 +47,7 @@ public sealed class DatabaseService
               Id INTEGER PRIMARY KEY AUTOINCREMENT,
               GroupId INTEGER NOT NULL,
               FullName TEXT NOT NULL,
-              Login TEXT NOT NULL UNIQUE,
-              Password TEXT NOT NULL,
-              PhoneId TEXT NULL,
+              QrToken TEXT NOT NULL UNIQUE,
               DeviceId TEXT NULL,
               FOREIGN KEY (GroupId) REFERENCES Groups(Id) ON DELETE CASCADE
             );
@@ -72,24 +70,118 @@ public sealed class DatabaseService
               FOREIGN KEY (StudentId) REFERENCES Students(Id) ON DELETE CASCADE
             );
 
-            CREATE TABLE IF NOT EXISTS Sessions (
-              Token TEXT PRIMARY KEY,
-              StudentId INTEGER NOT NULL
-            );
             """;
         command.ExecuteNonQuery();
 
-        // привязка аккаунта к устройству (для старых баз — добавляем колонку)
-        try
+        // Таблица сессий осталась от версии с логинами и паролями — она больше не нужна
+        using (var drop = connection.CreateCommand())
         {
-            using var alter = connection.CreateCommand();
-            alter.CommandText = "ALTER TABLE Students ADD COLUMN DeviceId TEXT NULL";
-            alter.ExecuteNonQuery();
+            drop.CommandText = "DROP TABLE IF EXISTS Sessions;";
+            drop.ExecuteNonQuery();
         }
-        catch
+
+        MigrateStudentsWithoutCredentials(connection);
+    }
+
+    /// <summary>
+    /// Базы прошлых версий хранили логин и пароль — теперь вместо них постоянный
+    /// код QR. Таблицу Students пересобираем: Id, ФИО и привязки к телефонам
+    /// сохраняются, каждому студенту выдаётся код, отметки не теряются.
+    /// </summary>
+    private static void MigrateStudentsWithoutCredentials(SqliteConnection connection)
+    {
+        if (!ColumnExists(connection, "Login")) return; // колонки логина нет — база уже новой версии
+
+        // старые базы могли не иметь привязки к телефону
+        EnsureColumn(connection, "DeviceId", "TEXT NULL");
+
+        var preserved = new List<(long Id, long GroupId, string FullName, string? DeviceId)>();
+        using (var read = connection.CreateCommand())
         {
-            // колонка уже есть
+            read.CommandText = "SELECT Id, GroupId, FullName, DeviceId FROM Students";
+            using var reader = read.ExecuteReader();
+            while (reader.Read())
+            {
+                preserved.Add((
+                    reader.GetInt64(0),
+                    reader.GetInt64(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3)));
+            }
         }
+
+        // !!! С выключенными внешними ключами: иначе DROP TABLE Students
+        // каскадом удалил бы все отметки из Attendance
+        using (var pragma = connection.CreateCommand())
+        {
+            pragma.CommandText = "PRAGMA foreign_keys=OFF";
+            pragma.ExecuteNonQuery();
+        }
+
+        using (var transaction = connection.BeginTransaction())
+        {
+            using (var create = connection.CreateCommand())
+            {
+                create.CommandText = """
+                    CREATE TABLE Students_new (
+                      Id INTEGER PRIMARY KEY AUTOINCREMENT,
+                      GroupId INTEGER NOT NULL,
+                      FullName TEXT NOT NULL,
+                      QrToken TEXT NOT NULL UNIQUE,
+                      DeviceId TEXT NULL,
+                      FOREIGN KEY (GroupId) REFERENCES Groups(Id) ON DELETE CASCADE
+                    );
+                    """;
+                create.ExecuteNonQuery();
+            }
+
+            foreach (var student in preserved)
+            {
+                using var insert = connection.CreateCommand();
+                insert.Transaction = transaction;
+                insert.CommandText = """
+                    INSERT INTO Students_new (Id, GroupId, FullName, QrToken, DeviceId)
+                    VALUES (@id, @groupId, @fullName, @token, @deviceId);
+                    """;
+                insert.Parameters.AddWithValue("@id", student.Id);
+                insert.Parameters.AddWithValue("@groupId", student.GroupId);
+                insert.Parameters.AddWithValue("@fullName", student.FullName);
+                insert.Parameters.AddWithValue("@token", AuthService.GenerateQrToken());
+                insert.Parameters.AddWithValue("@deviceId", (object?)student.DeviceId ?? DBNull.Value);
+                insert.ExecuteNonQuery();
+            }
+
+            using (var swap = connection.CreateCommand())
+            {
+                swap.Transaction = transaction;
+                swap.CommandText = "DROP TABLE Students; ALTER TABLE Students_new RENAME TO Students;";
+                swap.ExecuteNonQuery();
+            }
+
+            transaction.Commit();
+        }
+
+        using var back = connection.CreateCommand();
+        back.CommandText = "PRAGMA foreign_keys=ON";
+        back.ExecuteNonQuery();
+    }
+
+    /// <summary>Есть ли колонка в таблице Students.</summary>
+    private static bool ColumnExists(SqliteConnection connection, string column)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM pragma_table_info('Students') WHERE name = @name";
+        command.Parameters.AddWithValue("@name", column);
+        return Convert.ToInt64(command.ExecuteScalar()) > 0;
+    }
+
+    /// <summary>Добавляет колонку, если её ещё нет (старые базы).</summary>
+    private static void EnsureColumn(SqliteConnection connection, string column, string definition)
+    {
+        if (ColumnExists(connection, column)) return;
+        using var command = connection.CreateCommand();
+        command.CommandText = $"ALTER TABLE Students ADD COLUMN {column} {definition}";
+        command.ExecuteNonQuery();
     }
 
     /// <summary>Устройство, к которому привязан аккаунт студента (null — ещё не привязан).</summary>
@@ -111,6 +203,18 @@ public sealed class DatabaseService
         command.Parameters.AddWithValue("@device", deviceId);
         command.Parameters.AddWithValue("@id", studentId);
         command.ExecuteNonQuery();
+        RaiseDataChanged();
+    }
+
+    /// <summary>Сбрасывает привязку телефона у студента (чтобы он мог войти с нового устройства).</summary>
+    public void ResetDeviceId(int studentId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE Students SET DeviceId = NULL WHERE Id = @id";
+        command.Parameters.AddWithValue("@id", studentId);
+        command.ExecuteNonQuery();
+        RaiseDataChanged();
     }
 
     /// <summary>Студент, к чьему аккаунту привязано устройство; null — устройство неизвестно.</summary>
@@ -123,12 +227,12 @@ public sealed class DatabaseService
         return command.ExecuteScalar() is long value ? (int)value : null;
     }
 
-    /// <summary>Удаляет студента вместе с его отметками и сессией телефона.</summary>
+    /// <summary>Удаляет студента вместе с его отметками.</summary>
     public void DeleteStudent(int studentId)
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM Sessions WHERE StudentId = @id; DELETE FROM Students WHERE Id = @id";
+        command.CommandText = "DELETE FROM Students WHERE Id = @id";
         command.Parameters.AddWithValue("@id", studentId);
         command.ExecuteNonQuery();
         RaiseDataChanged();
@@ -140,7 +244,7 @@ public sealed class DatabaseService
         using var connection = Open();
         using var command = connection.CreateCommand();
         command.CommandText =
-            "DELETE FROM Sessions WHERE StudentId IN (SELECT Id FROM Students WHERE GroupId = @id); DELETE FROM Groups WHERE Id = @id";
+            "DELETE FROM Groups WHERE Id = @id";
         command.Parameters.AddWithValue("@id", groupId);
         command.ExecuteNonQuery();
         RaiseDataChanged();
@@ -156,33 +260,16 @@ public sealed class DatabaseService
         return command.ExecuteScalar() as string;
     }
 
-    /// <summary>Токены сессий студентов — переживают перезапуск приложения.</summary>
-    public Dictionary<string, int> LoadSessions()
+    private void RaiseDataChanged()
     {
-        var result = new Dictionary<string, int>();
-        using var connection = Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Token, StudentId FROM Sessions";
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess())
         {
-            result[reader.GetString(0)] = reader.GetInt32(1);
+            dispatcher.Invoke(() => DataChanged?.Invoke());
+            return;
         }
-        return result;
+        DataChanged?.Invoke();
     }
-
-    /// <summary>Сохраняет выданный токен сессии.</summary>
-    public void SaveSession(string token, int studentId)
-    {
-        using var connection = Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = "INSERT OR REPLACE INTO Sessions (Token, StudentId) VALUES (@token, @studentId)";
-        command.Parameters.AddWithValue("@token", token);
-        command.Parameters.AddWithValue("@studentId", studentId);
-        command.ExecuteNonQuery();
-    }
-
-    private void RaiseDataChanged() => DataChanged?.Invoke();
 
     // ------------------------------------------------------------------ группы
 
@@ -241,7 +328,7 @@ public sealed class DatabaseService
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Id, GroupId, FullName, Login, Password, PhoneId FROM Students WHERE GroupId = @id ORDER BY Id";
+        command.CommandText = "SELECT Id, GroupId, FullName, QrToken, DeviceId FROM Students WHERE GroupId = @id ORDER BY Id";
         command.Parameters.AddWithValue("@id", groupId);
         using var reader = command.ExecuteReader();
         var list = new List<Student>();
@@ -252,21 +339,20 @@ public sealed class DatabaseService
                 Id = reader.GetInt32(0),
                 GroupId = reader.GetInt32(1),
                 FullName = reader.GetString(2),
-                Login = reader.GetString(3),
-                Password = reader.GetString(4),
-                PhoneId = reader.IsDBNull(5) ? null : reader.GetString(5),
+                QrToken = reader.GetString(3),
+                DeviceId = reader.IsDBNull(4) ? null : reader.GetString(4),
             });
         }
         return list;
     }
 
-    /// <summary>Студент по логину (для входа в приложении студента) или null.</summary>
-    public Student? FindByLogin(string login)
+    /// <summary>Студент по коду из QR-кода (единственный вход в приложении) или null.</summary>
+    public Student? FindByQrToken(string token)
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Id, GroupId, FullName, Login, Password, PhoneId FROM Students WHERE Login = @login COLLATE NOCASE LIMIT 1";
-        command.Parameters.AddWithValue("@login", login);
+        command.CommandText = "SELECT Id, GroupId, FullName, QrToken, DeviceId FROM Students WHERE QrToken = @token LIMIT 1";
+        command.Parameters.AddWithValue("@token", token);
         using var reader = command.ExecuteReader();
         if (!reader.Read()) return null;
         return new Student
@@ -274,18 +360,9 @@ public sealed class DatabaseService
             Id = reader.GetInt32(0),
             GroupId = reader.GetInt32(1),
             FullName = reader.GetString(2),
-            Login = reader.GetString(3),
-            Password = reader.GetString(4),
-            PhoneId = reader.IsDBNull(5) ? null : reader.GetString(5),
+            QrToken = reader.GetString(3),
+            DeviceId = reader.IsDBNull(4) ? null : reader.GetString(4),
         };
-    }
-
-    public bool LoginExists(string login)
-    {
-        using var connection = Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT COUNT(*) FROM Students WHERE Login = @login COLLATE NOCASE";
-        command.Parameters.AddWithValue("@login", login);        return Convert.ToInt64(command.ExecuteScalar()) > 0;
     }
 
     public void AddStudent(Student student)
@@ -293,15 +370,13 @@ public sealed class DatabaseService
         using var connection = Open();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO Students (GroupId, FullName, Login, Password, PhoneId)
-            VALUES (@groupId, @fullName, @login, @password, @phoneId);
+            INSERT INTO Students (GroupId, FullName, QrToken)
+            VALUES (@groupId, @fullName, @token);
             SELECT last_insert_rowid();
             """;
         command.Parameters.AddWithValue("@groupId", student.GroupId);
         command.Parameters.AddWithValue("@fullName", student.FullName);
-        command.Parameters.AddWithValue("@login", student.Login);
-        command.Parameters.AddWithValue("@password", student.Password);
-        command.Parameters.AddWithValue("@phoneId", (object?)student.PhoneId ?? DBNull.Value);
+        command.Parameters.AddWithValue("@token", student.QrToken);
         student.Id = Convert.ToInt32(command.ExecuteScalar());
         RaiseDataChanged();
     }
@@ -312,36 +387,22 @@ public sealed class DatabaseService
         using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
         command.CommandText = """
-            INSERT INTO Students (GroupId, FullName, Login, Password, PhoneId)
-            VALUES (@groupId, @fullName, @login, @password, @phoneId);
+            INSERT INTO Students (GroupId, FullName, QrToken)
+            VALUES (@groupId, @fullName, @token);
             """;
         var pGroupId = command.Parameters.Add("@groupId", SqliteType.Integer);
         var pFullName = command.Parameters.Add("@fullName", SqliteType.Text);
-        var pLogin = command.Parameters.Add("@login", SqliteType.Text);
-        var pPassword = command.Parameters.Add("@password", SqliteType.Text);
-        var pPhoneId = command.Parameters.Add("@phoneId", SqliteType.Text);
+        var pToken = command.Parameters.Add("@token", SqliteType.Text);
 
         foreach (var student in students)
         {
             pGroupId.Value = student.GroupId;
             pFullName.Value = student.FullName;
-            pLogin.Value = student.Login;
-            pPassword.Value = student.Password;
-            pPhoneId.Value = (object?)student.PhoneId ?? DBNull.Value;
+            pToken.Value = student.QrToken;
             command.ExecuteNonQuery();
         }
         transaction.Commit();
         RaiseDataChanged();
-    }
-
-    public void UpdateStudentPhoneId(int studentId, string phoneId)
-    {
-        using var connection = Open();
-        using var command = connection.CreateCommand();
-        command.CommandText = "UPDATE Students SET PhoneId = @phoneId WHERE Id = @id";
-        command.Parameters.AddWithValue("@phoneId", phoneId);
-        command.Parameters.AddWithValue("@id", studentId);
-        command.ExecuteNonQuery();
     }
 
     // ---------------------------------------------------------------- занятия
@@ -442,5 +503,6 @@ public sealed class DatabaseService
             command.ExecuteNonQuery();
         }
         transaction.Commit();
+        RaiseDataChanged();
     }
 }

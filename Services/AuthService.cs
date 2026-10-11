@@ -4,13 +4,11 @@ using System.Text;
 namespace Visits11.Services;
 
 /// <summary>
-/// Генерация логинов (транслит Фамилия_ИО), паролей и ID телефона.
+/// Служебные генераторы: код студента для QR-кода (заменяет логин и пароль)
+/// и транслитерация (нужна, чтобы QR-код оставался ASCII-текстом).
 /// </summary>
 public sealed class AuthService
 {
-    private const string PasswordAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    private const string HexAlphabet = "0123456789ABCDEF";
-
     private static readonly Dictionary<string, string> Translit = new()
     {
         ["а"] = "a", ["б"] = "b", ["в"] = "v", ["г"] = "g", ["д"] = "d",
@@ -43,63 +41,15 @@ public sealed class AuthService
         return builder.ToString();
     }
 
-    private static string Clean(string text)
-    {
-        var builder = new StringBuilder(text.Length);
-        foreach (var ch in text)
-        {
-            if (char.IsAsciiLetterOrDigit(ch)) builder.Append(ch);
-        }
-        return builder.ToString();
-    }
-
     /// <summary>
-    /// Логин вида ARHIPOV_II (Фамилия + инициалы имени и отчества).
-    /// Если логин занят — добавляется числовой суффикс.
+    /// Код студента для QR-кода: 128 бит случайности в base64url (22 символа).
+    /// Логина и пароля в системе больше нет — вход выполняет этот код,
+    /// а от передачи чужого QR защищает привязка к телефону (DeviceId).
     /// </summary>
-    public string GenerateLogin(string fullName, Func<string, bool> loginExists)
-    {
-        var words = fullName.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var surname = words.Length > 0 ? Clean(Transliterate(words[0])).ToUpperInvariant() : "STUDENT";
-        if (surname.Length == 0) surname = "STUDENT";
+    public static string GenerateQrToken()
+        => Convert.ToBase64String(RandomNumberGenerator.GetBytes(16))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
 
-        var initials = new StringBuilder();
-        foreach (var word in words.Skip(1))
-        {
-            var letter = Clean(Transliterate(word[0].ToString())).ToUpperInvariant();
-            if (letter.Length > 0) initials.Append(letter[0]);
-        }
-
-        var baseLogin = initials.Length > 0 ? $"{surname}_{initials}" : surname;
-        if (!loginExists(baseLogin)) return baseLogin;
-
-        for (var i = 2; i < 1000; i++)
-        {
-            var candidate = $"{baseLogin}{i}";
-            if (!loginExists(candidate)) return candidate;
-        }
-        return $"{baseLogin}{RandomNumberGenerator.GetInt32(1000, 9999)}";
-    }
-
-    /// <summary>Пароль: 10 символов из алфавита без неоднозначных символов.</summary>
-    public static string GeneratePassword()
-    {
-        var chars = new char[10];
-        for (var i = 0; i < chars.Length; i++)
-        {
-            chars[i] = PasswordAlphabet[RandomNumberGenerator.GetInt32(PasswordAlphabet.Length)];
-        }
-        return new string(chars);
-    }
-
-    /// <summary>ID телефона в формате XXXX-XXXX-XXXX (12 hex-символов).</summary>
-    public static string GeneratePhoneId()
-    {
-        var chars = new char[12];
-        for (var i = 0; i < chars.Length; i++)
-        {
-            chars[i] = HexAlphabet[RandomNumberGenerator.GetInt32(HexAlphabet.Length)];
-        }
-        return $"{new string(chars, 0, 4)}-{new string(chars, 4, 4)}-{new string(chars, 8, 4)}";
-    }
 }

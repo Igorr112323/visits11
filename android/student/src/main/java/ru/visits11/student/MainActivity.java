@@ -1,11 +1,15 @@
 package ru.visits11.student;
 
 import android.app.Activity;
+import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.ImageFormat;
+import android.hardware.Camera;
+import android.net.Uri;
 import android.nfc.NfcAdapter;
 import android.nfc.Tag;
 import android.nfc.tech.IsoDep;
@@ -13,78 +17,94 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
+import android.provider.MediaStore;
 import android.provider.Settings;
+import android.util.Base64;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.Button;
-import android.widget.EditText;
-import android.widget.ImageView;
+import android.widget.FrameLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.io.ByteArrayOutputStream;
+import com.google.zxing.BarcodeFormat;
+import com.google.zxing.BinaryBitmap;
+import com.google.zxing.DecodeHintType;
+import com.google.zxing.LuminanceSource;
+import com.google.zxing.MultiFormatReader;
+import com.google.zxing.PlanarYUVLuminanceSource;
+import com.google.zxing.RGBLuminanceSource;
+import com.google.zxing.common.HybridBinarizer;
+
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.Inet4Address;
-import java.net.InetAddress;
-import java.net.NetworkInterface;
-import java.net.URL;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Enumeration;
+import java.util.Collections;
+import java.util.EnumMap;
 import java.util.List;
-import java.util.Locale;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.zip.CRC32;
 
 /**
- * Приложение студента: первый запуск — логин и пароль, дальше открываешь
- * приложение, прикладываешь телефон к телефону преподавателя — отметка ставится.
- * NFC не нужен ни Wi-Fi, ни интернет. Телефонам без NFC — фолбэк Wi-Fi+QR:
- * код генерирует ПК каждые 5 секунд, снимок экрана бесполезен (~10 секунд жизни).
+ * Приложение студента. Логина и пароля нет: вход один раз по QR-коду —
+ * навести камеру («Сканировать QR-код») или выбрать картинку из галереи
+ * («Загрузить из галереи»). Дальше отметка — прикладывание телефона
+ * к телефону преподавателя (NFC). Интернет и Wi-Fi приложению не нужны:
+ * разрешения INTERNET у него нет вовсе.
+ *
+ * Камера работает внутри этого же окна (системная камера + ZXing) — никаких
+ * сторонних экранов и библиотек-сканеров: меньше деталей, которым можно сломаться.
  */
 public final class MainActivity extends Activity implements NfcAdapter.ReaderCallback {
 
     private static final String PREFS = "visits11student";
-    private static final String KEY_LOGIN = "login";
-    private static final String KEY_PASSWORD = "password";
-    private static final String KEY_HOST = "host";
     private static final String KEY_TOKEN = "token";
+    private static final String KEY_NAME = "name";
+
     private static final byte[] NFC_AID = {(byte) 0xF0, 0x39, 0x11, 0x01, 0x02, 0x03, 0x04};
-    private static final int PORT = 8090;
-    private static final long POLL_MS = 5000;
 
-    private static final int LOGIN_OK = 0;
-    private static final int LOGIN_REJECTED = 1;
-    private static final int LOGIN_NETWORK = 2;
+    /** Версия формата QR-кода студента — та же строка, что на ПК (Services/StudentQr.cs). */
+    private static final String QR_PREFIX = "V11S2";
 
-    private static final int QR_OK = 0;
-    private static final int QR_INACTIVE = 1; // перекличка не идёт
-    private static final int QR_STALE = 2;    // сессия устарела — перевойдём
-    private static final int QR_ERROR = 3;    // сети нет
+    /** Коды ответа телефона преподавателя. */
+    private static final int REPLY_MARKED = 0;         // + имя студента
+    private static final int REPLY_UNKNOWN_QR = 2;     // такого QR-кода нет в журнале
+    private static final int REPLY_UNAVAILABLE = 4;    // перекличка не идёт / нет связи с ПК
+    private static final int REPLY_DEVICE_BLOCKED = 5; // телефон привязан к другому студенту
 
-    private View loginPanel;
-    private EditText loginInput;
-    private EditText passwordInput;
-    private ImageView qrView;
+    private View entryPanel;
     private TextView statusText;
-    private View dot;
+    private FrameLayout scannerPanel;
+    private FrameLayout previewFrame;
+    private SurfaceView cameraPreview;
 
-    private volatile boolean running;
-    private Thread loopThread;
-    private volatile String token;
-    private volatile String host;
-    private volatile byte[] lastPng;
+    /** Камера-сканер внутри приложения: своя система координат вместо чужого экрана. */
+    private Camera camera;
+    private Thread decodeThread;
+    private volatile boolean cameraRunning;
+    private volatile int frameWidth;
+    private volatile int frameHeight;
+
+    /** Последний кадр камеры: в очереди всегда не больше одного — старые не нужны. */
+    private final ArrayBlockingQueue<byte[]> frames = new ArrayBlockingQueue<>(1);
+
+    private static final int REQ_PICK_QR = 41;
+    private static final int REQ_CAMERA = 42;
 
     /** true — NFC есть: отметка «телефон к телефону», сеть не нужна вовсе. */
     private boolean useNfc;
+
+    /** Момент последней успешной отметки: не даёт отрыву руки затереть «Вы отмечены». */
+    private volatile long lastMarkedAt;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
 
@@ -95,42 +115,31 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        // яркость на максимум — камере преподавателя проще считать код
-        WindowManager.LayoutParams attributes = getWindow().getAttributes();
-        attributes.screenBrightness = 1f;
-        getWindow().setAttributes(attributes);
 
-        loginPanel = findViewById(R.id.loginPanel);
-        loginInput = findViewById(R.id.loginInput);
-        passwordInput = findViewById(R.id.passwordInput);
-        qrView = findViewById(R.id.qrView);
+        entryPanel = findViewById(R.id.entryPanel);
         statusText = findViewById(R.id.statusText);
-        dot = findViewById(R.id.dot);
-        Button loginButton = findViewById(R.id.loginButton);
+        scannerPanel = findViewById(R.id.scannerPanel);
+        previewFrame = findViewById(R.id.previewFrame);
+        cameraPreview = findViewById(R.id.cameraPreview);
+        Button scanButton = findViewById(R.id.scanButton);
+        Button galleryButton = findViewById(R.id.galleryButton);
 
-        loginButton.setOnClickListener(v -> {
-            String login = loginInput.getText().toString().trim();
-            String password = passwordInput.getText().toString();
-            if (login.isEmpty() || password.isEmpty()) {
-                toast("Введите логин и пароль");
-                return;
-            }
-            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
-                    .putString(KEY_LOGIN, login)
-                    .putString(KEY_PASSWORD, password)
-                    .remove(KEY_TOKEN)
-                    .apply();
-            token = null;
-            if (useNfc) {
-                updateNfcStatus();
-            } else {
-                wake();
-            }
-        });
+        // камера включается, когда её окно уже на экране, и гаснет вместе с ним
+        cameraPreview.getHolder().addCallback(surfaceCallback);
+        findViewById(R.id.cancelScanButton).setOnClickListener(v -> closeScanner(null));
 
-        // смена студента — только долгим нажатием (чтобы не открыть случайно)
+        // два и только два способа входа: камера и картинка из галереи
+        scanButton.setOnClickListener(v -> scanWithCamera());
+        galleryButton.setOnClickListener(v -> pickQrImage());
+
+        // смена студента — долгим нажатием (чтобы не открыть случайно)
         statusText.setOnLongClickListener(v -> {
-            loginPanel.setVisibility(View.VISIBLE);
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .remove(KEY_TOKEN)
+                    .remove(KEY_NAME)
+                    .apply();
+            showEntry();
+            toast("Отсканируйте QR-код студента");
             return true;
         });
         // выключенный NFC — по нажатию открываем настройки
@@ -145,13 +154,57 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         });
 
         useNfc = nfcSupported();
-        if (useNfc) {
-            dot.setVisibility(View.INVISIBLE);
-            updateNfcStatus();
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        updateScreen();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        updateScreen();
+        if (!useNfc) {
+            return;
+        }
+        try {
+            NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
+            if (adapter != null) {
+                adapter.enableReaderMode(this, this,
+                        NfcAdapter.FLAG_READER_NFC_A | NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK, null);
+            }
+        } catch (Throwable ignored) {
         }
     }
 
-    /** Уникальный ID устройства — аккаунт привязывается к первому телефону.</summary> */
+    @Override
+    protected void onPause() {
+        super.onPause();
+        // ушли с экрана — камера больше не нужна
+        stopCamera();
+        if (!useNfc) {
+            return;
+        }
+        try {
+            NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
+            if (adapter != null) {
+                adapter.disableReaderMode(this);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        stopCamera();
+    }
+
+    // ------------------------------------------------------------ экран
+
+    /** Уникальный ID устройства — аккаунт привязывается к первому телефону. */
     private String deviceId() {
         try {
             return Settings.Secure.ANDROID_ID;
@@ -166,86 +219,510 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
                 && NfcAdapter.getDefaultAdapter(this) != null;
     }
 
-    /** Экран NFC-режима: вход выполнен — ждём прикладывания телефона. */
-    private void updateNfcStatus() {
-        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-        boolean hasLogin = prefs.getString(KEY_LOGIN, null) != null;
-        if (hasLogin) {
-            NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
-            statusText.setText(adapter != null && !adapter.isEnabled()
-                    ? "Включите NFC в настройках телефона"
-                    : "Приложите телефон к телефону преподавателя");
-            statusText.setVisibility(View.VISIBLE);
-            qrView.setVisibility(View.GONE);
-            loginPanel.setVisibility(View.GONE);
+    private String storedToken() {
+        return getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_TOKEN, null);
+    }
+
+    private String storedName() {
+        String name = getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_NAME, null);
+        return name == null ? "" : name;
+    }
+
+    /** QR-код ещё не считан — показываем вход, иначе — «приложите телефон». */
+    private void updateScreen() {
+        if (storedToken() == null) {
+            showEntry();
+            return;
+        }
+
+        entryPanel.setVisibility(View.GONE);
+        statusText.setVisibility(View.VISIBLE);
+
+        NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
+        if (!useNfc) {
+            statusText.setText("Этот телефон без NFC — отметиться не получится");
+            return;
+        }
+        if (adapter == null || !adapter.isEnabled()) {
+            statusText.setText("Включите NFC в настройках телефона");
+            return;
+        }
+        String name = storedName();
+        statusText.setText(name.isEmpty()
+                ? "Приложите телефон к телефону преподавателя"
+                : name + "\nПриложите телефон к телефону преподавателя");
+    }
+
+    private void showEntry() {
+        entryPanel.setVisibility(View.VISIBLE);
+        statusText.setVisibility(View.GONE);
+    }
+
+    private void showReady() {
+        entryPanel.setVisibility(View.GONE);
+        statusText.setVisibility(View.VISIBLE);
+        updateScreen();
+    }
+
+    // ------------------------------------------------------------ камера
+
+    /** Вход сканированием: сначала разрешение на камеру, потом своя камера на экране. */
+    private void scanWithCamera() {
+        if (checkSelfPermission(android.Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{android.Manifest.permission.CAMERA}, REQ_CAMERA);
+            return;
+        }
+        openScanner();
+    }
+
+    /**
+     * Показывает экран сканирования. Камера живёт внутри этого же окна:
+     * системная камера плюс ZXing — ни сторонних экранов, ни чужих оформлений,
+     * которым можно сломаться на новом Android.
+     */
+    private void openScanner() {
+        if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
+            toast("На этом телефоне нет камеры — загрузите картинку из галереи");
+            return;
+        }
+        scannerPanel.setVisibility(View.VISIBLE);
+    }
+
+    private void closeScanner(String message) {
+        scannerPanel.setVisibility(View.GONE);
+        stopCamera();
+        if (message != null) {
+            toast(message);
+        }
+    }
+
+    /** Камера включается, когда её окно уже на экране, и гаснет вместе с ним. */
+    private final SurfaceHolder.Callback surfaceCallback = new SurfaceHolder.Callback() {
+        @Override
+        public void surfaceCreated(SurfaceHolder holder) {
+            if (scannerPanel.getVisibility() == View.VISIBLE) {
+                startCamera(holder);
+            }
+        }
+
+        @Override
+        public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+            sizePreview();
+        }
+
+        @Override
+        public void surfaceDestroyed(SurfaceHolder holder) {
+            stopCamera();
+        }
+    };
+
+    private void startCamera(SurfaceHolder holder) {
+        if (camera != null) {
+            return;
+        }
+        try {
+            Camera opened = Camera.open();
+            Camera.Parameters parameters = opened.getParameters();
+            parameters.setPreviewFormat(ImageFormat.NV21);
+
+            // кадр поменьше — распознавание быстрее: берём самый крупный до 1280 px
+            // (16:9 предпочтительнее: в портрете такое превью занимает экран целиком)
+            Camera.Size chosen = null;
+            Camera.Size widest = null;
+            List<Camera.Size> sizes = parameters.getSupportedPreviewSizes();
+            if (sizes != null) {
+                for (Camera.Size size : sizes) {
+                    if (size.width > 1280 || size.height > 1024) {
+                        continue;
+                    }
+                    boolean is16to9 = Math.abs((double) size.width / size.height - 16.0 / 9.0) < 0.03;
+                    if (is16to9 && (chosen == null || size.width * size.height > chosen.width * chosen.height)) {
+                        chosen = size;
+                    }
+                    if (widest == null || size.width * size.height > widest.width * widest.height) {
+                        widest = size;
+                    }
+                }
+            }
+            if (chosen == null) {
+                chosen = widest;
+            }
+            if (chosen != null) {
+                parameters.setPreviewSize(chosen.width, chosen.height);
+            }
+
+            List<String> focusModes = parameters.getSupportedFocusModes();
+            if (focusModes != null) {
+                if (focusModes.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE)) {
+                    parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE);
+                } else if (focusModes.contains(Camera.Parameters.FOCUS_MODE_AUTO)) {
+                    parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_AUTO);
+                }
+            }
+
+            opened.setParameters(parameters);
+            opened.setDisplayOrientation(90); // телефон держат портретом
+            opened.setPreviewDisplay(holder);
+
+            frameWidth = parameters.getPreviewSize().width;
+            frameHeight = parameters.getPreviewSize().height;
+
+            camera = opened;
+            cameraRunning = true;
+            camera.setPreviewCallback((data, source) -> {
+                if (cameraRunning) {
+                    frames.offer(data); // в очереди только свежий кадр, старые пропускаем
+                }
+            });
+            camera.startPreview();
+
+            decodeThread = new Thread(this::decodeLoop, "QrCamera");
+            decodeThread.start();
+            sizePreview();
+        } catch (Throwable error) {
+            stopCamera();
+            closeScanner("Камера не открылась — загрузите картинку из галереи");
+        }
+    }
+
+    private void stopCamera() {
+        cameraRunning = false;
+        frames.clear();
+
+        Camera current = camera;
+        camera = null;
+        if (current != null) {
+            try {
+                current.setPreviewCallback(null);
+            } catch (Throwable ignored) {
+            }
+            try {
+                current.stopPreview();
+            } catch (Throwable ignored) {
+            }
+            try {
+                current.release();
+            } catch (Throwable ignored) {
+            }
+        }
+
+        Thread worker = decodeThread;
+        decodeThread = null;
+        if (worker != null) {
+            worker.interrupt();
+        }
+        frameWidth = 0;
+        frameHeight = 0;
+    }
+
+    /**
+     * Подгоняет окно камеры под экран с сохранением пропорций: картинка не
+     * растягивается (иначе квадратный QR-код перестаёт распознаваться),
+     * а по краям остаются чёрные поля.
+     */
+    private void sizePreview() {
+        final int width = frameWidth;
+        final int height = frameHeight;
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+        previewFrame.post(() -> {
+            int targetWidth = previewFrame.getWidth();
+            int targetHeight = previewFrame.getHeight();
+            if (targetWidth == 0 || targetHeight == 0) {
+                return;
+            }
+            // кадр приходит «лёжа», а на экране повёрнут — стороны меняем местами
+            float scale = Math.min((float) targetWidth / height, (float) targetHeight / width);
+            ViewGroup.LayoutParams params = cameraPreview.getLayoutParams();
+            params.width = Math.round(height * scale);
+            params.height = Math.round(width * scale);
+            cameraPreview.setLayoutParams(params);
+        });
+    }
+
+    /** Кадры камеры разбираем в отдельном потоке, чтобы экран не подвисал. */
+    private void decodeLoop() {
+        Map<DecodeHintType, Object> hints = qrHints();
+        while (cameraRunning) {
+            byte[] frame;
+            try {
+                frame = frames.poll(200, TimeUnit.MILLISECONDS);
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            if (frame == null) {
+                continue;
+            }
+            int width = frameWidth;
+            int height = frameHeight;
+            if (width <= 0 || height <= 0) {
+                continue;
+            }
+            String text = decodeNv21(frame, width, height, hints);
+            if (text != null) {
+                final String payload = text;
+                ui.post(() -> {
+                    closeScanner(null);
+                    applyQrPayload(payload);
+                });
+                return;
+            }
+        }
+    }
+
+    /** QR на кадре камеры (формат NV21): яркость берётся из Y-плоскости кадра. */
+    private static String decodeNv21(byte[] frame, int width, int height, Map<DecodeHintType, Object> hints) {
+        try {
+            LuminanceSource source =
+                    new PlanarYUVLuminanceSource(frame, width, height, 0, 0, width, height, false);
+            return tryDecode(source, hints);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode != REQ_CAMERA) {
+            return;
+        }
+        if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
+            openScanner();
         } else {
-            loginPanel.setVisibility(View.VISIBLE);
-            statusText.setVisibility(View.GONE);
+            toast("Без камеры можно загрузить картинку из галереи");
+        }
+    }
+
+    // ------------------------------------------------------------ галерея
+
+    /**
+     * Открывает системный выбор картинки. Разрешения не нужны: картинку
+     * отдаёт сам системный пикер (Android 13+ — «выбор фото», ниже — «Документы»/галерея).
+     */
+    private void pickQrImage() {
+        try {
+            Intent intent;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                intent = new Intent(MediaStore.ACTION_PICK_IMAGES);
+            } else {
+                intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+            }
+            intent.setType("image/*");
+            startActivityForResult(intent, REQ_PICK_QR);
+        } catch (Throwable first) {
+            try {
+                startActivityForResult(
+                        new Intent(Intent.ACTION_GET_CONTENT).setType("image/*"), REQ_PICK_QR);
+            } catch (Throwable second) {
+                toast("Не нашлось приложения с галереей");
+            }
         }
     }
 
     @Override
-    protected void onStart() {
-        super.onStart();
-        if (useNfc) {
-            updateNfcStatus();
-            return; // NFC-режим: сеть не нужна, работает даже с закрытым приложением
-        }
-        running = true;
-        if (loopThread == null) {
-            loopThread = new Thread(this::loop, "Poll");
-            loopThread.start();
-        }
-    }
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
 
-    @Override
-    protected void onStop() {
-        super.onStop();
-        running = false;
-        wake();
-        loopThread = null;
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        if (!useNfc) {
+        // результат выбора картинки из галереи
+        if (requestCode != REQ_PICK_QR || resultCode != RESULT_OK || data == null) {
             return;
         }
-        updateNfcStatus();
-        try {
-            NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
-            if (adapter != null) {
-                adapter.enableReaderMode(this, this,
-                        NfcAdapter.FLAG_READER_NFC_A | NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK, null);
-            }
-        } catch (Throwable ignored) {
-        }
-    }
-
-    @Override
-    protected void onPause() {
-        super.onPause();
-        if (!useNfc) {
+        Uri uri = data.getData();
+        if (uri == null) {
             return;
         }
-        try {
-            NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
-            if (adapter != null) {
-                adapter.disableReaderMode(this);
+        // фото может быть большим: распознаём в фоне, интерфейс не подвисает
+        new Thread(() -> {
+            String text = null;
+            try {
+                text = readQrText(uri);
+            } catch (Throwable ignored) {
             }
-        } catch (Throwable ignored) {
+            final String payload = text;
+            ui.post(() -> applyQrPayload(payload));
+        }, "QrLogin").start();
+    }
+
+    // ------------------------------------------------------------ вход по QR
+
+    /** Применяет распознанный QR: сохраняет код студента — это и есть вход. */
+    private void applyQrPayload(String text) {
+        Credentials credentials = parsePayload(text);
+        if (credentials == null) {
+            toast("В этой картинке нет кода для входа");
+            return;
+        }
+
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putString(KEY_TOKEN, credentials.token)
+                .putString(KEY_NAME, credentials.name)
+                .apply();
+
+        showReady();
+        vibrate();
+        toast(credentials.name.isEmpty()
+                ? "Вход выполнен"
+                : "Вход выполнен: " + credentials.name);
+    }
+
+    /** Код студента и ФИО из QR-кода. */
+    private static final class Credentials {
+        final String token;
+        final String name;
+
+        Credentials(String token, String name) {
+            this.token = token;
+            this.name = name;
         }
     }
 
-    /** Приложили телефон к телефону преподавателя: обмен и отметка. */
+    /**
+     * Разбор содержимого QR (формат ПК, Services/StudentQr.cs):
+     * <pre>
+     *   V11S2.&lt;код&gt;.&lt;ФИО&gt;.&lt;CRC32&gt;   — поля в base64url
+     *   Student: Ivanov Ivan Ivanovich
+     *   Code: QVJISVBPVl9JSQ
+     * </pre>
+     * Читается только первая строка; строки ниже — для человека.
+     */
+    private static Credentials parsePayload(String text) {
+        if (text == null) {
+            return null;
+        }
+        int lineEnd = text.indexOf('\n');
+        String machine = (lineEnd >= 0 ? text.substring(0, lineEnd) : text).trim();
+
+        String[] parts = machine.split("\\.", -1);
+        if (parts.length != 4 || !QR_PREFIX.equals(parts[0])) {
+            return null;
+        }
+        String body = parts[0] + "." + parts[1] + "." + parts[2];
+        if (!crc32Hex(body).equalsIgnoreCase(parts[3])) {
+            return null;
+        }
+
+        String token = fromBase64Url(parts[1]);
+        String name = fromBase64Url(parts[2]);
+        if (token == null || token.isEmpty()) {
+            return null;
+        }
+        return new Credentials(token, name == null ? "" : name);
+    }
+
+    private static String fromBase64Url(String value) {
+        try {
+            byte[] bytes = Base64.decode(value, Base64.URL_SAFE | Base64.NO_WRAP | Base64.NO_PADDING);
+            return new String(bytes, StandardCharsets.UTF_8);
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    /** CRC32 (IEEE 802.3), 8 hex-символов — тот же алгоритм на ПК и на iPhone. */
+    private static String crc32Hex(String value) {
+        CRC32 crc = new CRC32();
+        crc.update(value.getBytes(StandardCharsets.UTF_8));
+        return String.format(java.util.Locale.ROOT, "%08x", crc.getValue());
+    }
+
+    // ------------------------------------------------------------ чтение картинки
+
+    /** Картинка из галереи → содержимое QR-кода (или null, если кода нет). */
+    private String readQrText(Uri uri) throws IOException {
+        Bitmap bitmap = loadBitmap(uri);
+        if (bitmap == null) {
+            return null;
+        }
+        try {
+            return decodeQr(bitmap);
+        } finally {
+            bitmap.recycle();
+        }
+    }
+
+    /** Картинка, ужатая до разумного размера: большие фото декодеру не нужны, а память едят. */
+    private Bitmap loadBitmap(Uri uri) throws IOException {
+        ContentResolver resolver = getContentResolver();
+
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        try (InputStream input = resolver.openInputStream(uri)) {
+            if (input == null) {
+                return null;
+            }
+            BitmapFactory.decodeStream(input, null, bounds);
+        }
+
+        int sample = 1;
+        while (bounds.outWidth / (sample * 2) >= 720 && bounds.outHeight / (sample * 2) >= 720) {
+            sample *= 2; // длинная сторона остаётся около 720–1400 px
+        }
+
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inSampleSize = sample;
+        try (InputStream input = resolver.openInputStream(uri)) {
+            return input == null ? null : BitmapFactory.decodeStream(input, null, options);
+        }
+    }
+
+    /** QR-код с картинки: обычный и «негатив» (скриншот тёмной темы — белое на чёрном). */
+    private static String decodeQr(Bitmap bitmap) {
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        if (width < 8 || height < 8) {
+            return null;
+        }
+        int[] pixels = new int[width * height];
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height);
+
+        Map<DecodeHintType, Object> hints = qrHints();
+
+        RGBLuminanceSource source = new RGBLuminanceSource(width, height, pixels);
+        String text = tryDecode(source, hints);
+        return text != null ? text : tryDecode(source.invert(), hints);
+    }
+
+    /** Что и как ищем в любом изображении: только QR-код, но старательно. */
+    private static Map<DecodeHintType, Object> qrHints() {
+        Map<DecodeHintType, Object> hints = new EnumMap<>(DecodeHintType.class);
+        hints.put(DecodeHintType.TRY_HARDER, Boolean.TRUE);
+        hints.put(DecodeHintType.POSSIBLE_FORMATS, Collections.singletonList(BarcodeFormat.QR_CODE));
+        return hints;
+    }
+
+    private static String tryDecode(LuminanceSource source, Map<DecodeHintType, Object> hints) {
+        try {
+            BinaryBitmap bitmap = new BinaryBitmap(new HybridBinarizer(source));
+            return new MultiFormatReader().decode(bitmap, hints).getText();
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    // ------------------------------------------------------------ NFC-отметка
+
+    /** Приложили телефон к телефону преподавателя: отправляем код студента. */
     @Override
     public void onTagDiscovered(Tag tag) {
+        // после успешной отметки 5 секунд игнорируем повторные касания,
+        // чтобы при отведении руки обрыв NFC-поля не затёр «Вы отмечены» ошибкой
+        if (lastMarkedAt > 0 && SystemClock.elapsedRealtime() - lastMarkedAt < 5000) {
+            return;
+        }
         IsoDep isoDep = IsoDep.get(tag);
         if (isoDep == null) {
             return;
         }
         try {
+            String token = storedToken();
+            if (token == null) {
+                return;
+            }
+
             isoDep.connect();
             isoDep.setTimeout(5000);
 
@@ -260,78 +737,59 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
                 return;
             }
 
-            SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-            String login = prefs.getString(KEY_LOGIN, null);
-            String password = prefs.getString(KEY_PASSWORD, null);
-            if (login == null || password == null) {
-                return;
-            }
-
-            String device = deviceId();
-            for (int attempt = 0; attempt < 2; attempt++) {
-                String token = prefs.getString(KEY_TOKEN, null);
-                byte[] identity = token != null
-                        ? nfcCommand((byte) 2, token + "\n" + device)
-                        : nfcCommand((byte) 1, login + "\n" + password + "\n" + device);
-                byte[] answer = isoDep.transceive(identity);
-                if (!apduOk(answer) || answer.length < 3) {
-                    ui.post(() -> setStatus("Не получилось, попробуйте ещё раз"));
-                    return;
-                }
-                int result = answer[0] & 0xFF;
-                String value = new String(answer, 1, answer.length - 3, StandardCharsets.UTF_8);
-
-                if (result == 0 && !value.isEmpty()) {
-                    // вход выполнен — сохраняем токен, отметка уже ушла на ПК
-                    prefs.edit().putString(KEY_TOKEN, value).apply();
-                    vibrate();
-                    ui.post(() -> setStatus("Готово! Вы отмечены"));
-                    return;
-                }
-                if (result == 1) {
-                    vibrate();
-                    ui.post(() -> setStatus(value.isEmpty() ? "Вы отмечены" : "Вы отмечены — " + value));
-                    return;
-                }
-                if (result == 3) {
-                    // сессия устарела — этим же касанием перелогинимся
-                    prefs.edit().remove(KEY_TOKEN).apply();
-                    continue;
-                }
-                if (result == 5) {
-                    ui.post(() -> setStatus("Аккаунт привязан к другому телефону"));
-                    return;
-                }
-                if (result == 2) {
-                    ui.post(() -> {
-                        setStatus("НЕВЕРНЫЙ ЛОГИН ИЛИ ПАРОЛЬ — введите другие и приложите телефон ещё раз");
-                        loginPanel.setVisibility(View.VISIBLE);
-                    });
-                    return;
-                }
-                // 4: перекличка не идёт или ПК недоступен
+            byte[] answer = isoDep.transceive(nfcCommand(token + "\n" + deviceId()));
+            if (!apduOk(answer) || answer.length < 3) {
                 ui.post(() -> setStatus("Не получилось, попробуйте ещё раз"));
                 return;
             }
+
+            int result = answer[0] & 0xFF;
+            String value = new String(answer, 1, answer.length - 3, StandardCharsets.UTF_8);
+            handleReply(result, value);
         } catch (Throwable ignored) {
-            ui.post(() -> setStatus("Не получилось, попробуйте ещё раз"));
+            if (lastMarkedAt == 0 || SystemClock.elapsedRealtime() - lastMarkedAt >= 5000) {
+                ui.post(() -> setStatus("Не получилось, попробуйте ещё раз"));
+            }
         } finally {
             try {
                 isoDep.close();
-            } catch (IOException ignored) {
+            } catch (Throwable ignored) {
             }
         }
     }
 
-    /** APDU «вот кто я»: [type][данные]. */
-    private static byte[] nfcCommand(byte type, String data) {
-        byte[] bytes = data.getBytes(StandardCharsets.UTF_8);
-        byte[] apdu = new byte[6 + bytes.length];
-        apdu[1] = 0x10;
-        apdu[4] = (byte) (1 + bytes.length);
-        apdu[5] = type;
-        System.arraycopy(bytes, 0, apdu, 6, bytes.length);
-        return apdu;
+    /** Ответ телефона преподавателя: показываем результат и вибрируем при успехе. */
+    private void handleReply(int result, String value) {
+        if (result == REPLY_MARKED) {
+            lastMarkedAt = SystemClock.elapsedRealtime();
+            vibrate();
+            ui.post(() -> setStatus(value.isEmpty() ? "Вы отмечены" : "Вы отмечены — " + value));
+            return;
+        }
+        if (result == REPLY_UNKNOWN_QR) {
+            // код не из журнала: стираем его и просим войти заново
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(KEY_TOKEN).apply();
+            ui.post(() -> {
+                showEntry();
+                toast("Такого QR-кода нет в журнале — войдите заново");
+            });
+            return;
+        }
+        if (result == REPLY_DEVICE_BLOCKED) {
+            ui.post(() -> setStatus("Этот телефон привязан к другому студенту"));
+            return;
+        }
+        ui.post(() -> setStatus("Не получилось: перекличка не идёт"));
+    }
+
+    /** APDU-команда 0x10 с кодом студента. */
+    private static byte[] nfcCommand(String data) {
+        byte[] payload = data.getBytes(StandardCharsets.UTF_8);
+        byte[] command = new byte[5 + payload.length];
+        command[1] = (byte) 0x10;
+        command[4] = (byte) payload.length;
+        System.arraycopy(payload, 0, command, 5, payload.length);
+        return command;
     }
 
     private static boolean apduOk(byte[] response) {
@@ -342,343 +800,49 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
 
     /** Заметная двойная вибрация — отметка прошла. */
     private void vibrate() {
-        try {
-            Vibrator vibrator;
-            if (Build.VERSION.SDK_INT >= 31) {
-                VibratorManager manager = (VibratorManager) getSystemService(VIBRATOR_MANAGER_SERVICE);
-                vibrator = manager != null ? manager.getDefaultVibrator() : null;
-            } else {
-                vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
-            }
-            if (vibrator != null && vibrator.hasVibrator()) {
-                vibrator.vibrate(VibrationEffect.createWaveform(new long[]{0, 90, 70, 90}, -1));
-            }
-        } catch (Throwable ignored) {
-        }
-    }
-
-    private void wake() {
-        Thread thread = loopThread;
-        if (thread != null) {
-            thread.interrupt();
-        }
-    }
-
-    // ------------------------------------------------------------ главный цикл
-
-    private void loop() {
-        while (running) {
+        Runnable pulse = () -> {
             try {
-                SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
-                String login = prefs.getString(KEY_LOGIN, null);
-                String password = prefs.getString(KEY_PASSWORD, null);
-
-                if (login == null || password == null) {
-                    setStatus("Войдите по логину и паролю");
-                    showLogin();
-                    dotRed();
-                    sleepQuietly(1000);
-                    continue;
+                if (statusText != null) {
+                    statusText.performHapticFeedback(
+                            android.view.HapticFeedbackConstants.LONG_PRESS,
+                            android.view.HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING);
                 }
-
-                if (host == null) {
-                    setStatus("Поиск ПК…");
-                    host = findHost(prefs);
-                }
-                if (host == null) {
-                    setStatus("Нет связи с ПК");
-                    dotRed();
-                    sleepQuietly(2000);
-                    continue;
-                }
-
-                if (token == null) {
-                    int code = login(host, login, password);
-                    if (code == LOGIN_REJECTED) {
-                        token = null;
-                        setStatus("НЕВЕРНЫЙ ЛОГИН ИЛИ ПАРОЛЬ — введите другие");
-                        showLogin();
-                        dotRed();
-                        sleepQuietly(1500);
-                        continue;
-                    }
-                    if (code != LOGIN_OK) {
-                        host = null;
-                        setStatus("Нет связи с ПК");
-                        dotRed();
-                        sleepQuietly(2000);
-                        continue;
-                    }
-                }
-
-                int qr = fetchQr(host, token);
-                if (qr == QR_OK) {
-                    showQr(lastPng);
-                    dotGreen();
-                } else if (qr == QR_INACTIVE) {
-                    setStatus("Перекличка не начата");
-                    dotGreen();
-                } else if (qr == QR_STALE) {
-                    token = null;
-                    continue; // сразу перевойдём тем же логином
-                } else {
-                    host = null;
-                    setStatus("Нет связи с ПК");
-                    dotRed();
-                }
-                sleepQuietly(POLL_MS);
             } catch (Throwable ignored) {
-                sleepQuietly(2000);
             }
-        }
-    }
-
-    // ------------------------------------------------------------ сеть
-
-    private int login(String server, String login, String password) {
-        HttpURLConnection connection = null;
-        try {
-            connection = (HttpURLConnection) new URL(
-                    "http://" + server + ":" + PORT + "/api/login").openConnection();
-            connection.setRequestMethod("POST");
-            connection.setDoOutput(true);
-            connection.setConnectTimeout(2500);
-            connection.setReadTimeout(2500);
-            byte[] body = ("{\"login\":\"" + escape(login)
-                    + "\",\"password\":\"" + escape(password)
-                    + "\",\"device\":\"" + escape(deviceId()) + "\"}")
-                    .getBytes(StandardCharsets.UTF_8);
-            connection.setFixedLengthStreamingMode(body.length);
-            connection.setRequestProperty("Content-Type", "application/json");
-            OutputStream output = connection.getOutputStream();
-            output.write(body);
-            output.flush();
-            output.close();
-
-            if (connection.getResponseCode() != 200) {
-                return LOGIN_NETWORK;
-            }
-            String response = readAll(connection.getInputStream(), 8192);
-            if (!response.contains("\"ok\":true")) {
-                return LOGIN_REJECTED;
-            }
-            String parsed = extractString(response, "token");
-            if (parsed == null || parsed.isEmpty()) {
-                return LOGIN_REJECTED;
-            }
-            token = parsed;
-            return LOGIN_OK;
-        } catch (IOException e) {
-            return LOGIN_NETWORK;
-        } finally {
-            if (connection != null) {
-                connection.disconnect();
-            }
-        }
-    }
-
-    private int fetchQr(String server, String session) {
-        HttpURLConnection connection = null;
-        try {
-            connection = (HttpURLConnection) new URL(
-                    "http://" + server + ":" + PORT + "/api/qr?token=" + session).openConnection();
-            connection.setConnectTimeout(2500);
-            connection.setReadTimeout(2500);
-            int code = connection.getResponseCode();
-            if (code == 200) {
-                byte[] png = readAllBytes(connection.getInputStream(), 1024 * 1024);
-                if (png.length == 0) {
-                    return QR_ERROR;
+            try {
+                Vibrator vibrator;
+                if (Build.VERSION.SDK_INT >= 31) {
+                    VibratorManager manager = (VibratorManager) getSystemService(VIBRATOR_MANAGER_SERVICE);
+                    vibrator = manager != null ? manager.getDefaultVibrator() : null;
+                } else {
+                    vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
                 }
-                lastPng = png;
-                return QR_OK;
-            }
-            if (code == 204) {
-                return QR_INACTIVE;
-            }
-            if (code == 401) {
-                return QR_STALE;
-            }
-            return QR_ERROR;
-        } catch (IOException e) {
-            return QR_ERROR;
-        } finally {
-            if (connection != null) {
-                connection.disconnect();
-            }
-        }
-    }
-
-    /** Поиск ПК: сначала сохранённый адрес, затем перебор своей подсети. */
-    private String findHost(SharedPreferences prefs) {
-        String cached = prefs.getString(KEY_HOST, null);
-        if (cached != null && ping(cached)) {
-            return cached;
-        }
-        List<String> targets = buildTargets();
-        if (targets.isEmpty()) {
-            return null;
-        }
-        ExecutorService pool = Executors.newFixedThreadPool(24);
-        try {
-            List<Future<String>> futures = new ArrayList<>();
-            for (String target : targets) {
-                futures.add(pool.submit(() -> ping(target) ? target : null));
-            }
-            for (Future<String> future : futures) {
-                try {
-                    String found = future.get(4, TimeUnit.SECONDS);
-                    if (found != null) {
-                        prefs.edit().putString(KEY_HOST, found).apply();
-                        return found;
-                    }
-                } catch (Exception ignored) {
+                if (vibrator != null && vibrator.hasVibrator()) {
+                    android.media.AudioAttributes attrs = new android.media.AudioAttributes.Builder()
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                            .build();
+                    VibrationEffect effect = VibrationEffect.createWaveform(
+                            new long[]{0, 220, 100, 260},
+                            new int[]{0, 255, 0, 255},
+                            -1);
+                    vibrator.vibrate(effect, attrs);
                 }
+            } catch (Throwable ignored) {
             }
-        } finally {
-            pool.shutdownNow();
-        }
-        return null;
-    }
-
-    private static boolean ping(String server) {
-        HttpURLConnection connection = null;
-        try {
-            connection = (HttpURLConnection) new URL(
-                    "http://" + server + ":" + PORT + "/api/ping").openConnection();
-            connection.setConnectTimeout(350);
-            connection.setReadTimeout(350);
-            if (connection.getResponseCode() != 200) {
-                return false;
-            }
-            return readAll(connection.getInputStream(), 512).contains("visits11-server");
-        } catch (IOException e) {
-            return false;
-        } finally {
-            if (connection != null) {
-                connection.disconnect();
-            }
-        }
-    }
-
-    /** Адреса своей Wi-Fi подсети /24 (кроме собственного) — строго локальная сеть. */
-    private static List<String> buildTargets() {
-        List<String> targets = new ArrayList<>();
-        List<String> own = new ArrayList<>();
-        try {
-            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
-            while (interfaces != null && interfaces.hasMoreElements()) {
-                NetworkInterface nic = interfaces.nextElement();
-                if (!nic.isUp() || nic.isLoopback()) {
-                    continue;
-                }
-                // только Wi-Fi: мобильный интернет не используется вовсе
-                String name = nic.getName().toLowerCase(Locale.ROOT);
-                if (!name.startsWith("wlan") && !name.startsWith("wifi")
-                        && !name.startsWith("ap") && !name.startsWith("swlan")) {
-                    continue;
-                }
-                Enumeration<InetAddress> addresses = nic.getInetAddresses();
-                while (addresses.hasMoreElements()) {
-                    InetAddress address = addresses.nextElement();
-                    if (!(address instanceof Inet4Address)) {
-                        continue;
-                    }
-                    String ip = address.getHostAddress();
-                    int lastDot = ip.lastIndexOf('.');
-                    if (lastDot < 0 || own.contains(ip)) {
-                        continue;
-                    }
-                    own.add(ip);
-                    String base = ip.substring(0, lastDot + 1);
-                    for (int i = 1; i <= 254; i++) {
-                        String candidate = base + i;
-                        if (!own.contains(candidate)) {
-                            targets.add(candidate);
-                        }
-                    }
-                }
-            }
-        } catch (Throwable ignored) {
-        }
-        return targets;
-    }
-
-    // ------------------------------------------------------------ утилиты
-
-    private static String readAll(InputStream input, int cap) throws IOException {
-        return new String(readAllBytes(input, cap), StandardCharsets.UTF_8);
-    }
-
-    private static byte[] readAllBytes(InputStream input, int cap) throws IOException {
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
-        byte[] buffer = new byte[8192];
-        int read;
-        while (output.size() < cap && (read = input.read(buffer)) > 0) {
-            output.write(buffer, 0, read);
-        }
-        return output.toByteArray();
-    }
-
-    private static String escape(String value) {
-        return value.replace("\\", "\\\\").replace("\"", "\\\"");
-    }
-
-    /** Значение строкового поля из простого JSON ответа. */
-    private static String extractString(String json, String key) {
-        String marker = "\"" + key + "\":\"";
-        int start = json.indexOf(marker);
-        if (start < 0) {
-            return null;
-        }
-        start += marker.length();
-        int end = json.indexOf('"', start);
-        if (end < 0) {
-            return null;
-        }
-        return json.substring(start, end);
-    }
-
-    private void sleepQuietly(long ms) {
-        try {
-            Thread.sleep(ms);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        };
+        ui.post(pulse);
+        ui.postDelayed(pulse, 140);
     }
 
     // ------------------------------------------------------------ интерфейс
-
-    private void showQr(byte[] png) {
-        final Bitmap bitmap = png == null ? null : BitmapFactory.decodeByteArray(png, 0, png.length);
-        ui.post(() -> {
-            if (bitmap != null) {
-                qrView.setImageBitmap(bitmap);
-                qrView.setVisibility(View.VISIBLE);
-                statusText.setVisibility(View.GONE);
-                loginPanel.setVisibility(View.GONE);
-            }
-        });
-    }
 
     private void setStatus(String text) {
         ui.post(() -> {
             statusText.setText(text);
             statusText.setVisibility(View.VISIBLE);
-            qrView.setVisibility(View.GONE);
+            entryPanel.setVisibility(View.GONE);
         });
-    }
-
-    private void showLogin() {
-        ui.post(() -> loginPanel.setVisibility(View.VISIBLE));
-    }
-
-    private void dotGreen() {
-        ui.post(() -> dot.setBackgroundResource(R.drawable.dot_green));
-    }
-
-    private void dotRed() {
-        ui.post(() -> dot.setBackgroundResource(R.drawable.dot_red));
     }
 
     private void toast(String message) {

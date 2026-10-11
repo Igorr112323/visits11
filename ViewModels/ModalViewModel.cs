@@ -1,14 +1,19 @@
+using System.Windows.Media;
+
 namespace Visits11.ViewModels;
 
 /// <summary>
 /// Модель модального окна. OnConfirm возвращает false, чтобы окно осталось открытым
-/// (например, при ошибке валидации).
+/// (например, при ошибке валидации). Image — необязательная картинка (QR-код студента).
 /// </summary>
 public sealed class ModalViewModel : ObservableObject
 {
     public string Title { get; init; } = string.Empty;
     public string? Message { get; init; }
     public bool ShowInput { get; init; }
+
+    /// <summary>Картинка окна (QR-код студента в окне «Показать QR-код»); null — окно без картинки.</summary>
+    public ImageSource? Image { get; init; }
     public string InputLabel { get; init; } = string.Empty;
     public string Placeholder { get; init; } = string.Empty;
     public string ConfirmText { get; init; } = "ОК";

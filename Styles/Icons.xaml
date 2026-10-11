@@ -21,6 +21,8 @@
 
     <StreamGeometry x:Key="Icon.Export">M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M17 8l-5-5-5 5 M12 3v12</StreamGeometry>
 
+    <StreamGeometry x:Key="Icon.Qr">M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M17 14v6 M14 17h6</StreamGeometry>
+
     <StreamGeometry x:Key="Icon.ChevronDown">M6 9l6 6 6-6</StreamGeometry>
 
     <StreamGeometry x:Key="Icon.Check">M20 6L9 17l-5-5</StreamGeometry>

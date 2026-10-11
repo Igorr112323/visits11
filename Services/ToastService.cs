@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Windows;
 using System.Windows.Threading;
 
 namespace Visits11.Services;
@@ -19,6 +20,8 @@ public sealed class Toast
 
 /// <summary>
 /// Уведомления в правом нижнем углу. Живут 3 секунды.
+/// Все изменения коллекции выполняются строго в потоке UI (Dispatcher),
+/// чтобы ItemsControl никогда не рассинхронизировался при вызовах из фоновых потоков.
 /// </summary>
 public sealed class ToastService
 {
@@ -33,6 +36,13 @@ public sealed class ToastService
 
     private void Add(ToastType type, string title, string message)
     {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess())
+        {
+            dispatcher.Invoke(() => Add(type, title, message));
+            return;
+        }
+
         var toast = new Toast { Type = type, Title = title, Message = message };
 
         if (Toasts.Count >= MaxToasts)

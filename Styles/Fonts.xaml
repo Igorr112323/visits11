@@ -7,7 +7,7 @@
     <FontFamily x:Key="Font.SemiBold">pack://application:,,,/Assets/Fonts/#Manrope SemiBold</FontFamily>
     <FontFamily x:Key="Font.ExtraBold">pack://application:,,,/Assets/Fonts/#Manrope ExtraBold</FontFamily>
 
-    <!-- Моноширинный для логинов/паролей/ID -->
+    <!-- Моноширинный для кодов студента и идентификаторов -->
     <FontFamily x:Key="Font.Mono">Consolas</FontFamily>
 
 </ResourceDictionary>

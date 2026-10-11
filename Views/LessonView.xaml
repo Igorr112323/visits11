@@ -33,6 +33,7 @@
                           IsEnabled="{Binding IsGroupSelectorEnabled}" />
 
                 <Button Grid.Row="2" Margin="0,12,0,0"
+                        Focusable="False"
                         Command="{Binding StartStopCommand}"
                         Content="{Binding ButtonText}">
                     <Button.Style>
