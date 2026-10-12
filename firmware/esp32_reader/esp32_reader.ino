@@ -21,8 +21,11 @@
 #define LEGACY_CHAR_UUID    "a9e81101-5631-3154-8000-00805f9b34fb"
 
 static const uint8_t PN_ADDR = 0x24;
-static const int PIN_SDA = 21;
-static const int PIN_SCL = 22;
+
+// Пины 5 и 6 на гребёнке со стороны VIN/GND (D14 и D27), плюс автоопределение порядка SDA/SCL
+static int activeSda = 27;
+static int activeScl = 14;
+
 static const uint8_t NFC_AID[7] = {0xF0, 0x39, 0x11, 0x01, 0x02, 0x03, 0x04};
 static const size_t NAME_CAP = 96;
 static const uint32_t PC_TIMEOUT_MS = 3000;
@@ -367,30 +370,62 @@ static int pnCommand(const uint8_t *c, uint8_t n, uint8_t *out, uint8_t cap, uin
   return pnReadResponse(c[0], out, cap, ms);
 }
 
-static bool pnBegin() {
-  uint8_t r[32];
-  for (int attempt = 0; attempt < 5; attempt++) {
-    pnAbort();
-    const uint8_t fw[] = {0x02};
-    if (pnCommand(fw, sizeof(fw), r, sizeof(r), 500) >= 4) {
-      const uint8_t sam[] = {0x14, 0x01, 0x14, 0x00};
-      if (pnCommand(sam, sizeof(sam), r, sizeof(r), 500) >= 0) {
-        // Включаем fAutomaticATR_RES (0x04) | fAutomaticRATS (0x10) | fISO14443-4_PICC (0x20)
-        const uint8_t params[] = {0x12, 0x34};
-        pnCommand(params, sizeof(params), r, sizeof(r), 300);
+static void initWirePins(int sda, int scl) {
+  Wire.end();
+  pinMode(sda, INPUT_PULLUP);
+  pinMode(scl, INPUT_PULLUP);
+  Wire.setBufferSize(256);
+  Wire.begin(sda, scl);
+  Wire.setClock(100000);
+  Wire.setTimeOut(100);
+}
 
-        // Максимальное усиление антенны и чувствительности PN532 (RFConfiguration 0x32, CfgItem 0x0A):
-        // RFCfg = 0x79 (макс. RxGain 48 dB), GsNOn = 0xFF, CWGsP = 0x3F,
-        // RxThreshold = 0x55 (высокая чувствительность), GsNOff = 0xFF (макс. отдача в режиме карты/Target)
-        const uint8_t rfMax[] = {
-          0x32, 0x0A,
-          0x79, 0xFF, 0x3F, 0x11, 0x4D, 0x55, 0x61, 0xFF, 0x26, 0x62, 0x87
-        };
-        pnCommand(rfMax, sizeof(rfMax), r, sizeof(r), 300);
-        return true;
-      }
+static bool pnTryInitOnCurrentPins() {
+  uint8_t r[32];
+  pnAbort();
+  const uint8_t fw[] = {0x02};
+  if (pnCommand(fw, sizeof(fw), r, sizeof(r), 300) >= 4) {
+    const uint8_t sam[] = {0x14, 0x01, 0x14, 0x00};
+    if (pnCommand(sam, sizeof(sam), r, sizeof(r), 300) >= 0) {
+      // Включаем fAutomaticATR_RES (0x04) | fAutomaticRATS (0x10) | fISO14443-4_PICC (0x20)
+      const uint8_t params[] = {0x12, 0x34};
+      pnCommand(params, sizeof(params), r, sizeof(r), 300);
+
+      // Максимальное усиление антенны и чувствительности PN532 (RFConfiguration 0x32, CfgItem 0x0A)
+      const uint8_t rfMax[] = {
+        0x32, 0x0A,
+        0x79, 0xFF, 0x3F, 0x11, 0x4D, 0x55, 0x61, 0xFF, 0x26, 0x62, 0x87
+      };
+      pnCommand(rfMax, sizeof(rfMax), r, sizeof(r), 300);
+      return true;
     }
-    vTaskDelay(pdMS_TO_TICKS(200));
+  }
+  return false;
+}
+
+static bool pnBegin() {
+  // Автоматически проверяем пины D14/D27 (в любом порядке SDA/SCL), а также D21/D22
+  static const int pairs[][2] = {
+    {27, 14}, // 6-й пин = SDA (D27), 5-й пин = SCL (D14)
+    {14, 27}, // 5-й пин = SDA (D14), 6-й пин = SCL (D27)
+    {21, 22}, // стандартные D21 / D22
+    {22, 21}
+  };
+
+  // Сначала пробуем последнюю успешную пару
+  initWirePins(activeSda, activeScl);
+  if (pnTryInitOnCurrentPins()) return true;
+
+  for (size_t i = 0; i < sizeof(pairs) / sizeof(pairs[0]); i++) {
+    int sda = pairs[i][0];
+    int scl = pairs[i][1];
+    initWirePins(sda, scl);
+    if (pnTryInitOnCurrentPins()) {
+      activeSda = sda;
+      activeScl = scl;
+      return true;
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
   }
   return false;
 }
@@ -517,10 +552,7 @@ void setup() {
   replySem = xSemaphoreCreateBinary();
   bleQueue = xQueueCreate(4, sizeof(BleJob));
   replyName[0] = 0;
-  Wire.setBufferSize(256);
-  Wire.begin(PIN_SDA, PIN_SCL);
-  Wire.setClock(100000);
-  Wire.setTimeOut(100);
+  initWirePins(activeSda, activeScl);
   xTaskCreatePinnedToCore(serialTask, "serial", 4096, nullptr, 3, nullptr, 0);
   xTaskCreatePinnedToCore(bleTask, "blejob", 6144, nullptr, 2, nullptr, 0);
   setupBle();
