@@ -58,9 +58,13 @@ public partial class App : Application
         if (!string.IsNullOrEmpty(processPath))
         {
             var name = Path.GetFileNameWithoutExtension(processPath);
-            if (string.Equals(name, "Visits11", StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(name, "dotnet", StringComparison.OrdinalIgnoreCase))
             {
-                return Path.GetDirectoryName(processPath)!;
+                var dir = Path.GetDirectoryName(processPath);
+                if (!string.IsNullOrEmpty(dir))
+                {
+                    return dir;
+                }
             }
         }
         return AppContext.BaseDirectory;

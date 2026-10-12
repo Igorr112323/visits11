@@ -1,17 +1,20 @@
+using System.IO.Ports;
 using System.Net;
 using System.Net.Http;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using System.Windows;
 
 namespace Visits11.Services;
 
 /// <summary>
-/// Связь с телефоном преподавателя по USB-кабелю («USB-модем»).
-/// ПК сам находит телефон и забирает NFC-касания студентов:
-/// GET /event (long-poll) → обработать → POST /event_result.
-/// Все соединения исходящие со стороны ПК — брандмауэр Windows ничего не блокирует.
+/// Связь с терминалом преподавателя по USB-кабелю:
+/// - В обычной сборке (KubGAU-Journal.exe) — телефон преподавателя («USB-модем»):
+///   GET /event (long-poll) → обработать → POST /event_result.
+/// - В сборке под плату (KubGAU-Journal-Plata.exe, USE_BOARD) — плата ESP32 + PN532 по USB Serial (COM-порт, 115200):
+///   PING → VISITS11-ESP32, TAP:&lt;id&gt;:&lt;token&gt;:&lt;device&gt; → REPLY:&lt;id&gt;:&lt;code&gt;:&lt;name&gt;.
 /// </summary>
 public sealed class PhoneLink : IDisposable
 {
@@ -20,6 +23,10 @@ public sealed class PhoneLink : IDisposable
     /// <summary>Признак телефона преподавателя в ответе GET /info.</summary>
     private const string Signature = "visits11-teacher";
     private const string LegacySignature = "visits11-camera";
+
+    /// <summary>Признак платы ESP32 в ответе на команду PING по USB Serial.</summary>
+    private const string BoardSignature = "VISITS11-ESP32";
+    private const int BoardBaudRate = 115200;
 
     /// <summary>Стандартные адреса USB-модема Android/iPhone — проверяются первыми за миллисекунды.</summary>
     private static readonly string[] PriorityUsbHosts =
@@ -35,14 +42,18 @@ public sealed class PhoneLink : IDisposable
     private CancellationTokenSource? _cts;
     private Task? _worker;
 
-    /// <summary>NFC-запрос с телефона (json) → ответ (json). Блокирующий, потокобезопасный.</summary>
+    /// <summary>NFC/BLE-запрос с терминала (json) → ответ (json). Блокирующий, потокобезопасный.</summary>
     public event Func<string, string>? NfcRelay;
 
     public void Start()
     {
         if (_worker is not null) return;
         _cts = new CancellationTokenSource();
+#if USE_BOARD
+        _worker = Task.Run(() => RunBoardSerialAsync(_cts.Token));
+#else
         _worker = Task.Run(() => RunAsync(_cts.Token));
+#endif
     }
 
     public void Dispose()
@@ -54,7 +65,311 @@ public sealed class PhoneLink : IDisposable
         _worker = null;
     }
 
-    // ------------------------------------------------------------- главный цикл
+    // ------------------------------------------------- связь с платой ESP32 (USB COM-порт)
+
+    private async Task RunBoardSerialAsync(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            SerialPort? port = null;
+            try
+            {
+                port = await DiscoverBoardPortAsync(token);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch
+            {
+                // ошибка при поиске порта — повторим на следующем шаге
+            }
+
+            if (port is null)
+            {
+                try { await Task.Delay(1000, token); } catch (OperationCanceledException) { break; }
+                continue;
+            }
+
+            try
+            {
+                await BoardEventStreamAsync(port, token);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch
+            {
+                // кабель выдернули или порт закрылся — ищем плату заново
+            }
+            finally
+            {
+                CloseSerialQuietly(port);
+            }
+
+            try { await Task.Delay(400, token); } catch (OperationCanceledException) { break; }
+        }
+    }
+
+    /// <summary>
+    /// Перебирает COM-порты Windows (начиная с верхних номеров, где обычно сидит USB-UART CP2102/CH340)
+    /// и находит плату ESP32 по рукопожатию PING → VISITS11-ESP32.
+    /// Открытый порт возвращается сразу (чтобы не перезагружать ESP32 повторным открытием DTR/RTS).
+    /// </summary>
+    private static async Task<SerialPort?> DiscoverBoardPortAsync(CancellationToken token)
+    {
+        string[] portNames;
+        try
+        {
+            portNames = SerialPort.GetPortNames()
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(ParseComNumber)
+                .ToArray();
+        }
+        catch
+        {
+            return null;
+        }
+
+        foreach (var portName in portNames)
+        {
+            if (token.IsCancellationRequested) return null;
+
+            SerialPort? port = null;
+            try
+            {
+                port = new SerialPort(portName, BoardBaudRate, Parity.None, 8, StopBits.One)
+                {
+                    Encoding = Encoding.UTF8,
+                    NewLine = "\n",
+                    ReadTimeout = 150,
+                    WriteTimeout = 500,
+                    DtrEnable = false,
+                    RtsEnable = false,
+                    Handshake = Handshake.None,
+                };
+                port.Open();
+
+                try
+                {
+                    port.DiscardInBuffer();
+                    port.DiscardOutBuffer();
+                }
+                catch { }
+
+                // На некоторых драйверах CP2102/CH340 открытие порта кратковременно дёргает DTR/RTS
+                // и перезагружает ESP32 (~350–450 мс до старта setup). Делаем до 3 попыток PING,
+                // не закрывая порт.
+                var collected = new StringBuilder();
+                var buffer = new byte[512];
+                var pingBytes = Encoding.ASCII.GetBytes("\nPING\n");
+
+                for (var attempt = 0; attempt < 3 && !token.IsCancellationRequested; attempt++)
+                {
+                    port.Write(pingBytes, 0, pingBytes.Length);
+
+                    var deadline = Environment.TickCount64 + 550;
+                    while (Environment.TickCount64 < deadline && !token.IsCancellationRequested)
+                    {
+                        try
+                        {
+                            var available = port.BytesToRead;
+                            if (available > 0)
+                            {
+                                var toRead = Math.Min(available, buffer.Length);
+                                var read = port.Read(buffer, 0, toRead);
+                                if (read > 0)
+                                {
+                                    collected.Append(Encoding.UTF8.GetString(buffer, 0, read));
+                                    if (collected.ToString().Contains(BoardSignature, StringComparison.Ordinal))
+                                    {
+                                        return port;
+                                    }
+                                }
+                            }
+                            else
+                            {
+                                await Task.Delay(20, token);
+                            }
+                        }
+                        catch (TimeoutException)
+                        {
+                            // ждём дальше
+                        }
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                CloseSerialQuietly(port);
+                throw;
+            }
+            catch
+            {
+                // порт занят или не отвечает — проверяем следующий
+            }
+
+            CloseSerialQuietly(port);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Читает строки TAP:&lt;id&gt;:&lt;token&gt;:&lt;device&gt; от платы ESP32, проверяет студента в журнале
+    /// и отправляет обратно строку REPLY:&lt;id&gt;:&lt;code&gt;:&lt;studentName&gt;\n.
+    /// </summary>
+    private async Task BoardEventStreamAsync(SerialPort port, CancellationToken token)
+    {
+        var lineBuffer = new List<byte>(512);
+        var readChunk = new byte[256];
+        var pingBytes = Encoding.ASCII.GetBytes("PING\n");
+
+        var lastRxAt = Environment.TickCount64;
+        var lastPingAt = Environment.TickCount64;
+
+        while (!token.IsCancellationRequested && port.IsOpen)
+        {
+            var available = port.BytesToRead;
+            if (available > 0)
+            {
+                var count = port.Read(readChunk, 0, Math.Min(available, readChunk.Length));
+                if (count > 0)
+                {
+                    lastRxAt = Environment.TickCount64;
+                    for (var i = 0; i < count; i++)
+                    {
+                        var b = readChunk[i];
+                        if (b == (byte)'\n')
+                        {
+                            if (lineBuffer.Count > 0)
+                            {
+                                var line = Encoding.UTF8.GetString(lineBuffer.ToArray()).TrimEnd('\r', ' ');
+                                lineBuffer.Clear();
+                                if (line.Length > 0)
+                                {
+                                    HandleBoardLine(port, line);
+                                }
+                            }
+                        }
+                        else if (b != (byte)'\r')
+                        {
+                            if (lineBuffer.Count < 4096)
+                            {
+                                lineBuffer.Add(b);
+                            }
+                            else
+                            {
+                                lineBuffer.Clear();
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+
+            var now = Environment.TickCount64;
+            if (now - lastRxAt > 8000)
+            {
+                // плата перестала отвечать на PING — переподключаемся
+                break;
+            }
+            if (now - lastRxAt > 3000 && now - lastPingAt > 2500)
+            {
+                lastPingAt = now;
+                port.Write(pingBytes, 0, pingBytes.Length);
+            }
+
+            await Task.Delay(10, token);
+        }
+    }
+
+    private void HandleBoardLine(SerialPort port, string line)
+    {
+        if (!line.StartsWith("TAP:", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        // Формат от платы: TAP:<id>:<token>:<device>
+        var rest = line.Substring(4);
+        var firstColon = rest.IndexOf(':');
+        if (firstColon <= 0) return;
+
+        var idPart = rest.Substring(0, firstColon);
+        if (!long.TryParse(idPart, out var id) || id <= 0) return;
+
+        var afterId = rest.Substring(firstColon + 1);
+        var secondColon = afterId.IndexOf(':');
+        string tapToken;
+        string tapDevice;
+        if (secondColon >= 0)
+        {
+            tapToken = afterId.Substring(0, secondColon);
+            tapDevice = afterId.Substring(secondColon + 1);
+        }
+        else
+        {
+            tapToken = afterId;
+            tapDevice = string.Empty;
+        }
+
+        var requestJson = JsonSerializer.Serialize(new
+        {
+            id,
+            token = tapToken,
+            device = tapDevice,
+        });
+
+        var handler = NfcRelay;
+        var resultJson = handler is not null ? InvokeOnUi(handler, requestJson) : "{\"code\":4}";
+
+        var replyCode = 4;
+        var replyName = string.Empty;
+        try
+        {
+            using var doc = JsonDocument.Parse(resultJson);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("code", out var codeProp) && codeProp.ValueKind == JsonValueKind.Number)
+            {
+                replyCode = codeProp.GetInt32();
+            }
+            if (root.TryGetProperty("value", out var valueProp) && valueProp.ValueKind == JsonValueKind.String)
+            {
+                replyName = valueProp.GetString() ?? string.Empty;
+            }
+        }
+        catch
+        {
+            replyCode = 4;
+            replyName = string.Empty;
+        }
+
+        replyName = replyName.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        var replyLine = $"REPLY:{id}:{replyCode}:{replyName}\n";
+        var replyBytes = Encoding.UTF8.GetBytes(replyLine);
+        port.Write(replyBytes, 0, replyBytes.Length);
+    }
+
+    private static int ParseComNumber(string portName)
+    {
+        if (portName.StartsWith("COM", StringComparison.OrdinalIgnoreCase) &&
+            int.TryParse(portName.AsSpan(3), out var num))
+        {
+            return num;
+        }
+        return 0;
+    }
+
+    private static void CloseSerialQuietly(SerialPort? port)
+    {
+        if (port is null) return;
+        try { if (port.IsOpen) port.Close(); } catch { }
+        try { port.Dispose(); } catch { }
+    }
+
+    // ------------------------------------------------------------- главный цикл (телефон)
 
     private async Task RunAsync(CancellationToken token)
     {
