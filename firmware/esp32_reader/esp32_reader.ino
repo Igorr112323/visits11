@@ -22,9 +22,10 @@
 
 static const uint8_t PN_ADDR = 0x24;
 
-// Пины на гребёнке со стороны VIN/GND (D12/D14 или D14/D27), плюс автоопределение порядка SDA/SCL
-static int activeSda = 14;
-static int activeScl = 12;
+// Пины на гребёнке со стороны VIN/GND (D14/D27), плюс автоопределение порядка пинов и режима (I2C или HSU UART)
+static int activePinA = 27;
+static int activePinB = 14;
+static bool useHsuUart = false;
 
 static const uint8_t NFC_AID[7] = {0xF0, 0x39, 0x11, 0x01, 0x02, 0x03, 0x04};
 static const size_t NAME_CAP = 96;
@@ -285,8 +286,30 @@ static void setupBle() {
   BLEDevice::startAdvertising();
 }
 
+static int hsuReadBytes(uint8_t *buf, int len, uint32_t ms) {
+  int got = 0;
+  uint32_t t0 = millis();
+  while (got < len) {
+    if (Serial2.available() > 0) {
+      buf[got++] = (uint8_t)Serial2.read();
+      t0 = millis();
+    } else {
+      if (ms && (millis() - t0) >= ms) break;
+      vTaskDelay(pdMS_TO_TICKS(1));
+    }
+  }
+  return got;
+}
+
 static bool pnWaitReady(uint32_t ms) {
   uint32_t t0 = millis();
+  if (useHsuUart) {
+    for (;;) {
+      if (Serial2.available() > 0) return true;
+      if (ms && (millis() - t0) >= ms) return false;
+      vTaskDelay(pdMS_TO_TICKS(2));
+    }
+  }
   for (;;) {
     if (Wire.requestFrom((uint16_t)PN_ADDR, (size_t)1) == 1) {
       if (Wire.read() & 0x01) return true;
@@ -298,6 +321,27 @@ static bool pnWaitReady(uint32_t ms) {
 
 static bool pnWriteFrame(const uint8_t *d, uint8_t n) {
   uint8_t len = n + 1;
+  if (useHsuUart) {
+    while (Serial2.available() > 0) Serial2.read();
+    uint8_t frame[64];
+    size_t idx = 0;
+    frame[idx++] = 0x00;
+    frame[idx++] = 0x00;
+    frame[idx++] = 0xFF;
+    frame[idx++] = len;
+    frame[idx++] = (uint8_t)(~len + 1);
+    frame[idx++] = 0xD4;
+    uint8_t sum = 0xD4;
+    for (uint8_t i = 0; i < n; i++) {
+      frame[idx++] = d[i];
+      sum += d[i];
+    }
+    frame[idx++] = (uint8_t)(~sum + 1);
+    frame[idx++] = 0x00;
+    Serial2.write(frame, idx);
+    Serial2.flush();
+    return true;
+  }
   Wire.beginTransmission(PN_ADDR);
   Wire.write((uint8_t)0x00);
   Wire.write((uint8_t)0x00);
@@ -316,18 +360,33 @@ static bool pnWriteFrame(const uint8_t *d, uint8_t n) {
 }
 
 static void pnAbort() {
+  const uint8_t ack[] = {0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00};
+  if (useHsuUart) {
+    Serial2.write(ack, sizeof(ack));
+    Serial2.flush();
+    vTaskDelay(pdMS_TO_TICKS(20));
+    while (Serial2.available() > 0) Serial2.read();
+    return;
+  }
   Wire.beginTransmission(PN_ADDR);
-  Wire.write((uint8_t)0x00);
-  Wire.write((uint8_t)0x00);
-  Wire.write((uint8_t)0xFF);
-  Wire.write((uint8_t)0x00);
-  Wire.write((uint8_t)0xFF);
-  Wire.write((uint8_t)0x00);
+  Wire.write(ack, sizeof(ack));
   Wire.endTransmission();
   vTaskDelay(pdMS_TO_TICKS(20));
 }
 
 static bool pnReadAck() {
+  if (useHsuUart) {
+    uint8_t a[16];
+    int n = hsuReadBytes(a, 6, 150);
+    if (n < 6) return false;
+    for (int i = 0; i + 5 < n; i++) {
+      if (a[i] == 0x00 && a[i + 1] == 0x00 && a[i + 2] == 0xFF &&
+          a[i + 3] == 0x00 && a[i + 4] == 0xFF && a[i + 5] == 0x00) {
+        return true;
+      }
+    }
+    return false;
+  }
   if (!pnWaitReady(100)) return false;
   uint8_t a[7];
   int n = Wire.requestFrom((uint16_t)PN_ADDR, (size_t)7);
@@ -337,6 +396,42 @@ static bool pnReadAck() {
 }
 
 static int pnReadResponse(uint8_t cmd, uint8_t *out, uint8_t cap, uint32_t ms) {
+  if (useHsuUart) {
+    if (!pnWaitReady(ms)) return -3;
+    uint8_t hdr[6];
+    uint8_t prev = 0xFF;
+    uint32_t t0 = millis();
+    bool foundStart = false;
+    while ((millis() - t0) < 200) {
+      if (Serial2.available() > 0) {
+        uint8_t b = (uint8_t)Serial2.read();
+        if (prev == 0x00 && b == 0xFF) {
+          foundStart = true;
+          break;
+        }
+        prev = b;
+      } else {
+        vTaskDelay(pdMS_TO_TICKS(1));
+      }
+    }
+    if (!foundStart) return -5;
+    if (hsuReadBytes(hdr, 2, 100) != 2) return -5;
+    uint8_t len = hdr[0];
+    uint8_t lcs = hdr[1];
+    if ((uint8_t)(len + lcs) != 0 || len < 2) return -6;
+    uint8_t body[128];
+    if (len + 2 > (int)sizeof(body)) return -7;
+    if (hsuReadBytes(body, len + 2, 150) < len + 2) return -7;
+    if (body[0] != 0xD5 || body[1] != (uint8_t)(cmd + 1)) return -8;
+    uint8_t sum = 0;
+    for (int i = 0; i < len; i++) sum += body[i];
+    if ((uint8_t)(sum + body[len]) != 0) return -9;
+    int dlen = len - 2;
+    if (dlen > cap) return -10;
+    memcpy(out, body + 2, dlen);
+    return dlen;
+  }
+
   if (!pnWaitReady(ms)) return -3;
   static uint8_t raw[128];
   int n = Wire.requestFrom((uint16_t)PN_ADDR, (size_t)sizeof(raw));
@@ -370,23 +465,44 @@ static int pnCommand(const uint8_t *c, uint8_t n, uint8_t *out, uint8_t cap, uin
   return pnReadResponse(c[0], out, cap, ms);
 }
 
-static void initWirePins(int sda, int scl) {
+static void initWirePins(int sda, int scl, uint32_t clockHz = 10000) {
+  Serial2.end();
   Wire.end();
+  useHsuUart = false;
   pinMode(sda, INPUT_PULLUP);
   pinMode(scl, INPUT_PULLUP);
   Wire.setBufferSize(256);
-  Wire.begin(sda, scl);
-  Wire.setClock(100000);
+  Wire.begin(sda, scl, clockHz);
   Wire.setTimeOut(100);
+  // Пробуждение PN532 из режима LowVbat по I2C (NXP AN10609 п. 2.4.2)
+  Wire.beginTransmission(PN_ADDR);
+  Wire.endTransmission();
+  vTaskDelay(pdMS_TO_TICKS(10));
+}
+
+static void initHsuPins(int rxPin, int txPin) {
+  Wire.end();
+  Serial2.end();
+  useHsuUart = true;
+  pinMode(rxPin, INPUT_PULLUP);
+  Serial2.setRxBufferSize(512);
+  Serial2.begin(115200, SERIAL_8N1, rxPin, txPin);
+  // Пробуждение PN532 из режима LowVbat по HSU UART (NXP UM0701-02 п. 6.3.2.3)
+  const uint8_t wake[] = {0x55, 0x55, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+  Serial2.write(wake, sizeof(wake));
+  Serial2.flush();
+  vTaskDelay(pdMS_TO_TICKS(15));
+  while (Serial2.available() > 0) Serial2.read();
 }
 
 static bool pnTryInitOnCurrentPins() {
   uint8_t r[32];
   pnAbort();
-  const uint8_t fw[] = {0x02};
-  if (pnCommand(fw, sizeof(fw), r, sizeof(r), 300) >= 4) {
-    const uint8_t sam[] = {0x14, 0x01, 0x14, 0x00};
-    if (pnCommand(sam, sizeof(sam), r, sizeof(r), 300) >= 0) {
+  // ВАЖНО: В режиме LowVbat первой командой обязательно должна идти SAMConfiguration (0x14)!
+  const uint8_t sam[] = {0x14, 0x01, 0x14, 0x00};
+  if (pnCommand(sam, sizeof(sam), r, sizeof(r), 300) >= 0) {
+    const uint8_t fw[] = {0x02};
+    if (pnCommand(fw, sizeof(fw), r, sizeof(r), 300) >= 4) {
       // Включаем fAutomaticATR_RES (0x04) | fAutomaticRATS (0x10) | fISO14443-4_PICC (0x20)
       const uint8_t params[] = {0x12, 0x34};
       pnCommand(params, sizeof(params), r, sizeof(r), 300);
@@ -404,30 +520,44 @@ static bool pnTryInitOnCurrentPins() {
 }
 
 static bool pnBegin() {
-  // Автоматически проверяем пины D12/D14, D14/D27 и D21/D22 (в любом порядке SDA/SCL)
+  // Автоматически проверяем пины D14/D27, D12/D14 и D21/D22 и в режиме HSU UART, и в режиме I2C (10 кГц / 100 кГц)
   static const int pairs[][2] = {
-    {14, 12}, // 5-й пин = D14, 4-й пин = D12 (как воткнуто на фото)
-    {12, 14}, // 4-й пин = D12, 5-й пин = D14
     {27, 14}, // 6-й пин = D27, 5-й пин = D14
     {14, 27}, // 5-й пин = D14, 6-й пин = D27
-    {21, 22}, // стандартные D21 / D22
+    {14, 12},
+    {12, 14},
+    {21, 22},
     {22, 21}
   };
 
-  // Сначала пробуем последнюю успешную пару
-  initWirePins(activeSda, activeScl);
-  if (pnTryInitOnCurrentPins()) return true;
-
   for (size_t i = 0; i < sizeof(pairs) / sizeof(pairs[0]); i++) {
-    int sda = pairs[i][0];
-    int scl = pairs[i][1];
-    initWirePins(sda, scl);
+    int a = pairs[i][0];
+    int b = pairs[i][1];
+
+    // 1. Проверяем HSU UART (переключатели SET0=L, SET1=L)
+    initHsuPins(a, b);
     if (pnTryInitOnCurrentPins()) {
-      activeSda = sda;
-      activeScl = scl;
+      activePinA = a;
+      activePinB = b;
       return true;
     }
-    vTaskDelay(pdMS_TO_TICKS(50));
+
+    // 2. Проверяем I2C на 10 кГц (работает с внутренней подтяжкой ESP32 на 8-пиновой гребёнке, SET0=H, SET1=L)
+    initWirePins(a, b, 10000);
+    if (pnTryInitOnCurrentPins()) {
+      activePinA = a;
+      activePinB = b;
+      return true;
+    }
+
+    // 3. Проверяем I2C на 100 кГц
+    initWirePins(a, b, 100000);
+    if (pnTryInitOnCurrentPins()) {
+      activePinA = a;
+      activePinB = b;
+      return true;
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
   }
   return false;
 }
@@ -554,7 +684,6 @@ void setup() {
   replySem = xSemaphoreCreateBinary();
   bleQueue = xQueueCreate(4, sizeof(BleJob));
   replyName[0] = 0;
-  initWirePins(activeSda, activeScl);
   xTaskCreatePinnedToCore(serialTask, "serial", 4096, nullptr, 3, nullptr, 0);
   xTaskCreatePinnedToCore(bleTask, "blejob", 6144, nullptr, 2, nullptr, 0);
   setupBle();
