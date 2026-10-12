@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <esp_system.h>
 
 static const int PIN_PN532_RX = 27;
 static const int PIN_PN532_TX = 14;
@@ -38,6 +39,43 @@ static uint32_t frameBad = 0;
 static uint32_t lastSummaryAt = 0;
 static bool dotLine = false;
 static uint32_t dotsOnLine = 0;
+
+static bool pnReady = false;
+static int pnRxPin = PIN_PN532_RX;
+static int pnTxPin = PIN_PN532_TX;
+static uint8_t pnIc = 0;
+static uint8_t pnVersion = 0;
+static uint8_t pnRevision = 0;
+static uint8_t pnSupport = 0;
+
+static const char *pnResetReasonText()
+{
+    switch (esp_reset_reason())
+    {
+        case ESP_RST_POWERON:
+            return "включение питания (норма)";
+        case ESP_RST_EXT:
+            return "сброс кнопкой EN / внешний (норма)";
+        case ESP_RST_SW:
+            return "сброс из программы (норма)";
+        case ESP_RST_PANIC:
+            return "авария программы (exception)";
+        case ESP_RST_INT_WDT:
+            return "сторожевой таймер прерываний";
+        case ESP_RST_TASK_WDT:
+            return "сторожевой таймер задачи";
+        case ESP_RST_WDT:
+            return "сторожевой таймер";
+        case ESP_RST_DEEPSLEEP:
+            return "выход из глубокого сна";
+        case ESP_RST_BROWNOUT:
+            return "ПРОСАДКА ПИТАНИЯ (brownout)";
+        case ESP_RST_SDIO:
+            return "сброс по SDIO";
+        default:
+            return "неизвестная причина";
+    }
+}
 
 static void stamp()
 {
@@ -278,6 +316,56 @@ static bool pnConfigure()
     return pnCommand(sam, 4, FRAME_TIMEOUT_MS) > 0;
 }
 
+static bool pnCheckModule(int rxPin, int txPin, uint8_t tries)
+{
+    PnSerial.end();
+    PnSerial.begin(PN532_BAUD, SERIAL_8N1, rxPin, txPin);
+    pnFlush();
+
+    for (uint8_t i = 0; i < tries; i++)
+    {
+        pnWakeup();
+        if (pnFirmware(&pnIc, &pnVersion, &pnRevision, &pnSupport))
+        {
+            pnRxPin = rxPin;
+            pnTxPin = txPin;
+            return true;
+        }
+        delay(100);
+    }
+    return false;
+}
+
+static bool pnStart(uint8_t tries)
+{
+    bool swapped = false;
+
+    if (!pnCheckModule(PIN_PN532_RX, PIN_PN532_TX, tries))
+    {
+        swapped = true;
+        if (!pnCheckModule(PIN_PN532_TX, PIN_PN532_RX, tries))
+        {
+            return false;
+        }
+    }
+
+    ackBad = 0;
+    stamp();
+    Serial.printf("PN532 найден: ic=0x%02X, версия=%u.%u, поддержка=0x%02X\n",
+                  pnIc, pnVersion, pnRevision, pnSupport);
+    stamp();
+    if (swapped)
+    {
+        Serial.printf("провода данных подключены наоборот: SDA/TX платы -> GPIO%d, SCL/RX платы -> GPIO%d\n",
+                      pnRxPin, pnTxPin);
+    }
+    else
+    {
+        Serial.printf("связь: SDA/TX платы -> GPIO%d, SCL/RX платы -> GPIO%d\n", pnRxPin, pnTxPin);
+    }
+    return true;
+}
+
 static int16_t pnArmTarget(uint32_t timeoutMs)
 {
     uint8_t cmd[38];
@@ -393,9 +481,13 @@ static void pnRelease()
 static void pnHint()
 {
     logText("PN532 не отвечает.");
-    logText("Проверьте: питание 3V3 (лучше 3V3, чем 5V) и GND, SDA/TX->GPIO27, SCL/RX->GPIO14,");
-    logText("переключатели на плате PN532 в положении HSU (оба OFF),");
-    logText("кабель в USB, в Arduino выбран порт ESP32 и скорость 115200.");
+    logText("Проверьте по порядку:");
+    logText("1) питание платы PN532: VCC -> 5V (на PN532 V3 нужен именно 5V), GND -> GND;");
+    logText("2) переключатели на плате PN532 в положении HSU (оба OFF);");
+    logText("3) провода данных: SDA/TX платы -> GPIO27, SCL/RX платы -> GPIO14 (скетч сам проверяет и обратный вариант);");
+    logText("4) USB-кабель с передачей данных и порт без разветвителя;");
+    logText("5) если строки лога повторяются с начала — плату ESP32 сбрасывает питание:");
+    logText("   отключите провода PN532 и посмотрите, прекратились ли перезапуски.");
 }
 
 static bool pnResync()
@@ -417,6 +509,7 @@ static bool pnResync()
         }
         delay(200);
     }
+    pnReady = false;
     pnHint();
     return false;
 }
@@ -562,43 +655,34 @@ void setup()
     Serial.println();
     Serial.println("KubGAU-Reader: ESP32 Devkit V1 + PN532 (HSU/UART)");
     Serial.printf("PN532: RX->GPIO%d, TX->GPIO%d, %ld бод\n", PIN_PN532_RX, PIN_PN532_TX, PN532_BAUD);
-
-    PnSerial.begin(PN532_BAUD, SERIAL_8N1, PIN_PN532_RX, PIN_PN532_TX);
-    pnFlush();
-    pnWakeup();
-
+    stamp();
+    Serial.printf("причина перезапуска платы: %s\n", pnResetReasonText());
+    if (esp_reset_reason() == ESP_RST_BROWNOUT)
     {
-        uint8_t ic = 0;
-        uint8_t version = 0;
-        uint8_t revision = 0;
-        uint8_t support = 0;
-        bool found = false;
-
-        for (uint8_t i = 0; i < 20 && !found; i++)
-        {
-            found = pnFirmware(&ic, &version, &revision, &support);
-            if (!found)
-            {
-                delay(300);
-            }
-        }
-        if (!found)
-        {
-            pnHint();
-            while (true)
-            {
-                delay(1000);
-            }
-        }
-        stamp();
-        Serial.printf("PN532 найден: ic=0x%02X, версия=%u.%u, поддержка=0x%02X\n",
-                      ic, version, revision, support);
+        logText("  питанию не хватает: другой USB-кабель и порт, конденсатор 470 мкФ на PN532,");
+        logText("  проверить, что VCC и GND платы PN532 не перепутаны.");
     }
 
-    if (!pnConfigure())
+    pnReady = pnStart(3);
+
+    if (pnReady)
     {
-        logText("PN532 найден, но не настроился — перезапустите плату");
+        if (pnConfigure())
+        {
+            logText("PN532 готов к работе.");
+        }
+        else
+        {
+            logText("PN532 найден, но не настроился — повторим поиск в цикле.");
+            pnReady = false;
+        }
     }
+    if (!pnReady)
+    {
+        pnHint();
+        logText("ищу плату дальше: одна точка = одна попытка (раз в секунду).");
+    }
+
     Serial.println("Режим: эмуляция карты ISO14443-4 (как телефон преподавателя).");
     Serial.println("Приложите телефон студента к катушке PN532 и подержите 2-3 секунды.");
 }
@@ -607,7 +691,35 @@ void loop()
 {
     static uint8_t errors = 0;
     static bool announced = false;
+    static uint32_t searchDots = 0;
+    static uint32_t nextSearchAt = 0;
     int16_t r;
+
+    if (!pnReady)
+    {
+        if ((uint32_t)(millis() - nextSearchAt) < 1000)
+        {
+            delay(20);
+            return;
+        }
+        nextSearchAt = millis();
+        if (pnStart(1) && pnConfigure())
+        {
+            pnReady = true;
+            searchDots = 0;
+            logText("PN532 в работе, ждём телефон.");
+            return;
+        }
+        Serial.print('.');
+        dotLine = true;
+        if (++searchDots >= 30)
+        {
+            Serial.println();
+            dotLine = false;
+            searchDots = 0;
+        }
+        return;
+    }
 
     if (!announced)
     {
