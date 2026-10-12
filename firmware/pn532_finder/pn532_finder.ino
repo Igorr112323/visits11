@@ -5,9 +5,10 @@ static const int PIN_B = 14;
 
 static const long BAUDS[6] = {115200, 9600, 19200, 38400, 57600, 230400};
 
+static HardwareSerial dev(2);
+
 static void testPair(int rxPin, int txPin, long baud)
 {
-    HardwareSerial dev(2);
     uint8_t buf[64];
     uint16_t got = 0;
     uint32_t start;
