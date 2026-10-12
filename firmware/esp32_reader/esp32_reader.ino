@@ -378,6 +378,15 @@ static bool pnBegin() {
         // Включаем fAutomaticATR_RES (0x04) | fAutomaticRATS (0x10) | fISO14443-4_PICC (0x20)
         const uint8_t params[] = {0x12, 0x34};
         pnCommand(params, sizeof(params), r, sizeof(r), 300);
+
+        // Максимальное усиление антенны и чувствительности PN532 (RFConfiguration 0x32, CfgItem 0x0A):
+        // RFCfg = 0x79 (макс. RxGain 48 dB), GsNOn = 0xFF, CWGsP = 0x3F,
+        // RxThreshold = 0x55 (высокая чувствительность), GsNOff = 0xFF (макс. отдача в режиме карты/Target)
+        const uint8_t rfMax[] = {
+          0x32, 0x0A,
+          0x79, 0xFF, 0x3F, 0x11, 0x4D, 0x55, 0x61, 0xFF, 0x26, 0x62, 0x87
+        };
+        pnCommand(rfMax, sizeof(rfMax), r, sizeof(r), 300);
         return true;
       }
     }
