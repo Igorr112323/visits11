@@ -4,12 +4,12 @@ static const int PIN_PN532_RX = 27;
 static const int PIN_PN532_TX = 14;
 static const long PN532_BAUD = 115200;
 
-static const uint32_t ACK_TIMEOUT_MS = 300;
-static const uint32_t FRAME_TIMEOUT_MS = 1000;
-static const uint32_t ARM_TIMEOUT_MS = 60000;
-static const uint32_t DATA_TIMEOUT_MS = 15000;
+static const uint32_t ACK_TIMEOUT_MS = 400;
+static const uint32_t FRAME_TIMEOUT_MS = 800;
+static const uint32_t ARM_TIMEOUT_MS = 2000;
+static const uint32_t DATA_TIMEOUT_MS = 10000;
 static const uint32_t PING_TIMEOUT_MS = 500;
-static const uint32_t DOT_PERIOD_MS = 2000;
+static const uint32_t SUMMARY_PERIOD_MS = 10000;
 static const uint8_t TAP_REPLY_CODE = 0x00;
 
 static const int16_t RES_NO_ANSWER = -1;
@@ -30,9 +30,14 @@ static uint8_t targetMode = 0;
 static uint8_t targetFirstBytes[8];
 static uint8_t targetFirstLen = 0;
 static uint32_t tapCounter = 0;
-static bool waitDots = false;
+static uint32_t cycles = 0;
+static uint32_t ackOk = 0;
+static uint32_t ackBad = 0;
+static uint32_t arms = 0;
+static uint32_t frameBad = 0;
+static uint32_t lastSummaryAt = 0;
 static bool dotLine = false;
-static uint32_t lastDotAt = 0;
+static uint32_t dotsOnLine = 0;
 
 static void stamp()
 {
@@ -58,37 +63,21 @@ static void logHex(const uint8_t *data, uint16_t len)
     }
 }
 
-static void dotsTick()
-{
-    if (!waitDots)
-    {
-        return;
-    }
-    if ((uint32_t)(millis() - lastDotAt) < DOT_PERIOD_MS)
-    {
-        return;
-    }
-    lastDotAt = millis();
-    Serial.print('.');
-    dotLine = true;
-}
-
-static void dotsEnd()
-{
-    waitDots = false;
-    if (dotLine)
-    {
-        Serial.println();
-        dotLine = false;
-    }
-}
-
 static void pnFlush()
 {
     while (PnSerial.available() > 0)
     {
         PnSerial.read();
     }
+}
+
+static void pnWakeup()
+{
+    static const uint8_t wake[7] = {0x55, 0x55, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+    PnSerial.write(wake, sizeof(wake));
+    PnSerial.flush();
+    delay(20);
 }
 
 static void pnWriteFrame(const uint8_t *data, uint16_t len)
@@ -131,56 +120,17 @@ static uint16_t pnRead(uint8_t *buf, uint16_t want, uint32_t timeoutMs)
         {
             break;
         }
-        dotsTick();
         delay(1);
     }
     return got;
 }
 
-static bool pnWaitAck(uint32_t timeoutMs)
+static int16_t pnSaveFrame(uint16_t payload)
 {
-    static const uint8_t ack[6] = {0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00};
-    uint8_t buf[6];
-
-    if (pnRead(buf, 6, timeoutMs) != 6)
-    {
-        return false;
-    }
-    for (uint8_t i = 0; i < 6; i++)
-    {
-        if (buf[i] != ack[i])
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
-static int16_t pnReadFrame(uint16_t maxLen, uint32_t timeoutMs)
-{
-    uint8_t head[3];
-    uint8_t len[2];
-    uint16_t payload;
     uint8_t sum = 0;
+    uint16_t i;
 
-    if (pnRead(head, 3, timeoutMs) != 3)
-    {
-        return RES_NO_ANSWER;
-    }
-    if (head[0] != 0x00 || head[1] != 0x00 || head[2] != 0xFF)
-    {
-        return RES_BAD_FRAME;
-    }
-    if (pnRead(len, 2, FRAME_TIMEOUT_MS) != 2)
-    {
-        return RES_BAD_FRAME;
-    }
-    if ((uint8_t)(len[0] + len[1]) != 0)
-    {
-        return RES_BAD_FRAME;
-    }
-    payload = (uint16_t)(len[0] - 1);
-    if (payload < 1 || payload > maxLen)
+    if (payload < 1 || payload > sizeof(pnFrame))
     {
         return RES_BAD_FRAME;
     }
@@ -192,7 +142,7 @@ static int16_t pnReadFrame(uint16_t maxLen, uint32_t timeoutMs)
     {
         return RES_BAD_FRAME;
     }
-    for (uint16_t i = 0; i <= payload; i++)
+    for (i = 0; i <= payload; i++)
     {
         sum += pnRaw[i];
     }
@@ -208,15 +158,101 @@ static int16_t pnReadFrame(uint16_t maxLen, uint32_t timeoutMs)
     return (int16_t)payload;
 }
 
+static int16_t pnReadFrame(uint16_t maxLen, uint32_t timeoutMs)
+{
+    uint8_t head[3];
+    uint8_t len[2];
+    uint16_t payload;
+
+    if (pnRead(head, 3, timeoutMs) != 3)
+    {
+        return RES_NO_ANSWER;
+    }
+    if (head[0] != 0x00 || head[1] != 0x00 || head[2] != 0xFF)
+    {
+        stamp();
+        Serial.print("мусор из PN532: ");
+        logHex(head, 3);
+        Serial.println();
+        return RES_BAD_FRAME;
+    }
+    if (pnRead(len, 2, FRAME_TIMEOUT_MS) != 2)
+    {
+        return RES_BAD_FRAME;
+    }
+    if ((uint8_t)(len[0] + len[1]) != 0)
+    {
+        return RES_BAD_FRAME;
+    }
+    payload = (uint16_t)(len[0] - 1);
+    if (payload > maxLen)
+    {
+        return RES_BAD_FRAME;
+    }
+    return pnSaveFrame(payload);
+}
+
+static int16_t pnFinishFrame(const uint8_t *head)
+{
+    uint8_t tail[300];
+    uint16_t payload = (uint16_t)(head[3] - 1);
+    uint8_t sum = 0xD5;
+    uint16_t i;
+
+    if (payload < 1 || payload > sizeof(pnFrame))
+    {
+        return RES_BAD_FRAME;
+    }
+    if (pnRead(tail, (uint16_t)(payload + 2), FRAME_TIMEOUT_MS) != (uint16_t)(payload + 2))
+    {
+        return RES_BAD_FRAME;
+    }
+    for (i = 0; i < payload; i++)
+    {
+        sum += tail[i];
+    }
+    if ((uint8_t)(sum + tail[payload]) != 0)
+    {
+        return RES_BAD_FRAME;
+    }
+    if (tail[payload + 1] != 0x00)
+    {
+        return RES_BAD_FRAME;
+    }
+    memcpy(pnFrame, tail, payload);
+    return (int16_t)payload;
+}
+
 static int16_t pnCommand(const uint8_t *cmd, uint16_t len, uint32_t timeoutMs)
 {
+    uint8_t head[6];
+    uint16_t got;
+
     pnFlush();
     pnWriteFrame(cmd, len);
-    if (!pnWaitAck(ACK_TIMEOUT_MS))
+
+    got = pnRead(head, 6, ACK_TIMEOUT_MS);
+    if (got == 6 && head[0] == 0x00 && head[1] == 0x00 && head[2] == 0xFF &&
+        head[3] == 0x00 && head[4] == 0xFF && head[5] == 0x00)
     {
-        return RES_BAD_ACK;
+        ackOk++;
+        return pnReadFrame(sizeof(pnFrame), timeoutMs);
     }
-    return pnReadFrame(sizeof(pnFrame), timeoutMs);
+
+    ackBad++;
+    if (got == 6 && head[0] == 0x00 && head[1] == 0x00 && head[2] == 0xFF)
+    {
+        logText("вместо ACK пришёл кадр PN532, разбираю его");
+        return pnFinishFrame(head);
+    }
+    if (got > 0)
+    {
+        stamp();
+        Serial.print("PN532 ответил не ACK: ");
+        logHex(head, got);
+        Serial.println();
+    }
+    return RES_BAD_ACK;
 }
 
 static bool pnFirmware(uint8_t *ic, uint8_t *version, uint8_t *revision, uint8_t *support)
@@ -238,26 +274,8 @@ static bool pnFirmware(uint8_t *ic, uint8_t *version, uint8_t *revision, uint8_t
 static bool pnConfigure()
 {
     uint8_t sam[4] = {0x14, 0x01, 0x14, 0x01};
-    uint8_t params[2] = {0x12, 0x20};
-    uint8_t readReg[3] = {0x06, 0x63, 0x05};
-    uint8_t writeReg[4];
-    int16_t r;
 
-    if (pnCommand(sam, 4, FRAME_TIMEOUT_MS) < 1)
-    {
-        return false;
-    }
-    pnCommand(params, 2, FRAME_TIMEOUT_MS);
-    r = pnCommand(readReg, 3, FRAME_TIMEOUT_MS);
-    if (r == 2 && pnFrame[0] == 0x07)
-    {
-        writeReg[0] = 0x08;
-        writeReg[1] = 0x63;
-        writeReg[2] = 0x05;
-        writeReg[3] = (uint8_t)(pnFrame[1] | 0x04);
-        pnCommand(writeReg, 4, FRAME_TIMEOUT_MS);
-    }
-    return true;
+    return pnCommand(sam, 4, FRAME_TIMEOUT_MS) > 0;
 }
 
 static int16_t pnArmTarget(uint32_t timeoutMs)
@@ -285,11 +303,13 @@ static int16_t pnArmTarget(uint32_t timeoutMs)
     cmd[34] = 0x22;
     cmd[35] = 0x11;
 
+    pnWakeup();
     r = pnCommand(cmd, sizeof(cmd), timeoutMs);
     if (r < 2 || pnFrame[0] != 0x8D)
     {
         return r < 0 ? r : RES_BAD_FRAME;
     }
+    arms++;
     targetMode = pnFrame[1];
     targetFirstLen = (uint8_t)(r - 2);
     if (targetFirstLen > sizeof(targetFirstBytes))
@@ -373,8 +393,8 @@ static void pnRelease()
 static void pnHint()
 {
     logText("PN532 не отвечает.");
-    logText("Проверьте: питание 3V3 (или 5V) и GND, SDA/TX->GPIO27, SCL/RX->GPIO14,");
-    logText("переключатели на плате PN532 в положении HSU (обычно оба OFF),");
+    logText("Проверьте: питание 3V3 (лучше 3V3, чем 5V) и GND, SDA/TX->GPIO27, SCL/RX->GPIO14,");
+    logText("переключатели на плате PN532 в положении HSU (оба OFF),");
     logText("кабель в USB, в Arduino выбран порт ESP32 и скорость 115200.");
 }
 
@@ -545,14 +565,7 @@ void setup()
 
     PnSerial.begin(PN532_BAUD, SERIAL_8N1, PIN_PN532_RX, PIN_PN532_TX);
     pnFlush();
-
-    {
-        uint8_t wake[2] = {0x55, 0x55};
-        PnSerial.write(wake, 2);
-        PnSerial.flush();
-        delay(100);
-        pnFlush();
-    }
+    pnWakeup();
 
     {
         uint8_t ic = 0;
@@ -587,6 +600,7 @@ void setup()
         logText("PN532 найден, но не настроился — перезапустите плату");
     }
     Serial.println("Режим: эмуляция карты ISO14443-4 (как телефон преподавателя).");
+    Serial.println("Приложите телефон студента к катушке PN532 и подержите 2-3 секунды.");
 }
 
 void loop()
@@ -597,19 +611,19 @@ void loop()
 
     if (!announced)
     {
-        logText("ждём телефон: приложите его к считывателю (точка = 2 с)");
+        logText("ждём телефон: приложите его к катушке PN532 и подержите 2-3 секунды (точка = один опрос)");
         announced = true;
+        dotsOnLine = 0;
     }
 
-    waitDots = true;
-    lastDotAt = millis();
     r = pnArmTarget(ARM_TIMEOUT_MS);
-    dotsEnd();
+    cycles++;
 
     if (r == RES_DATA)
     {
         errors = 0;
         announced = false;
+        lastSummaryAt = millis();
         session();
         return;
     }
@@ -617,18 +631,47 @@ void loop()
     if (r == RES_NO_ANSWER)
     {
         errors = 0;
-        return;
+        Serial.print('.');
+        dotLine = true;
+        if (++dotsOnLine >= 30)
+        {
+            Serial.println();
+            dotLine = false;
+            dotsOnLine = 0;
+        }
+    }
+    else
+    {
+        errors++;
+        if (r == RES_BAD_FRAME)
+        {
+            frameBad++;
+        }
+        stamp();
+        Serial.printf("PN532: сбой обмена (%u/3)\n", errors);
+        if (errors >= 3)
+        {
+            errors = 0;
+            announced = false;
+            pnResync();
+        }
     }
 
-    errors++;
-    pnFlush();
-    stamp();
-    Serial.printf("PN532: сбой обмена (%u/3)\n", errors);
-    if (errors >= 3)
+    if ((uint32_t)(millis() - lastSummaryAt) >= SUMMARY_PERIOD_MS)
     {
+        lastSummaryAt = millis();
+        stamp();
+        Serial.printf("циклов: %lu, плата отвечает: %lu, без ответа на команду: %lu, активаций: %lu, битых кадров: %lu\n",
+                      (unsigned long)cycles, (unsigned long)ackOk, (unsigned long)ackBad,
+                      (unsigned long)arms, (unsigned long)frameBad);
+    }
+
+    if (ackBad >= 10)
+    {
+        ackBad = 0;
         errors = 0;
         announced = false;
         pnResync();
     }
-    delay(50);
+    delay(20);
 }
