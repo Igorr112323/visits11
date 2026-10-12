@@ -22,9 +22,9 @@
 
 static const uint8_t PN_ADDR = 0x24;
 
-// Пины 5 и 6 на гребёнке со стороны VIN/GND (D14 и D27), плюс автоопределение порядка SDA/SCL
-static int activeSda = 27;
-static int activeScl = 14;
+// Пины на гребёнке со стороны VIN/GND (D12/D14 или D14/D27), плюс автоопределение порядка SDA/SCL
+static int activeSda = 14;
+static int activeScl = 12;
 
 static const uint8_t NFC_AID[7] = {0xF0, 0x39, 0x11, 0x01, 0x02, 0x03, 0x04};
 static const size_t NAME_CAP = 96;
@@ -404,10 +404,12 @@ static bool pnTryInitOnCurrentPins() {
 }
 
 static bool pnBegin() {
-  // Автоматически проверяем пины D14/D27 (в любом порядке SDA/SCL), а также D21/D22
+  // Автоматически проверяем пины D12/D14, D14/D27 и D21/D22 (в любом порядке SDA/SCL)
   static const int pairs[][2] = {
-    {27, 14}, // 6-й пин = SDA (D27), 5-й пин = SCL (D14)
-    {14, 27}, // 5-й пин = SDA (D14), 6-й пин = SCL (D27)
+    {14, 12}, // 5-й пин = D14, 4-й пин = D12 (как воткнуто на фото)
+    {12, 14}, // 4-й пин = D12, 5-й пин = D14
+    {27, 14}, // 6-й пин = D27, 5-й пин = D14
+    {14, 27}, // 5-й пин = D14, 6-й пин = D27
     {21, 22}, // стандартные D21 / D22
     {22, 21}
   };
