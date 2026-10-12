@@ -22,9 +22,9 @@
 
 static const uint8_t PN_ADDR = 0x24;
 
-// Пины на гребёнке со стороны VIN/GND (D14/D27), плюс автоопределение порядка пинов и режима (I2C или HSU UART)
-static int activePinA = 27;
-static int activePinB = 14;
+// Пины на WEMOS D1 R32 (IO25/IO26) и ESP32 (D14/D27), плюс автоопределение порядка пинов и режима
+static int activePinA = 25;
+static int activePinB = 26;
 static bool useHsuUart = false;
 
 static const uint8_t NFC_AID[7] = {0xF0, 0x39, 0x11, 0x01, 0x02, 0x03, 0x04};
@@ -487,19 +487,26 @@ static void initHsuPins(int rxPin, int txPin) {
   pinMode(rxPin, INPUT_PULLUP);
   Serial2.setRxBufferSize(512);
   Serial2.begin(115200, SERIAL_8N1, rxPin, txPin);
-  // Пробуждение PN532 из режима LowVbat по HSU UART (NXP UM0701-02 п. 6.3.2.3)
-  const uint8_t wake[] = {0x55, 0x55, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-  Serial2.write(wake, sizeof(wake));
-  Serial2.flush();
-  vTaskDelay(pdMS_TO_TICKS(15));
   while (Serial2.available() > 0) Serial2.read();
 }
 
 static bool pnTryInitOnCurrentPins() {
   uint8_t r[32];
-  pnAbort();
-  // ВАЖНО: В режиме LowVbat первой командой обязательно должна идти SAMConfiguration (0x14)!
-  const uint8_t sam[] = {0x14, 0x01, 0x14, 0x00};
+  if (useHsuUart) {
+    // Пробуждение PN532 из LowVbat по HSU UART (libnfc preamble + SAMConfiguration 0x14)
+    const uint8_t wakeSam[] = {
+      0x55, 0x55, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+      0x00, 0x00, 0xFF, 0x05, 0xFB, 0xD4, 0x14, 0x01, 0x14, 0x01, 0x02, 0x00
+    };
+    Serial2.write(wakeSam, sizeof(wakeSam));
+    Serial2.flush();
+    vTaskDelay(pdMS_TO_TICKS(30));
+    while (Serial2.available() > 0) Serial2.read();
+  } else {
+    pnAbort();
+  }
+  // Первой командой обязательно идёт SAMConfiguration (0x14, 0x01, 0x14, 0x01)
+  const uint8_t sam[] = {0x14, 0x01, 0x14, 0x01};
   if (pnCommand(sam, sizeof(sam), r, sizeof(r), 300) >= 0) {
     const uint8_t fw[] = {0x02};
     if (pnCommand(fw, sizeof(fw), r, sizeof(r), 300) >= 4) {
@@ -520,12 +527,12 @@ static bool pnTryInitOnCurrentPins() {
 }
 
 static bool pnBegin() {
-  // Автоматически проверяем пины D14/D27, D12/D14 и D21/D22 и в режиме HSU UART, и в режиме I2C (10 кГц / 100 кГц)
+  // Автоматически проверяем пины IO25/IO26 (WEMOS D1 R32), D14/D27 и D21/D22
   static const int pairs[][2] = {
-    {27, 14}, // 6-й пин = D27, 5-й пин = D14
+    {25, 26}, // WEMOS D1 R32: IO25 и IO26
+    {26, 25}, // WEMOS D1 R32: IO26 и IO25
     {14, 27}, // 5-й пин = D14, 6-й пин = D27
-    {14, 12},
-    {12, 14},
+    {27, 14}, // 6-й пин = D27, 5-й пин = D14
     {21, 22},
     {22, 21}
   };
