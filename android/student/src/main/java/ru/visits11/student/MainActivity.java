@@ -2,6 +2,8 @@ package ru.visits11.student;
 
 import android.Manifest;
 import android.app.Activity;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothManager;
 import android.content.ContentResolver;
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -102,6 +104,9 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
     private static final int REQ_CAMERA = 42;
     private static final int REQ_BLE = 43;
 
+    /** Вторая строка на экране отметки: она не меняется никогда. */
+    private static final String HINT = "Просто поднесите телефон";
+
     /** true — NFC есть: отметка «телефон к телефону», сеть не нужна вовсе. */
     private boolean useNfc;
 
@@ -110,6 +115,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
 
     /** Отметка по Bluetooth: то же, что делает приложение студента на iPhone. */
     private BleMark bleMark;
+    private String bleShownProblem = "";
 
     /** Разрешения Bluetooth просим один раз за запуск приложения. */
     private boolean bleAsked;
@@ -176,6 +182,8 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         super.onResume();
         updateScreen();
         startBleScan();
+        ui.removeCallbacks(bleWatch);
+        ui.post(bleWatch);
         if (!useNfc) {
             return;
         }
@@ -195,6 +203,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         // ушли с экрана — камера больше не нужна
         stopCamera();
         stopBleScan();
+        ui.removeCallbacks(bleWatch);
         if (!useNfc) {
             return;
         }
@@ -249,19 +258,19 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         entryPanel.setVisibility(View.GONE);
         statusText.setVisibility(View.VISIBLE);
 
-        NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
-        if (!useNfc) {
-            statusText.setText("Этот телефон без NFC — отметиться не получится");
+        String problem = bleProblem();
+        if (problem != null) {
+            statusText.setText(problem);
             return;
         }
-        if (adapter == null || !adapter.isEnabled()) {
+
+        NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
+        if (useNfc && (adapter == null || !adapter.isEnabled())) {
             statusText.setText("Включите NFC в настройках телефона");
             return;
         }
         String name = storedName();
-        statusText.setText(name.isEmpty()
-                ? "Приложите телефон к телефону преподавателя"
-                : name + "\nПриложите телефон к телефону преподавателя");
+        statusText.setText(name.isEmpty() ? HINT : name + "\n" + HINT);
     }
 
     private void showEntry() {
@@ -766,6 +775,45 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         }
     }
 
+    /** Что мешает отметке по Bluetooth: null — всё в порядке. */
+    private String bleProblem() {
+        BluetoothManager manager = (BluetoothManager) getSystemService(BLUETOOTH_SERVICE);
+        BluetoothAdapter adapter = manager == null ? null : manager.getAdapter();
+        if (adapter == null) {
+            return "Bluetooth на этом телефоне недоступен";
+        }
+        if (!adapter.isEnabled()) {
+            return "Включите Bluetooth в настройках телефона";
+        }
+        if (bleAsked && !blePermissionsGranted()) {
+            return "Разрешите Bluetooth в настройках приложения";
+        }
+        return null;
+    }
+
+    /** Выключили Bluetooth при открытом экране — сразу говорим об этом, включили — снова ищем считыватель. */
+    private final Runnable bleWatch = new Runnable() {
+        @Override
+        public void run() {
+            String problem = storedToken() == null ? null : bleProblem();
+            String shown = problem == null ? "" : problem;
+            if (!shown.equals(bleShownProblem)) {
+                boolean cameBack = shown.isEmpty();
+                bleShownProblem = shown;
+                if (lastMarkedAt == 0 || SystemClock.elapsedRealtime() - lastMarkedAt >= 5000) {
+                    updateScreen();
+                }
+                if (cameBack) {
+                    startBleScan();
+                    if (bleMark != null) {
+                        bleMark.nudge();
+                    }
+                }
+            }
+            ui.postDelayed(this, 2000);
+        }
+    };
+
     /** Ответ Bluetooth-считывателя: коды те же, что у NFC. */
     private void onBleReply(int result, String value) {
         if (lastMarkedAt > 0 && SystemClock.elapsedRealtime() - lastMarkedAt < 5000) {
@@ -834,16 +882,12 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         if (result == REPLY_MARKED) {
             lastMarkedAt = SystemClock.elapsedRealtime();
             vibrate();
-            ui.post(() -> setStatus(value.isEmpty() ? "Вы отмечены" : "Вы отмечены — " + value));
+            ui.post(() -> setStatus("Вы отмечены\n" + HINT));
             return;
         }
         if (result == REPLY_UNKNOWN_QR) {
-            // код не из журнала: стираем его и просим войти заново
-            getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(KEY_TOKEN).apply();
-            ui.post(() -> {
-                showEntry();
-                toast("Такого QR-кода нет в журнале — войдите заново");
-            });
+            // вход не стираем: студент остаётся тем же, сменить его можно долгим нажатием на надпись
+            ui.post(() -> setStatus("Кода нет в журнале\nСмените студента долгим нажатием"));
             return;
         }
         if (result == REPLY_DEVICE_BLOCKED) {

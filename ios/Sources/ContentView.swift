@@ -38,11 +38,11 @@ private func deviceId() -> String {
 
 final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
 
-    /// Пустая строка = показываем стандартное «ФИО \n Приложите телефон к телефону преподавателя».
-    /// После касания здесь появляется «Вы отмечены — ФИО» или текст ошибки.
+    /// Пустая строка = показываем стандартное «ФИО \n Просто поднесите телефон».
+    /// После касания здесь появляется «Вы отмечены \n Просто поднесите телефон» или текст ошибки.
     @Published var statusOverride = ""
 
-    /// QR-код не найден в журнале — нужно войти заново.
+    /// Вход по QR-коду нужен только когда токена ещё нет: сам он не стирается.
     @Published var needsLogin = false
 
     private let serviceUUID = CBUUID(string: "F0391101-0203-0405-0607-08090A0B0C0D")
@@ -253,7 +253,7 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
         case 0:
             lastMarkedAt = Date()
             cooldownUntil = Date().addingTimeInterval(5.0)
-            statusOverride = value.isEmpty ? "Вы отмечены" : "Вы отмечены — \(value)"
+            statusOverride = "Вы отмечены\nПросто поднесите телефон"
             AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
@@ -261,10 +261,7 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
             }
         case 2:
             cooldownUntil = Date().addingTimeInterval(2.5)
-            prefs.removeObject(forKey: keyToken)
-            prefs.removeObject(forKey: keyName)
-            needsLogin = true
-            statusOverride = ""
+            statusOverride = "Кода нет в журнале\nСмените студента долгим нажатием"
             UINotificationFeedbackGenerator().notificationOccurred(.error)
         case 5:
             cooldownUntil = Date().addingTimeInterval(2.5)
@@ -314,8 +311,8 @@ struct ContentView: View {
 
     private var defaultPrompt: String {
         studentName.isEmpty
-            ? "Приложите телефон к телефону преподавателя"
-            : "\(studentName)\nПриложите телефон к телефону преподавателя"
+            ? "Просто поднесите телефон"
+            : "\(studentName)\nПросто поднесите телефон"
     }
 
     var body: some View {

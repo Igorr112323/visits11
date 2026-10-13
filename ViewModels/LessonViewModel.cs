@@ -137,7 +137,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         if (student is null)
         {
             _toasts.Error("Касание: неизвестный QR-код",
-                "Такого кода нет в журнале — студенту нужно войти заново (сканер или картинка).");
+                "Такого кода нет в журнале. У студента старый код — пусть удержит надпись на экране и считает новый QR.");
             return Reply(id, ReplyUnknownQr, string.Empty);
         }
 

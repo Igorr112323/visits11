@@ -111,6 +111,13 @@ final class BleMark {
         beginScan();
     }
 
+    /** Bluetooth включили уже после запуска — начинаем поиск заново. */
+    void nudge() {
+        if (started) {
+            beginScan();
+        }
+    }
+
     /** Экран ушёл — поиск прекращаем. */
     void stop() {
         started = false;
