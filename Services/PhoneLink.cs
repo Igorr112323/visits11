@@ -45,6 +45,16 @@ public sealed class PhoneLink : IDisposable
         _worker = Task.Run(() => RunAsync(_cts.Token));
     }
 
+    /// <summary>
+    /// Обрабатывает запрос отметки так же, как касание с телефона преподавателя
+    /// (используется и коробочкой ESP32 — см. <see cref="BoxLink"/>).
+    /// </summary>
+    public string Relay(string json)
+    {
+        var handler = NfcRelay;
+        return handler is null ? "{\"code\":4}" : InvokeOnUi(handler, json);
+    }
+
     public void Dispose()
     {
         try { _cts?.Cancel(); } catch { /* уже остановлен */ }
@@ -208,8 +218,7 @@ public sealed class PhoneLink : IDisposable
                 var request = await response.Content.ReadAsStringAsync(token);
                 if (request.Length == 0) continue;
 
-                var handler = NfcRelay;
-                var result = handler is not null ? InvokeOnUi(handler, request) : "{\"code\":4}";
+                var result = Relay(request);
 
                 using var content = new StringContent(result, Encoding.UTF8, "application/json");
                 await client.PostAsync($"http://{host}:{Port}/event_result", content, token);

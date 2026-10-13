@@ -1,5 +1,6 @@
 package ru.visits11.student;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.Intent;
@@ -99,12 +100,19 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
 
     private static final int REQ_PICK_QR = 41;
     private static final int REQ_CAMERA = 42;
+    private static final int REQ_BLE = 43;
 
     /** true — NFC есть: отметка «телефон к телефону», сеть не нужна вовсе. */
     private boolean useNfc;
 
     /** Момент последней успешной отметки: не даёт отрыву руки затереть «Вы отмечены». */
     private volatile long lastMarkedAt;
+
+    /** Отметка по Bluetooth: то же, что делает приложение студента на iPhone. */
+    private BleMark bleMark;
+
+    /** Разрешения Bluetooth просим один раз за запуск приложения. */
+    private boolean bleAsked;
 
     private final Handler ui = new Handler(Looper.getMainLooper());
 
@@ -154,6 +162,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         });
 
         useNfc = nfcSupported();
+        bleMark = new BleMark(this, this::onBleReply);
     }
 
     @Override
@@ -166,6 +175,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
     protected void onResume() {
         super.onResume();
         updateScreen();
+        startBleScan();
         if (!useNfc) {
             return;
         }
@@ -184,6 +194,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         super.onPause();
         // ушли с экрана — камера больше не нужна
         stopCamera();
+        stopBleScan();
         if (!useNfc) {
             return;
         }
@@ -486,6 +497,12 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode == REQ_BLE) {
+            if (blePermissionsGranted()) {
+                bleMark.start();
+            }
+            return;
+        }
         if (requestCode != REQ_CAMERA) {
             return;
         }
@@ -701,6 +718,60 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         } catch (Throwable ignored) {
             return null;
         }
+    }
+
+    // ------------------------------------------------------------ отметка по Bluetooth
+
+    /** Ищем считыватель рядом: телефон преподавателя или коробочку. */
+    private void startBleScan() {
+        if (bleMark == null || storedToken() == null) {
+            return;
+        }
+        if (!blePermissionsGranted()) {
+            requestBlePermissions();
+            return;
+        }
+        bleMark.start();
+    }
+
+    private void stopBleScan() {
+        if (bleMark != null) {
+            bleMark.stop();
+        }
+    }
+
+    /** Android 12+ — разрешения «рядом устройства», ниже — геолокация (так устроен Android). */
+    private boolean blePermissionsGranted() {
+        if (Build.VERSION.SDK_INT >= 31) {
+            return checkSelfPermission("android.permission.BLUETOOTH_SCAN") == PackageManager.PERMISSION_GRANTED
+                    && checkSelfPermission("android.permission.BLUETOOTH_CONNECT") == PackageManager.PERMISSION_GRANTED;
+        }
+        return checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void requestBlePermissions() {
+        if (bleAsked) {
+            return;
+        }
+        bleAsked = true;
+        try {
+            if (Build.VERSION.SDK_INT >= 31) {
+                requestPermissions(new String[]{
+                        "android.permission.BLUETOOTH_SCAN",
+                        "android.permission.BLUETOOTH_CONNECT"}, REQ_BLE);
+            } else {
+                requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, REQ_BLE);
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** Ответ Bluetooth-считывателя: коды те же, что у NFC. */
+    private void onBleReply(int result, String value) {
+        if (lastMarkedAt > 0 && SystemClock.elapsedRealtime() - lastMarkedAt < 5000) {
+            return;
+        }
+        handleReply(result, value);
     }
 
     // ------------------------------------------------------------ NFC-отметка

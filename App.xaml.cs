@@ -12,6 +12,7 @@ public partial class App : Application
     public static ThemeService Theme { get; private set; } = null!;
     public static ToastService Toasts { get; private set; } = null!;
     public static PhoneLink Phone { get; private set; } = null!;
+    public static BoxLink Box { get; private set; } = null!;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -31,6 +32,11 @@ public partial class App : Application
         Phone = new PhoneLink();
         Phone.Start();
 
+        // коробочка-считыватель на ESP32 — по USB COM-порту, отметки идут в тот же обработчик
+        Box = new BoxLink();
+        Box.NfcRelay += json => Phone.Relay(json);
+        Box.Start();
+
         DispatcherUnhandledException += (_, args) =>
         {
             MessageBox.Show(args.Exception.Message, "Ошибка", MessageBoxButton.OK, MessageBoxImage.Error);
@@ -45,6 +51,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        Box.Dispose();
         Phone.Dispose();
         base.OnExit(e);
     }
