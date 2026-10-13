@@ -36,13 +36,10 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
     /// После касания здесь появляется «Вы отмечены — ФИО» или текст ошибки.
     @Published var statusOverride = ""
 
-    /// QR-код не найден в журнале — нужно войти заново.
-
     private let serviceUUID = CBUUID(string: "F0391101-0203-0405-0607-08090A0B0C0D")
     private let charUUID    = CBUUID(string: "F0391102-0203-0405-0607-08090A0B0C0D")
 
-    // Жёсткий порог мощности сигнала при минимальной мощности передатчика (ULTRA_LOW):
-    // достигается только при касании телефонов вплотную (0–2 см).
+    // Приблизительный порог близости, одинаковый с Android.
     private let touchOnlyRssiThreshold = -46
 
     private var central: CBCentralManager?
@@ -68,8 +65,8 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
         scanningWanted = true
         if central == nil {
             central = CBCentralManager(delegate: self, queue: .main)
-        } else {
-            beginScanIfNeeded()
+        } else if let central = central {
+            centralManagerDidUpdateState(central)
         }
     }
 

@@ -285,6 +285,7 @@ public final class MainActivity extends Activity {
         }
         try {
             Camera opened = Camera.open();
+            camera = opened; // release even if parameter/preview setup throws
             Camera.Parameters parameters = opened.getParameters();
             parameters.setPreviewFormat(ImageFormat.NV21);
 

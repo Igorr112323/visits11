@@ -49,7 +49,8 @@ public sealed class PhoneLink : IDisposable
             return;
         }
         _cts = new CancellationTokenSource();
-        _worker = Task.Run(() => RunAsync(_cts.Token));
+        var token = _cts.Token;
+        _worker = Task.Run(() => RunAsync(token));
     }
 
     public void Dispose()

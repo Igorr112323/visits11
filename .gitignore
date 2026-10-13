@@ -13,3 +13,6 @@ bluetooth-power.txt
 *.bin
 *.elf
 *.map
+
+__pycache__/
+*.pyc
