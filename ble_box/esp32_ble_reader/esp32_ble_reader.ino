@@ -7,7 +7,7 @@ static const int BLE_TX_POWER_DBM = -12;
 static const char *DEVICE_NAME = "Visits11-Box";
 static const char *SERVICE_UUID = "F0391101-0203-0405-0607-08090A0B0C0D";
 static const char *CHAR_UUID = "F0391102-0203-0405-0607-08090A0B0C0D";
-static const char *BOX_VERSION = "VISITS11-ESP32 v1";
+static const char *BOX_VERSION = "VISITS11-ESP32 v2";
 static const long SERIAL_BAUD = 115200;
 static const uint32_t REPLY_TIMEOUT_MS = 6000;
 static const uint8_t CODE_MARKED = 0;
@@ -139,37 +139,38 @@ class MarkCallbacks : public BLECharacteristicCallbacks
 {
     void onWrite(BLECharacteristic *characteristic) override
     {
-        std::string value = characteristic->getValue();
+        uint8_t *data = characteristic->getData();
+        size_t length = characteristic->getLength();
         size_t start = 0;
-        size_t end = std::string::npos;
+        size_t end = (size_t)-1;
 
-        if (value.empty())
+        if (data == nullptr || length == 0)
         {
             return;
         }
-        if ((uint8_t)value[0] == 0x01)
+        if (data[0] == 0x01)
         {
             rxBuffer.clear();
             start = 1;
         }
-        for (size_t i = start; i < value.size(); i++)
+        for (size_t i = start; i < length; i++)
         {
-            if (value[i] == 0x00)
+            if (data[i] == 0x00)
             {
                 end = i;
                 break;
             }
         }
-        if (end == std::string::npos)
+        if (end == (size_t)-1)
         {
-            rxBuffer.append(value, start, value.size() - start);
+            rxBuffer.append((const char *)data + start, length - start);
             if (rxBuffer.size() > MAX_PAYLOAD)
             {
                 rxBuffer.clear();
             }
             return;
         }
-        rxBuffer.append(value, start, end - start);
+        rxBuffer.append((const char *)data + start, end - start);
         std::string full = rxBuffer;
         rxBuffer.clear();
         sendTap(full);
