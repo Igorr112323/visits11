@@ -10,9 +10,6 @@ import android.graphics.BitmapFactory;
 import android.graphics.ImageFormat;
 import android.hardware.Camera;
 import android.net.Uri;
-import android.nfc.NfcAdapter;
-import android.nfc.Tag;
-import android.nfc.tech.IsoDep;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -58,19 +55,19 @@ import java.util.zip.CRC32;
  * Приложение студента. Логина и пароля нет: вход один раз по QR-коду —
  * навести камеру («Сканировать QR-код») или выбрать картинку из галереи
  * («Загрузить из галереи»). Дальше отметка — прикладывание телефона
- * к телефону преподавателя (NFC). Интернет и Wi-Fi приложению не нужны:
+ * к телефону преподавателя (Bluetooth BLE). Интернет и Wi-Fi приложению не нужны:
  * разрешения INTERNET у него нет вовсе.
  *
  * Камера работает внутри этого же окна (системная камера + ZXing) — никаких
  * сторонних экранов и библиотек-сканеров: меньше деталей, которым можно сломаться.
  */
-public final class MainActivity extends Activity implements NfcAdapter.ReaderCallback {
+public final class MainActivity extends Activity {
 
     private static final String PREFS = "visits11student";
     private static final String KEY_TOKEN = "token";
     private static final String KEY_NAME = "name";
 
-    private static final byte[] NFC_AID = {(byte) 0xF0, 0x39, 0x11, 0x01, 0x02, 0x03, 0x04};
+
 
     /** Версия формата QR-кода студента — та же строка, что на ПК (Services/StudentQr.cs). */
     private static final String QR_PREFIX = "V11S2";
@@ -100,8 +97,10 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
     private static final int REQ_PICK_QR = 41;
     private static final int REQ_CAMERA = 42;
 
-    /** true — NFC есть: отметка «телефон к телефону», сеть не нужна вовсе. */
-    private boolean useNfc;
+    /** true — Bluetooth BLE есть: отметка «телефон к телефону», сеть не нужна вовсе. */
+    private BleStudent ble;
+    private boolean resumed;
+    private int loginGeneration;
 
     /** Момент последней успешной отметки: не даёт отрыву руки затереть «Вы отмечены». */
     private volatile long lastMarkedAt;
@@ -132,8 +131,13 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         scanButton.setOnClickListener(v -> scanWithCamera());
         galleryButton.setOnClickListener(v -> pickQrImage());
 
+        ble = new BleStudent(this, this::storedToken, this::deviceId, this::handleReply, this::setStatus);
+
         // смена студента — долгим нажатием (чтобы не открыть случайно)
         statusText.setOnLongClickListener(v -> {
+            ble.stop();
+            loginGeneration++;
+            closeScanner(null);
             getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                     .remove(KEY_TOKEN)
                     .remove(KEY_NAME)
@@ -142,18 +146,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
             toast("Отсканируйте QR-код студента");
             return true;
         });
-        // выключенный NFC — по нажатию открываем настройки
-        statusText.setOnClickListener(v -> {
-            NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
-            if (adapter != null && !adapter.isEnabled()) {
-                try {
-                    startActivity(new Intent("android.settings.NFC_SETTINGS"));
-                } catch (Throwable ignored) {
-                }
-            }
-        });
-
-        useNfc = nfcSupported();
+        statusText.setOnClickListener(v -> ble.requestEnable());
     }
 
     @Override
@@ -166,40 +159,24 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
     protected void onResume() {
         super.onResume();
         updateScreen();
-        if (!useNfc) {
-            return;
-        }
-        try {
-            NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
-            if (adapter != null) {
-                adapter.enableReaderMode(this, this,
-                        NfcAdapter.FLAG_READER_NFC_A | NfcAdapter.FLAG_READER_SKIP_NDEF_CHECK, null);
-            }
-        } catch (Throwable ignored) {
-        }
+        resumed = true;
+        if (storedToken() != null) ble.start();
+        if (scannerPanel.getVisibility() == View.VISIBLE && cameraPreview.getHolder().getSurface().isValid())
+            startCamera(cameraPreview.getHolder());
     }
 
-    @Override
-    protected void onPause() {
+    @Override protected void onPause() {
+        resumed = false;
+        ble.stop();
+        stopCamera();
         super.onPause();
-        // ушли с экрана — камера больше не нужна
-        stopCamera();
-        if (!useNfc) {
-            return;
-        }
-        try {
-            NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
-            if (adapter != null) {
-                adapter.disableReaderMode(this);
-            }
-        } catch (Throwable ignored) {
-        }
     }
 
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
+    @Override protected void onDestroy() {
+        ble.stop();
+        loginGeneration++;
         stopCamera();
+        super.onDestroy();
     }
 
     // ------------------------------------------------------------ экран
@@ -207,16 +184,10 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
     /** Уникальный ID устройства — аккаунт привязывается к первому телефону. */
     private String deviceId() {
         try {
-            return Settings.Secure.ANDROID_ID;
+            return Settings.Secure.getString(getContentResolver(), Settings.Secure.ANDROID_ID);
         } catch (Throwable ignored) {
             return "";
         }
-    }
-
-    /** NFC в этом телефоне? */
-    private boolean nfcSupported() {
-        return getPackageManager().hasSystemFeature(PackageManager.FEATURE_NFC)
-                && NfcAdapter.getDefaultAdapter(this) != null;
     }
 
     private String storedToken() {
@@ -238,19 +209,10 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         entryPanel.setVisibility(View.GONE);
         statusText.setVisibility(View.VISIBLE);
 
-        NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
-        if (!useNfc) {
-            statusText.setText("Этот телефон без NFC — отметиться не получится");
-            return;
-        }
-        if (adapter == null || !adapter.isEnabled()) {
-            statusText.setText("Включите NFC в настройках телефона");
-            return;
-        }
         String name = storedName();
         statusText.setText(name.isEmpty()
-                ? "Приложите телефон к телефону преподавателя"
-                : name + "\nПриложите телефон к телефону преподавателя");
+                ? "Поднесите телефон к терминалу"
+                : name + "\nПоднесите телефон к терминалу");
     }
 
     private void showEntry() {
@@ -286,6 +248,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
             return;
         }
         scannerPanel.setVisibility(View.VISIBLE);
+        if (cameraPreview.getHolder().getSurface().isValid()) startCamera(cameraPreview.getHolder());
     }
 
     private void closeScanner(String message) {
@@ -443,8 +406,10 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
 
     /** Кадры камеры разбираем в отдельном потоке, чтобы экран не подвисал. */
     private void decodeLoop() {
+        int generation = loginGeneration;
+        Thread worker = Thread.currentThread();
         Map<DecodeHintType, Object> hints = qrHints();
-        while (cameraRunning) {
+        while (cameraRunning && decodeThread == worker) {
             byte[] frame;
             try {
                 frame = frames.poll(200, TimeUnit.MILLISECONDS);
@@ -464,6 +429,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
             if (text != null) {
                 final String payload = text;
                 ui.post(() -> {
+                    if (generation != loginGeneration || decodeThread != worker) return;
                     closeScanner(null);
                     applyQrPayload(payload);
                 });
@@ -503,6 +469,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
      * отдаёт сам системный пикер (Android 13+ — «выбор фото», ниже — «Документы»/галерея).
      */
     private void pickQrImage() {
+        closeScanner(null);
         try {
             Intent intent;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -536,6 +503,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
             return;
         }
         // фото может быть большим: распознаём в фоне, интерфейс не подвисает
+        final int generation = loginGeneration;
         new Thread(() -> {
             String text = null;
             try {
@@ -543,7 +511,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
             } catch (Throwable ignored) {
             }
             final String payload = text;
-            ui.post(() -> applyQrPayload(payload));
+            ui.post(() -> { if (!isDestroyed() && generation == loginGeneration) applyQrPayload(payload); });
         }, "QrLogin").start();
     }
 
@@ -562,7 +530,10 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
                 .putString(KEY_NAME, credentials.name)
                 .apply();
 
+        loginGeneration++;
+        closeScanner(null);
         showReady();
+        if (resumed) ble.start();
         vibrate();
         toast(credentials.name.isEmpty()
                 ? "Вход выполнен"
@@ -658,7 +629,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         }
 
         int sample = 1;
-        while (bounds.outWidth / (sample * 2) >= 720 && bounds.outHeight / (sample * 2) >= 720) {
+        while (Math.max(bounds.outWidth, bounds.outHeight) / sample > 2048) {
             sample *= 2; // длинная сторона остаётся около 720–1400 px
         }
 
@@ -703,63 +674,9 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         }
     }
 
-    // ------------------------------------------------------------ NFC-отметка
-
-    /** Приложили телефон к телефону преподавателя: отправляем код студента. */
-    @Override
-    public void onTagDiscovered(Tag tag) {
-        // после успешной отметки 5 секунд игнорируем повторные касания,
-        // чтобы при отведении руки обрыв NFC-поля не затёр «Вы отмечены» ошибкой
-        if (lastMarkedAt > 0 && SystemClock.elapsedRealtime() - lastMarkedAt < 5000) {
-            return;
-        }
-        IsoDep isoDep = IsoDep.get(tag);
-        if (isoDep == null) {
-            return;
-        }
-        try {
-            String token = storedToken();
-            if (token == null) {
-                return;
-            }
-
-            isoDep.connect();
-            isoDep.setTimeout(5000);
-
-            // выбор приложения телефона преподавателя
-            byte[] select = new byte[5 + NFC_AID.length];
-            select[1] = (byte) 0xA4;
-            select[2] = 0x04;
-            select[4] = (byte) NFC_AID.length;
-            System.arraycopy(NFC_AID, 0, select, 5, NFC_AID.length);
-            if (!apduOk(isoDep.transceive(select))) {
-                ui.post(() -> setStatus("Не получилось — приложите телефон еще раз"));
-                return;
-            }
-
-            byte[] answer = isoDep.transceive(nfcCommand(token + "\n" + deviceId()));
-            if (!apduOk(answer) || answer.length < 3) {
-                ui.post(() -> setStatus("Не получилось, попробуйте ещё раз"));
-                return;
-            }
-
-            int result = answer[0] & 0xFF;
-            String value = new String(answer, 1, answer.length - 3, StandardCharsets.UTF_8);
-            handleReply(result, value);
-        } catch (Throwable ignored) {
-            if (lastMarkedAt == 0 || SystemClock.elapsedRealtime() - lastMarkedAt >= 5000) {
-                ui.post(() -> setStatus("Не получилось, попробуйте ещё раз"));
-            }
-        } finally {
-            try {
-                isoDep.close();
-            } catch (Throwable ignored) {
-            }
-        }
-    }
-
     /** Ответ телефона преподавателя: показываем результат и вибрируем при успехе. */
     private void handleReply(int result, String value) {
+        if (storedToken() == null) return;
         if (result == REPLY_MARKED) {
             lastMarkedAt = SystemClock.elapsedRealtime();
             vibrate();
@@ -768,7 +685,9 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         }
         if (result == REPLY_UNKNOWN_QR) {
             // код не из журнала: стираем его и просим войти заново
-            getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(KEY_TOKEN).apply();
+            ble.stop();
+            loginGeneration++;
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().remove(KEY_TOKEN).remove(KEY_NAME).apply();
             ui.post(() -> {
                 showEntry();
                 toast("Такого QR-кода нет в журнале — войдите заново");
@@ -780,22 +699,6 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
             return;
         }
         ui.post(() -> setStatus("Не получилось: перекличка не идёт"));
-    }
-
-    /** APDU-команда 0x10 с кодом студента. */
-    private static byte[] nfcCommand(String data) {
-        byte[] payload = data.getBytes(StandardCharsets.UTF_8);
-        byte[] command = new byte[5 + payload.length];
-        command[1] = (byte) 0x10;
-        command[4] = (byte) payload.length;
-        System.arraycopy(payload, 0, command, 5, payload.length);
-        return command;
-    }
-
-    private static boolean apduOk(byte[] response) {
-        return response != null && response.length >= 2
-                && (response[response.length - 2] & 0xFF) == 0x90
-                && (response[response.length - 1] & 0xFF) == 0x00;
     }
 
     /** Заметная двойная вибрация — отметка прошла. */
@@ -839,6 +742,7 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
 
     private void setStatus(String text) {
         ui.post(() -> {
+            if (storedToken() == null || !resumed) return;
             statusText.setText(text);
             statusText.setVisibility(View.VISIBLE);
             entryPanel.setVisibility(View.GONE);

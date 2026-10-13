@@ -128,7 +128,6 @@ struct PhotoPicker: UIViewControllerRepresentable {
         }
 
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-            picker.dismiss(animated: true)
             onFinish()
 
             guard let provider = results.first?.itemProvider,

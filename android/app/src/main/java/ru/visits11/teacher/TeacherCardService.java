@@ -1,82 +1,19 @@
 package ru.visits11.teacher;
-
-import android.nfc.cardemulation.HostApduService;
-import android.os.Build;
-import android.os.Bundle;
-import android.os.VibrationEffect;
-import android.os.Vibrator;
-import android.os.VibratorManager;
-
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-
-/**
- * Телефон преподавателя «притворяется картой»: студенты прикладывают свои
- * телефоны-считыватели. Касание кладём в очередь — ПК забирает его по USB
- * (см. MainActivity, /event и /event_result) и возвращает ответ.
- *
- * Протокол (AID F0391101020304, команда INS 0x10): данные студента —
- * «код-из-QR-кода \n id-устройства». Логина и пароля больше нет.
- */
-public final class TeacherCardService extends HostApduService {
-
-    /** NFC/BLE-запросы, ждущие ПК. */
+/** USB event broker. Historical class name retained; not an Android service. */
+public final class TeacherCardService {
     static final LinkedBlockingQueue<String> requests = new LinkedBlockingQueue<>();
-
-    /** Ответ ПК на текущее касание. */
     static final SynchronousQueue<String> resultBox = new SynchronousQueue<>();
-
-    /** Касания обрабатываются по одному. */
     static final Object TAP_LOCK = new Object();
-
-    /** Номера запросов: ответ опоздавшего касания не достанется следующему. */
     private static final AtomicLong SEQ = new AtomicLong();
-
-    private static final byte[] NFC_AID = {(byte) 0xF0, 0x39, 0x11, 0x01, 0x02, 0x03, 0x04};
-
-    /** Коды ответа — те же, что понимают приложения студентов. */
-    static final int REPLY_MARKED = 0;         // + имя студента
-    static final int REPLY_UNKNOWN_QR = 2;     // такого QR-кода нет в журнале
-    static final int REPLY_UNAVAILABLE = 4;    // ПК недоступен / перекличка не идёт
-    static final int REPLY_DEVICE_BLOCKED = 5; // телефон привязан к другому студенту
-
-    @Override
-    public byte[] processCommandApdu(byte[] apdu, Bundle extras) {
-        if (apdu == null || apdu.length < 4) {
-            return new byte[]{(byte) 0x6A, (byte) 0x82};
-        }
-        int instruction = apdu[1] & 0xFF;
-
-        if (instruction == 0xA4) {
-            // выбор нашего приложения — подтверждаем
-            return ok(new byte[0]);
-        }
-
-        if (instruction != 0x10) {
-            return new byte[]{(byte) 0x6D, (byte) 0x00};
-        }
-
-        // данные студента: код из QR-кода \n id-устройства
-        int length = apdu.length >= 5 ? apdu[4] & 0xFF : 0;
-        if (length < 1 || apdu.length < 5 + length) {
-            return ok(new byte[0]);
-        }
-        String data = new String(apdu, 5, length, StandardCharsets.UTF_8);
-        String[] parts = data.split("\n", 2);
-        if (parts.length < 1 || parts[0].isEmpty()) {
-            return ok(new byte[0]);
-        }
-        String device = parts.length > 1 ? parts[1] : "";
-        byte[] payload = exchangeWithPc(parts[0], device, this::vibrate);
-        return ok(payload);
-    }
-
+    static final int REPLY_MARKED=0, REPLY_UNKNOWN_QR=2, REPLY_UNAVAILABLE=4, REPLY_DEVICE_BLOCKED=5;
     /**
      * Передаёт данные студента (код из QR + id телефона) на ПК по USB и ждёт ответ.
-     * Используется и для Android (NFC), и для iPhone (BLE при поднесении вплотную).
+     * Используется и для Android (BLE), и для iPhone (BLE при поднесении вплотную).
      */
     static byte[] exchangeWithPc(String token, String device, Runnable onMarked) {
         String request = "{\"token\":\"" + escape(token) + "\",\"device\":\"" + escape(device) + "\"}";
@@ -125,10 +62,6 @@ public final class TeacherCardService extends HostApduService {
             System.arraycopy(bytes, 0, payload, 1, bytes.length);
             return payload;
         }
-    }
-
-    @Override
-    public void onDeactivated(int reason) {
     }
 
     /** Номер запроса в ответе ПК (0 — нет). */
@@ -207,28 +140,4 @@ public final class TeacherCardService extends HostApduService {
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
-    private static byte[] ok(byte[] payload) {
-        byte[] response = new byte[payload.length + 2];
-        System.arraycopy(payload, 0, response, 0, payload.length);
-        response[response.length - 2] = (byte) 0x90;
-        response[response.length - 1] = 0x00;
-        return response;
-    }
-
-    /** Заметная двойная вибрация — отметка прошла. */
-    private void vibrate() {
-        try {
-            Vibrator vibrator;
-            if (Build.VERSION.SDK_INT >= 31) {
-                VibratorManager manager = (VibratorManager) getSystemService(VIBRATOR_MANAGER_SERVICE);
-                vibrator = manager != null ? manager.getDefaultVibrator() : null;
-            } else {
-                vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
-            }
-            if (vibrator != null && vibrator.hasVibrator()) {
-                vibrator.vibrate(VibrationEffect.createWaveform(new long[]{0, 90, 70, 90}, -1));
-            }
-        } catch (Throwable ignored) {
-        }
-    }
 }

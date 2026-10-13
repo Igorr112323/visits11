@@ -17,7 +17,6 @@ import android.bluetooth.le.BluetoothLeAdvertiser;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.nfc.NfcAdapter;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -53,7 +52,7 @@ import java.util.concurrent.TimeUnit;
  * Телефон преподавателя: логотип КубГАУ на весь экран, экран не гаснет.
  * Держит связь с ПК только по USB-кабелю («USB-модем») — Wi-Fi не используется
  * вовсе: сервер слушает единственный адрес USB-интерфейса, а не всю сеть.
- * Через эту связь NFC-сервис (TeacherCardService) пересылает отметки Android-студентов,
+ * Через эту связь BLE-сервис (TeacherCardService) пересылает отметки Android-студентов,
  * а встроенный BLE-сервер — отметки iPhone при поднесении вплотную.
  */
 public final class MainActivity extends Activity {
@@ -84,6 +83,7 @@ public final class MainActivity extends Activity {
     private BluetoothLeAdvertiser advertiser;
     private BluetoothGattCharacteristic markCharacteristic;
     private volatile boolean bleAdvertising;
+    private volatile int txPower = 0;
     private final ConcurrentHashMap<String, ByteArrayOutputStream> bleBuffers = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, byte[]> bleReplies = new ConcurrentHashMap<>();
 
@@ -108,18 +108,9 @@ public final class MainActivity extends Activity {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
         statusText = findViewById(R.id.statusText);
-        // нажатие: выключенный NFC -> настройки NFC, выключенный Bluetooth -> включить Bluetooth,
+        // нажатие: выключенный BLE -> настройки BLE, выключенный Bluetooth -> включить Bluetooth,
         // мешает VPN -> настройки VPN, нет ПК -> USB-модем
         findViewById(R.id.root).setOnClickListener(v -> {
-            NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
-            if (adapter != null && !adapter.isEnabled()) {
-                try {
-                    startActivity(new Intent("android.settings.NFC_SETTINGS"));
-                } catch (Throwable ignored) {
-                    toast("Включите NFC в настройках");
-                }
-                return;
-            }
             if (!hasBlePermissions()) {
                 requestBlePermissionsIfNeeded();
                 return;
@@ -240,7 +231,7 @@ public final class MainActivity extends Activity {
 
             AdvertiseSettings settings = new AdvertiseSettings.Builder()
                     .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_LOW_LATENCY)
-                    .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_ULTRA_LOW)
+                    .setTxPowerLevel(txPower)
                     .setConnectable(true)
                     .build();
             AdvertiseData data = new AdvertiseData.Builder()
@@ -327,6 +318,7 @@ public final class MainActivity extends Activity {
             if (value.length > 0 && value[0] == 1) {
                 // 0x01 — начало нового пакета от iPhone
                 buffer.reset();
+                bleReplies.put(key, new byte[]{(byte) 0xFF});
                 startFrom = 1;
             }
             int endAt = -1;
@@ -357,6 +349,7 @@ public final class MainActivity extends Activity {
 
             new Thread(() -> {
                 byte[] reply = TeacherCardService.exchangeWithPc(token, studentDevice, MainActivity.this::vibrate);
+                if (bleBuffers.get(key) != buffer) return;
                 bleReplies.put(key, reply);
                 try {
                     BluetoothGattServer server = gattServer;
@@ -388,7 +381,7 @@ public final class MainActivity extends Activity {
         }
     };
 
-    /** Заметная двойная вибрация при успешной отметке iPhone (такая же, как при NFC). */
+    /** Заметная двойная вибрация при успешной отметке iPhone (такая же, как при BLE). */
     private void vibrate() {
         try {
             Vibrator vibrator;
@@ -413,26 +406,18 @@ public final class MainActivity extends Activity {
     }
 
     private void updateStatus() {
-        // 1. NFC — без него касания Android не работают
-        NfcAdapter adapter = NfcAdapter.getDefaultAdapter(this);
-        if (adapter == null) {
-            statusText.setText("NFC не поддерживается этим телефоном");
+        if (!hasBlePermissions() || !isBluetoothEnabled()) {
+            statusText.setText("Включите Bluetooth и разрешите доступ — нажмите сюда");
             statusText.setTextColor(0xFFB34A4A);
             return;
         }
-        if (!adapter.isEnabled()) {
-            statusText.setText("NFC ВЫКЛЮЧЕН — нажмите, чтобы включить");
-            statusText.setTextColor(0xFFB34A4A);
-            return;
-        }
-
         // 2. связь с ПК (ПК сам забирает отметки с телефона по кабелю)
         InetAddress usb = usbAddress();
         if (pcConnected()) {
             if (bleAdvertising) {
-                statusText.setText("ПК подключён, NFC + iPhone готовы (" + versionName() + ")");
+                statusText.setText("ПК подключён, Bluetooth готов (" + versionName() + ")");
             } else {
-                statusText.setText("ПК подключён, NFC готов (включите Bluetooth для iPhone, " + versionName() + ")");
+                statusText.setText("ПК подключён, Bluetooth недоступен ( " + versionName() + ")");
             }
             statusText.setTextColor(0xFF2E7D32);
         } else if (usb != null && vpnActive()) {
@@ -630,11 +615,17 @@ public final class MainActivity extends Activity {
                 path = path.substring(0, queryAt);
             }
 
-            if ("/info".equals(path)) {
+            if ("/power".equals(path) && "GET".equals(method)) {
+                java.util.regex.Matcher m = java.util.regex.Pattern.compile("level=([0-3])(?:&| |$)").matcher(requestLine);
+                if (!m.find()) { respond(client, "400 Bad Request", "text/plain", new byte[0]); return; }
+                int level = Integer.parseInt(m.group(1));
+                ui.post(() -> { if (txPower != level) { txPower = level; stopBleServer(); ensureBleRunning(); } });
+                respond(client, "200 OK", "text/plain", new byte[0]);
+            } else if ("/info".equals(path)) {
                 respond(client, "200 OK", "application/json",
                         ("{\"app\":\"" + SIGNATURE + "\",\"legacy\":\"visits11-camera\"}").getBytes(StandardCharsets.US_ASCII));
             } else if ("/event".equals(path) && "GET".equals(method)) {
-                // ПК забирает NFC-запросы (long-poll 3 сек)
+                // ПК забирает BLE-запросы (long-poll 3 сек)
                 serveEvent(client);
                 lastClientAt = SystemClock.elapsedRealtime();
             } else if ("/event_result".equals(path) && "POST".equals(method)) {
@@ -654,7 +645,7 @@ public final class MainActivity extends Activity {
         }
     }
 
-    /** Отдаёт ПК ожидающий NFC-запрос (или 204, если касаний не было). */
+    /** Отдаёт ПК ожидающий BLE-запрос (или 204, если касаний не было). */
     private static void serveEvent(Socket client) {
         String request = null;
         try {

@@ -15,6 +15,11 @@ public partial class MainWindow : Window
     /// <summary>Перетаскивание окна за топбар (двойной клик разворачивает сам).</summary>
     private void Topbar_OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
+        if (e.OriginalSource is System.Windows.DependencyObject source)
+        {
+            for (var node = source; node is not null; node = System.Windows.Media.VisualTreeHelper.GetParent(node))
+                if (node is System.Windows.Controls.Primitives.Selector || node is System.Windows.Controls.Primitives.ButtonBase) return;
+        }
         if (e.ClickCount == 1)
         {
             try

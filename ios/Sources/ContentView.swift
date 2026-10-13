@@ -28,22 +28,15 @@ private func deviceId() -> String {
     return id
 }
 
-// MARK: - модель бесконтактной отметки (только касание вплотную 0–2 см)
-//
-// На телефоне преподавателя выставлена минимальная аппаратная мощность
-// передатчика (ADVERTISE_TX_POWER_ULTRA_LOW), а на iPhone — жёсткий порог
-// сигнала RSSI >= -46 dBm при активном экране: срабатывает только при
-// физическом прикладывании корпуса iPhone к телефону преподавателя (0–2 см),
-// из рюкзака или кармана сигнал не проходит.
+// MARK: - BLE отметка. RSSI — приблизительный фильтр близости, не измеритель расстояния.
 
 final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
 
-    /// Пустая строка = показываем стандартное «ФИО \n Приложите телефон к телефону преподавателя».
+    /// Пустая строка = показываем стандартное «ФИО \n Поднесите телефон к терминалу».
     /// После касания здесь появляется «Вы отмечены — ФИО» или текст ошибки.
     @Published var statusOverride = ""
 
     /// QR-код не найден в журнале — нужно войти заново.
-    @Published var needsLogin = false
 
     private let serviceUUID = CBUUID(string: "F0391101-0203-0405-0607-08090A0B0C0D")
     private let charUUID    = CBUUID(string: "F0391102-0203-0405-0607-08090A0B0C0D")
@@ -56,6 +49,7 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
     private var activePeripheral: CBPeripheral?
     private var activeChar: CBCharacteristic?
 
+    private var exchangeToken: String?
     private var scanningWanted = false
     private var busy = false
     private var lastMarkedAt: Date = .distantPast
@@ -70,6 +64,7 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
         guard let token = prefs.string(forKey: keyToken), !token.isEmpty else {
             return
         }
+        statusOverride = ""
         scanningWanted = true
         if central == nil {
             central = CBCentralManager(delegate: self, queue: .main)
@@ -82,6 +77,7 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
         scanningWanted = false
         cleanupConnection()
         central?.stopScan()
+        cooldownUntil = .distantPast
     }
 
     private func beginScanIfNeeded() {
@@ -104,6 +100,7 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
             }
             beginScanIfNeeded()
         case .poweredOff:
+            cleanupConnection()
             statusOverride = "Включите Bluetooth в настройках телефона"
         case .unauthorized:
             statusOverride = "Разрешите Bluetooth в настройках телефона"
@@ -124,10 +121,11 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
         if Date() < cooldownUntil { return }
 
         let rssiValue = RSSI.intValue
-        // Срабатываем только при физическом касании телефонов вплотную (0–2 см)
+        // Приблизительный фильтр близости; мощность терминала задаётся на ПК.
         guard rssiValue < 0 && rssiValue >= touchOnlyRssiThreshold else { return }
 
         busy = true
+        exchangeToken = token
         central.stopScan()
 
         activePeripheral = peripheral
@@ -144,12 +142,14 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        guard peripheral === activePeripheral, scanningWanted else { return }
         peripheral.discoverServices([serviceUUID])
     }
 
     func centralManager(_ central: CBCentralManager,
                         didFailToConnect peripheral: CBPeripheral,
                         error: Error?) {
+        guard peripheral === activePeripheral else { return }
         cleanupConnection()
         beginScanIfNeeded()
     }
@@ -157,7 +157,7 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
     func centralManager(_ central: CBCentralManager,
                         didDisconnectPeripheral peripheral: CBPeripheral,
                         error: Error?) {
-        if busy {
+        if busy && peripheral === activePeripheral {
             cleanupConnection()
             beginScanIfNeeded()
         }
@@ -166,6 +166,7 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
     // MARK: CBPeripheralDelegate
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        guard peripheral === activePeripheral, busy, scanningWanted else { return }
         guard error == nil,
               let service = peripheral.services?.first(where: { $0.uuid == serviceUUID }) else {
             cleanupConnection()
@@ -178,6 +179,7 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
     func peripheral(_ peripheral: CBPeripheral,
                     didDiscoverCharacteristicsFor service: CBService,
                     error: Error?) {
+        guard peripheral === activePeripheral, busy, scanningWanted else { return }
         guard error == nil,
               let ch = service.characteristics?.first(where: { $0.uuid == charUUID }),
               let token = prefs.string(forKey: keyToken), !token.isEmpty else {
@@ -219,6 +221,7 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
     func peripheral(_ peripheral: CBPeripheral,
                     didWriteValueFor characteristic: CBCharacteristic,
                     error: Error?) {
+        guard peripheral === activePeripheral, busy, scanningWanted else { return }
         if error != nil {
             finishExchange(code: 4, value: "")
             return
@@ -237,6 +240,7 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
     func peripheral(_ peripheral: CBPeripheral,
                     didUpdateValueFor characteristic: CBCharacteristic,
                     error: Error?) {
+        guard peripheral === activePeripheral, busy, scanningWanted else { return }
         guard error == nil, let data = characteristic.value, !data.isEmpty else { return }
         let result = data[data.startIndex]
         // 0xFF — телефон преподавателя ещё ждёт ответ от ПК по USB
@@ -247,6 +251,7 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
     }
 
     private func finishExchange(code: Int, value: String) {
+        guard busy, scanningWanted, exchangeToken == prefs.string(forKey: keyToken) else { return }
         cleanupConnection()
 
         switch code {
@@ -263,7 +268,8 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
             cooldownUntil = Date().addingTimeInterval(2.5)
             prefs.removeObject(forKey: keyToken)
             prefs.removeObject(forKey: keyName)
-            needsLogin = true
+            scanningWanted = false
+            central?.stopScan()
             statusOverride = ""
             UINotificationFeedbackGenerator().notificationOccurred(.error)
         case 5:
@@ -296,6 +302,7 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
             central?.cancelPeripheralConnection(p)
         }
         activePeripheral = nil
+        exchangeToken = nil
         activeChar = nil
         busy = false
     }
@@ -304,7 +311,8 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
 // MARK: - интерфейс (точная копия Android Student activity_main.xml)
 
 struct ContentView: View {
-    @StateObject private var nfc = MarkModel()
+    @StateObject private var ble = MarkModel()
+    @Environment(\.scenePhase) private var scenePhase
     @AppStorage(keyToken) private var savedToken = ""
     @AppStorage(keyName) private var studentName = ""
 
@@ -314,8 +322,8 @@ struct ContentView: View {
 
     private var defaultPrompt: String {
         studentName.isEmpty
-            ? "Приложите телефон к телефону преподавателя"
-            : "\(studentName)\nПриложите телефон к телефону преподавателя"
+            ? "Поднесите телефон к терминалу"
+            : "\(studentName)\nПоднесите телефон к терминалу"
     }
 
     var body: some View {
@@ -335,17 +343,13 @@ struct ContentView: View {
             }
 
             // По центру: либо карточка входа по QR-коду, либо текст статуса (без лишних кнопок)
-            if !loggedIn || nfc.needsLogin {
+            if !loggedIn {
                 LoginView(done: {
-                    nfc.needsLogin = false
-                    nfc.statusOverride = ""
-                    nfc.startAuto()
+                    ble.statusOverride = ""
+                    ble.startAuto()
                 })
-                .onAppear {
-                    nfc.stop()
-                }
             } else {
-                Text(nfc.statusOverride.isEmpty ? defaultPrompt : nfc.statusOverride)
+                Text(ble.statusOverride.isEmpty ? defaultPrompt : ble.statusOverride)
                     .font(.system(size: 15))
                     .foregroundColor(colorTextDim)
                     .multilineTextAlignment(.center)
@@ -353,17 +357,24 @@ struct ContentView: View {
                     .contentShape(Rectangle())
                     // Как на Android: долгое нажатие на текст статуса сбрасывает студента для входа по новому QR
                     .onLongPressGesture(minimumDuration: 0.7) {
-                        nfc.stop()
-                        nfc.statusOverride = ""
+                        ble.stop()
+                        ble.statusOverride = ""
                         savedToken = ""
                         studentName = ""
                         UINotificationFeedbackGenerator().notificationOccurred(.warning)
                     }
                     .onAppear {
                         UIApplication.shared.isIdleTimerDisabled = true
-                        nfc.startAuto()
+                        ble.startAuto()
                     }
             }
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active && loggedIn { ble.startAuto() } else { ble.stop() }
+        }
+        .onChange(of: savedToken) { value in
+            ble.stop()
+            if !value.isEmpty && scenePhase == .active { ble.startAuto() }
         }
         .preferredColorScheme(.dark)
     }
@@ -376,6 +387,9 @@ struct LoginView: View {
     @State private var showQrPicker = false
     @State private var showCamera = false
     @State private var qrMessage: String?
+    @State private var presenting = false
+    @State private var pendingText: String?
+    @State private var importGeneration = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -395,6 +409,9 @@ struct LoginView: View {
 
             Button {
                 qrMessage = nil
+                pendingText = nil
+                importGeneration += 1
+                presenting = true
                 showCamera = true
             } label: {
                 Text("Сканировать QR-код")
@@ -407,6 +424,9 @@ struct LoginView: View {
 
             Button {
                 qrMessage = nil
+                pendingText = nil
+                importGeneration += 1
+                presenting = true
                 showQrPicker = true
             } label: {
                 Text("Загрузить из галереи")
@@ -431,28 +451,38 @@ struct LoginView: View {
                 .stroke(colorBorder, lineWidth: 1)
         )
         .cornerRadius(20)
-        .sheet(isPresented: $showQrPicker) {
+        .sheet(isPresented: $showQrPicker, onDismiss: pickerDismissed) {
             PhotoPicker(onPick: importImage, onFinish: { showQrPicker = false })
         }
-        .fullScreenCover(isPresented: $showCamera) {
+        .fullScreenCover(isPresented: $showCamera, onDismiss: pickerDismissed) {
             CameraScanner(onCode: importCode, onCancel: { showCamera = false })
         }
     }
 
     /// Код, распознанный камерой.
     private func importCode(_ text: String) {
+        pendingText = text
         showCamera = false
-        DispatchQueue.main.async {
-            apply(text)
-        }
     }
 
     /// Картинка из галереи: распознаём в фоне, чтобы не подвешивать интерфейс.
     private func importImage(_ image: UIImage) {
         qrMessage = "Читаю QR-код…"
+        let generation = importGeneration
         DispatchQueue.global(qos: .userInitiated).async {
-            let text = QrImageDecoder.text(from: image)
-            DispatchQueue.main.async { apply(text) }
+            let text = QrImageDecoder.text(from: image) ?? ""
+            DispatchQueue.main.async {
+                guard generation == importGeneration else { return }
+                if presenting { pendingText = text } else { apply(text) }
+            }
+        }
+    }
+
+    private func pickerDismissed() {
+        presenting = false
+        if let text = pendingText {
+            pendingText = nil
+            apply(text)
         }
     }
 

@@ -43,7 +43,7 @@ public sealed class StudentRow : ObservableObject
 /// <summary>
 /// Вкладка «Занятия»: выбор группы, перекличка, статистика.
 /// Отметка приходит с телефона преподавателя по USB: студент прикладывает
-/// телефон (NFC), ПК проверяет код из его QR-кода и привязку устройства.
+/// телефон (BLE), ПК проверяет код из его QR-кода и привязку устройства.
 /// </summary>
 public sealed class LessonViewModel : ObservableObject, ITabViewModel
 {
@@ -78,18 +78,18 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         _database.DataChanged += OnDataChanged;
 
         // касания с телефона преподавателя обрабатывает сама программа
-        _phone.NfcRelay += HandleNfcRequest;
+        _phone.MarkRelay += HandleMarkRequest;
 
         ReloadGroups();
     }
 
-    // ------------------------------------------------------------- NFC-касания
+    // ------------------------------------------------------------- BLE-касания
 
     /// <summary>
     /// Запрос с телефона преподавателя: {"id":N,"token":"...","device":"..."}.
     /// Ответ: {"id":N,"code":C,"value":"..."} — его телефон отдаёт студенту.
     /// </summary>
-    private string HandleNfcRequest(string json)
+    private string HandleMarkRequest(string json)
     {
         long id = 0;
         var token = string.Empty;
@@ -121,9 +121,9 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
             var dispatcher = System.Windows.Application.Current?.Dispatcher;
             if (dispatcher is not null && !dispatcher.CheckAccess())
             {
-                return dispatcher.Invoke(() => ProcessNfcTap(id, token, device));
+                return dispatcher.Invoke(() => ProcessBleTap(id, token, device));
             }
-            return ProcessNfcTap(id, token, device);
+            return ProcessBleTap(id, token, device);
         }
         catch
         {
@@ -131,9 +131,11 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         }
     }
 
-    private string ProcessNfcTap(long id, string token, string device)
+    private string ProcessBleTap(long id, string token, string device)
     {
-        var student = token.Length == 0 ? null : _database.FindByQrToken(token);
+        if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(device))
+            return Reply(id, ReplyUnavailable, string.Empty);
+        var student = _database.FindByQrToken(token);
         if (student is null)
         {
             _toasts.Error("Касание: неизвестный QR-код",
@@ -154,7 +156,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         return $"{{\"id\":{id},\"code\":{code},\"value\":\"{escaped}\"}}";
     }
 
-    /// <summary>Отметка студента по id (NFC «телефон к телефону») или ручным кликом.</summary>
+    /// <summary>Отметка студента по id (BLE «телефон к телефону») или ручным кликом.</summary>
     private (bool Ok, bool DeviceBlocked, string Name) MarkStudentInternal(int studentId, string device)
     {
         var row = Rows.FirstOrDefault(r => r.StudentId == studentId);

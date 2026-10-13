@@ -9,12 +9,13 @@ namespace Visits11.Services;
 
 /// <summary>
 /// Связь с телефоном преподавателя по USB-кабелю («USB-модем»).
-/// ПК сам находит телефон и забирает NFC-касания студентов:
+/// ПК сам находит телефон и забирает BLE-касания студентов:
 /// GET /event (long-poll) → обработать → POST /event_result.
 /// Все соединения исходящие со стороны ПК — брандмауэр Windows ничего не блокирует.
 /// </summary>
 public sealed class PhoneLink : IDisposable
 {
+    private BoardLink? _board;
     private const int Port = 8090;
 
     /// <summary>Признак телефона преподавателя в ответе GET /info.</summary>
@@ -35,21 +36,28 @@ public sealed class PhoneLink : IDisposable
     private CancellationTokenSource? _cts;
     private Task? _worker;
 
-    /// <summary>NFC-запрос с телефона (json) → ответ (json). Блокирующий, потокобезопасный.</summary>
-    public event Func<string, string>? NfcRelay;
+    /// <summary>BLE-запрос с телефона (json) → ответ (json). Блокирующий, потокобезопасный.</summary>
+    public event Func<string, string>? MarkRelay;
 
     public void Start()
     {
-        if (_worker is not null) return;
+        if (_worker is not null || _board is not null) return;
+        if (System.IO.File.Exists(System.IO.Path.Combine(AppContext.BaseDirectory, "board.mode")))
+        {
+            _board = new BoardLink(request => MarkRelay?.Invoke(request) ?? "{\"code\":4}");
+            _board.Start();
+            return;
+        }
         _cts = new CancellationTokenSource();
         _worker = Task.Run(() => RunAsync(_cts.Token));
     }
 
     public void Dispose()
     {
+        _board?.Dispose();
         try { _cts?.Cancel(); } catch { /* уже остановлен */ }
-        try { _worker?.Wait(TimeSpan.FromSeconds(2)); } catch { /* задачи отменяются сами */ }
-        _cts?.Dispose();
+        // Do not wait on Dispatcher thread while an event is being processed.
+
         _cts = null;
         _worker = null;
     }
@@ -179,7 +187,7 @@ public sealed class PhoneLink : IDisposable
     }
 
     /// <summary>
-    /// Забирает NFC-события с телефона: GET /event (long-poll) → обработать → POST /event_result.
+    /// Забирает BLE-события с телефона: GET /event (long-poll) → обработать → POST /event_result.
     /// </summary>
     private async Task EventStreamAsync(string host, CancellationToken token)
     {
@@ -187,10 +195,17 @@ public sealed class PhoneLink : IDisposable
         client.DefaultRequestHeaders.ConnectionClose = true;
 
         var failures = 0;
+        var appliedPower = -1;
         while (!token.IsCancellationRequested && failures < 4)
         {
             try
             {
+                var power = BluetoothSettings.Current.Power;
+                if (power != appliedPower)
+                {
+                    using var settings = await client.GetAsync($"http://{host}:{Port}/power?level={power}", token);
+                    if (settings.IsSuccessStatusCode) appliedPower = power;
+                }
                 using var response = await client.GetAsync($"http://{host}:{Port}/event?wait=3000", token);
                 if (response.StatusCode == HttpStatusCode.NoContent)
                 {
@@ -208,7 +223,7 @@ public sealed class PhoneLink : IDisposable
                 var request = await response.Content.ReadAsStringAsync(token);
                 if (request.Length == 0) continue;
 
-                var handler = NfcRelay;
+                var handler = MarkRelay;
                 var result = handler is not null ? InvokeOnUi(handler, request) : "{\"code\":4}";
 
                 using var content = new StringContent(result, Encoding.UTF8, "application/json");
