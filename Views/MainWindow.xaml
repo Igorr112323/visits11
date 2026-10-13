@@ -316,6 +316,19 @@
                     </StackPanel>
 
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,0"
+                                    ToolTip="Мощность передатчика коробочки, дБм: -12, -9, -6, -3, 0, 3, 6, 9">
+                            <TextBlock Text="Мощность BLE" Style="{StaticResource Txt.Dim}"
+                                       VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBox x:Name="PowerInput"
+                                     Style="{StaticResource Widget.Input}"
+                                     Width="72" Height="36" Padding="10,0"
+                                     MaxLength="4" Text="-12"
+                                     KeyDown="PowerInput_OnKeyDown" />
+                            <TextBlock Text="дБм" Style="{StaticResource Txt.Dim}"
+                                       VerticalAlignment="Center" Margin="6,0,0,0" />
+                        </StackPanel>
+
                         <Button Style="{StaticResource Btn.Icon}"
                                 Command="{Binding ToggleThemeCommand}"
                                 VerticalAlignment="Center" Margin="0,0,12,0"

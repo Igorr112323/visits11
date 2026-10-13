@@ -17,9 +17,80 @@ public sealed class BoxLink : IDisposable
 
     private CancellationTokenSource? _cts;
     private Task? _worker;
+    private volatile SerialPort? _port;
+    private TaskCompletionSource<string?>? _powerWaiter;
 
     /// <summary>Запрос отметки (json) → ответ (json). Такой же, как у телефона преподавателя.</summary>
     public event Func<string, string>? NfcRelay;
+
+    /// <summary>
+    /// Мощность передатчика коробочки. Программа шлёт «POWER:<дБм>» и ждёт «POWER:<дБм> OK».
+    /// Возвращает применённое значение, null — коробочка не ответила (нет кабеля или порт занят).
+    /// </summary>
+    public int? SetPower(int dbm)
+    {
+        var port = WaitForPort(TimeSpan.FromSeconds(3));
+        if (port is null)
+        {
+            return null;
+        }
+
+        var waiter = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (Interlocked.CompareExchange(ref _powerWaiter, waiter, null) is not null)
+        {
+            return null;
+        }
+
+        try
+        {
+            port.WriteLine($"POWER:{dbm}");
+            if (!waiter.Task.Wait(TimeSpan.FromSeconds(2)))
+            {
+                return null;
+            }
+
+            var reply = waiter.Task.Result;
+            if (reply is null || !reply.EndsWith(" OK", StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            var applied = reply.Substring(6).Trim();
+            var space = applied.IndexOf(' ');
+            if (space > 0)
+            {
+                applied = applied.Substring(0, space);
+            }
+            return int.TryParse(applied, out var value) ? value : null;
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _powerWaiter, null);
+        }
+    }
+
+    /// <summary>Ждёт, пока найдётся порт коробочки (программа могла ещё не успеть её увидеть).</summary>
+    private SerialPort? WaitForPort(TimeSpan timeout)
+    {
+        var until = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            var port = _port;
+            if (port is not null)
+            {
+                return port;
+            }
+            if (DateTime.UtcNow >= until)
+            {
+                return null;
+            }
+            Thread.Sleep(150);
+        }
+    }
 
     public void Start()
     {
@@ -109,33 +180,46 @@ public sealed class BoxLink : IDisposable
     private void Serve(SerialPort port, CancellationToken token)
     {
         var lastPing = DateTime.UtcNow;
+        _port = port;
 
-        while (!token.IsCancellationRequested)
+        try
         {
-            if ((DateTime.UtcNow - lastPing).TotalSeconds >= 2)
+            while (!token.IsCancellationRequested)
             {
-                lastPing = DateTime.UtcNow;
-                port.WriteLine("PING");
-            }
+                if ((DateTime.UtcNow - lastPing).TotalSeconds >= 2)
+                {
+                    lastPing = DateTime.UtcNow;
+                    port.WriteLine("PING");
+                }
 
-            string line;
-            try
-            {
-                line = port.ReadLine();
-            }
-            catch (TimeoutException)
-            {
-                continue;
-            }
-            catch
-            {
-                return;
-            }
+                string line;
+                try
+                {
+                    line = port.ReadLine();
+                }
+                catch (TimeoutException)
+                {
+                    continue;
+                }
+                catch
+                {
+                    return;
+                }
 
-            if (line.StartsWith("TAP:", StringComparison.Ordinal))
-            {
-                HandleTap(port, line);
+                if (line.StartsWith("TAP:", StringComparison.Ordinal))
+                {
+                    HandleTap(port, line);
+                }
+                else if (line.StartsWith("POWER:", StringComparison.Ordinal))
+                {
+                    Volatile.Read(ref _powerWaiter)?.TrySetResult(line);
+                }
             }
+        }
+        finally
+        {
+            _port = null;
+            Volatile.Read(ref _powerWaiter)?.TrySetResult(null);
         }
     }
 
