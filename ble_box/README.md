@@ -9,7 +9,7 @@
 | Файл | Что это |
 |---|---|
 | [`esp32_ble_reader/esp32_ble_reader.ino`](esp32_ble_reader/esp32_ble_reader.ino) | Прошивка коробочки: `ESP32` + USB-кабель, ничего больше |
-| `KubGAU-Student.apk` | Приложение студента **с Bluetooth** (версия 1.5) — скачивается из релиза: https://github.com/Igorr112323/visits11/releases/download/v1.0.0/KubGAU-Student.apk |
+| `KubGAU-Student.apk` | Приложение студента **с Bluetooth** (версия 1.6) — скачивается из релиза: https://github.com/Igorr112323/visits11/releases/download/v1.0.0/KubGAU-Student.apk |
 | `KubGAU-Journal.exe` | Программа ПК с поддержкой коробочки — **скачивается из релиза** (148 МБ, в репозиторий не кладём): https://github.com/Igorr112323/visits11/releases/download/v1.0.0/KubGAU-Journal.exe |
 
 ---
@@ -93,7 +93,7 @@ REPLY:1:0:Иванов Иван
 
 ## 3. Приложение студента с Bluetooth
 
-`KubGAU-Student.apk` — версия **1.5** (внутри `versionCode 6`). Ставится **поверх** прежней,
+`KubGAU-Student.apk` — версия **1.6** (внутри `versionCode 7`). Ставится **поверх** прежней,
 вход (считанный QR-код) сохраняется: приложение **никогда не сбрасывает вход само** — ни по
 времени, ни после перезапуска, ни при ответе «кода нет в журнале». Сменить студента можно только
 вручную — долгим нажатием на надпись на экране.

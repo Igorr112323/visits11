@@ -57,6 +57,9 @@ final class BleMark {
         void onReply(int code, String value);
     }
 
+    /** Свой код (в протоколе его нет): считыватель не ответил — связи нет. */
+    static final int REPLY_NO_ANSWER = 6;
+
     private final Context context;
     private final Listener listener;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -93,7 +96,7 @@ final class BleMark {
             if (!busy || finished) {
                 return;
             }
-            finish(4, "");
+            finish(REPLY_NO_ANSWER, "");
         }
     };
 
@@ -139,6 +142,8 @@ final class BleMark {
         if (!started || busy || SystemClock.elapsedRealtime() < busyUntil) {
             return;
         }
+        // новая попытка: без этого после первого касания обмен считался бы завершённым навсегда
+        finished = false;
         BluetoothAdapter adapter = adapter();
         if (adapter == null || !adapter.isEnabled()) {
             return;
@@ -217,7 +222,7 @@ final class BleMark {
             gatt = null;
         }
         if (gatt == null) {
-            finish(4, "");
+            finish(REPLY_NO_ANSWER, "");
             return;
         }
         try {
@@ -238,7 +243,7 @@ final class BleMark {
                 return;
             }
             if (newState == BluetoothProfile.STATE_DISCONNECTED && !finished) {
-                finish(4, "");
+                finish(REPLY_NO_ANSWER, "");
             }
         }
 
@@ -259,7 +264,7 @@ final class BleMark {
             BluetoothGattCharacteristic found =
                     service == null ? null : service.getCharacteristic(CHAR_UUID);
             if (found == null) {
-                finish(4, "");
+                finish(REPLY_NO_ANSWER, "");
                 return;
             }
             characteristic = found;
@@ -275,7 +280,7 @@ final class BleMark {
 
             String token = token();
             if (token == null) {
-                finish(4, "");
+                finish(REPLY_NO_ANSWER, "");
                 return;
             }
             sendPayload(connection, token + "\n" + deviceId());
@@ -332,10 +337,10 @@ final class BleMark {
             characteristic.setValue(chunk);
             characteristic.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
             if (!connection.writeCharacteristic(characteristic)) {
-                finish(4, "");
+                finish(REPLY_NO_ANSWER, "");
             }
         } catch (Throwable ignored) {
-            finish(4, "");
+            finish(REPLY_NO_ANSWER, "");
         }
     }
 

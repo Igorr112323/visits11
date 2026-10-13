@@ -12,6 +12,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.ImageFormat;
 import android.hardware.Camera;
+import android.location.LocationManager;
 import android.net.Uri;
 import android.nfc.NfcAdapter;
 import android.nfc.Tag;
@@ -788,7 +789,27 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         if (bleAsked && !blePermissionsGranted()) {
             return "Разрешите Bluetooth в настройках приложения";
         }
+        if (Build.VERSION.SDK_INT < 31 && !locationEnabled()) {
+            return "Включите геолокацию в шторке — без неё поиск Bluetooth не работает";
+        }
         return null;
+    }
+
+    /** Android 11 и ниже ищут Bluetooth-устройства только при включённой геолокации. */
+    private boolean locationEnabled() {
+        try {
+            LocationManager manager = (LocationManager) getSystemService(LOCATION_SERVICE);
+            if (manager == null) {
+                return true;
+            }
+            if (Build.VERSION.SDK_INT >= 28) {
+                return manager.isLocationEnabled();
+            }
+            return manager.isProviderEnabled(LocationManager.GPS_PROVIDER)
+                    || manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER);
+        } catch (Throwable ignored) {
+            return true;
+        }
     }
 
     /** Выключили Bluetooth при открытом экране — сразу говорим об этом, включили — снова ищем считыватель. */
@@ -892,6 +913,10 @@ public final class MainActivity extends Activity implements NfcAdapter.ReaderCal
         }
         if (result == REPLY_DEVICE_BLOCKED) {
             ui.post(() -> setStatus("Этот телефон привязан к другому студенту"));
+            return;
+        }
+        if (result == BleMark.REPLY_NO_ANSWER) {
+            ui.post(() -> setStatus("Не получилось — коробочка не ответила"));
             return;
         }
         ui.post(() -> setStatus("Не получилось: перекличка не идёт"));

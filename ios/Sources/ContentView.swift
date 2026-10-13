@@ -136,7 +136,7 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
 
         let work = DispatchWorkItem { [weak self] in
             guard let self = self, self.busy else { return }
-            self.finishExchange(code: 4, value: "")
+            self.finishExchange(code: 6, value: "")
         }
         timeoutWork?.cancel()
         timeoutWork = work
@@ -220,7 +220,7 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
                     didWriteValueFor characteristic: CBCharacteristic,
                     error: Error?) {
         if error != nil {
-            finishExchange(code: 4, value: "")
+            finishExchange(code: 6, value: "")
             return
         }
         sendNextChunk(to: peripheral, characteristic: characteristic)
@@ -266,6 +266,10 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
         case 5:
             cooldownUntil = Date().addingTimeInterval(2.5)
             statusOverride = "Этот телефон привязан к другому студенту"
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+        case 6:
+            cooldownUntil = Date().addingTimeInterval(2.0)
+            statusOverride = "Не получилось — коробочка не ответила"
             UINotificationFeedbackGenerator().notificationOccurred(.error)
         default:
             cooldownUntil = Date().addingTimeInterval(2.0)
