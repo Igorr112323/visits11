@@ -23,6 +23,9 @@ public sealed class BoxLink : IDisposable
     /// <summary>Запрос отметки (json) → ответ (json). Такой же, как у телефона преподавателя.</summary>
     public event Func<string, string>? NfcRelay;
 
+    /// <summary>Какая мощность выставлена на коробочке сейчас (ответ на «POWER?» и после смены).</summary>
+    public event Action<int>? PowerReported;
+
     /// <summary>
     /// Мощность передатчика коробочки. Программа шлёт «POWER:<дБм>» и ждёт «POWER:<дБм> OK».
     /// Возвращает применённое значение, null — коробочка не ответила (нет кабеля или порт занят).
@@ -124,6 +127,8 @@ public sealed class BoxLink : IDisposable
                 continue;
             }
 
+            try { port.WriteLine("POWER?"); } catch { /* не ответит — узнаем при следующей смене */ }
+
             try { await Task.Run(() => Serve(port, token), token); }
             catch (OperationCanceledException) { Dispose(port); break; }
             catch { /* кабель выдернули — ищем порт заново */ }
@@ -213,6 +218,7 @@ public sealed class BoxLink : IDisposable
                 else if (line.StartsWith("POWER:", StringComparison.Ordinal))
                 {
                     Volatile.Read(ref _powerWaiter)?.TrySetResult(line);
+                    ReportPower(line);
                 }
             }
         }
@@ -227,6 +233,21 @@ public sealed class BoxLink : IDisposable
     /// Отметка от коробочки: «TAP:<номер>:<код-студента>:<id-телефона>».
     /// Программа обрабатывает её как обычное касание и отвечает «REPLY:<номер>:<код>:<имя>».
     /// </summary>
+    /// <summary>«POWER:<дБм>» (в том числе «POWER:<дБм> OK») — сообщаем, что стоит на коробочке.</summary>
+    private void ReportPower(string line)
+    {
+        var text = line.Substring(6).Trim();
+        var space = text.IndexOf(' ');
+        if (space > 0)
+        {
+            text = text.Substring(0, space);
+        }
+        if (int.TryParse(text, out var dbm))
+        {
+            PowerReported?.Invoke(dbm);
+        }
+    }
+
     private void HandleTap(SerialPort port, string line)
     {
         var parts = line.Split(':', 4);

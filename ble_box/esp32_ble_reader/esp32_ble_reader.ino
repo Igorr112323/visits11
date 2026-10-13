@@ -2,12 +2,13 @@
 #include <BLEServer.h>
 #include <BLEUtils.h>
 #include <BLE2902.h>
+#include <Preferences.h>
 
 static const int BLE_TX_POWER_DBM = -12;
 static const char *DEVICE_NAME = "Visits11-Box";
 static const char *SERVICE_UUID = "F0391101-0203-0405-0607-08090A0B0C0D";
 static const char *CHAR_UUID = "F0391102-0203-0405-0607-08090A0B0C0D";
-static const char *BOX_VERSION = "VISITS11-ESP32 v2";
+static const char *BOX_VERSION = "VISITS11-ESP32 v3";
 static const long SERIAL_BAUD = 115200;
 static const uint32_t REPLY_TIMEOUT_MS = 6000;
 static const uint8_t CODE_MARKED = 0;
@@ -23,7 +24,9 @@ static uint32_t requestCounter = 0;
 static uint32_t pendingId = 0;
 static uint32_t pendingSince = 0;
 static bool waitingReply = false;
+static bool deviceConnected = false;
 static int currentPower = BLE_TX_POWER_DBM;
+static Preferences prefs;
 
 static bool applyPower(int dbm)
 {
@@ -47,6 +50,18 @@ static bool applyPower(int dbm)
     esp_ble_tx_power_set(ESP_BLE_PWR_TYPE_SCAN, level);
     currentPower = dbm;
     return true;
+}
+
+static void savePower(int dbm)
+{
+    prefs.putInt("power", dbm);
+}
+
+static void restartAdvertising()
+{
+    BLEDevice::stopAdvertising();
+    delay(50);
+    BLEDevice::startAdvertising();
 }
 
 static void setReply(uint8_t code, const std::string &name)
@@ -102,6 +117,11 @@ static void handleSerialLine(const String &line)
         int value = line.substring(6).toInt();
         if (applyPower(value))
         {
+            savePower(currentPower);
+            if (!deviceConnected)
+            {
+                restartAdvertising();
+            }
             Serial.printf("POWER:%d OK\n", currentPower);
         }
         else
@@ -181,12 +201,14 @@ class ServerCallbacks : public BLEServerCallbacks
 {
     void onConnect(BLEServer *server) override
     {
+        deviceConnected = true;
         rxBuffer.clear();
         setReply(0xFF, std::string());
     }
 
     void onDisconnect(BLEServer *server) override
     {
+        deviceConnected = false;
         waitingReply = false;
         rxBuffer.clear();
         BLEDevice::startAdvertising();
@@ -199,11 +221,17 @@ void setup()
     delay(300);
     Serial.println();
     Serial.println(BOX_VERSION);
-    Serial.printf("мощность Bluetooth: %d дБм (меняется строкой вверху скетча или командой POWER:-6)\n",
-                  currentPower);
+
+    prefs.begin("visits11", false);
+    int remembered = prefs.getInt("power", BLE_TX_POWER_DBM);
 
     BLEDevice::init(DEVICE_NAME);
-    applyPower(BLE_TX_POWER_DBM);
+    if (!applyPower(remembered))
+    {
+        applyPower(BLE_TX_POWER_DBM);
+    }
+    Serial.printf("мощность Bluetooth: %d дБм (задаётся командой POWER, помнится после выключения)\n",
+                  currentPower);
 
     bleServer = BLEDevice::createServer();
     bleServer->setCallbacks(new ServerCallbacks());

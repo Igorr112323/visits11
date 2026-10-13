@@ -14,6 +14,21 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = viewModel;
+
+        App.Box.PowerReported += OnBoxPowerReported;
+        Closed += (_, _) => App.Box.PowerReported -= OnBoxPowerReported;
+    }
+
+    /// <summary>Коробочка сама сказала свою мощность — показываем её в поле (если учитель не печатает).</summary>
+    private void OnBoxPowerReported(int dbm)
+    {
+        Dispatcher.Invoke(() =>
+        {
+            if (!PowerInput.IsKeyboardFocused)
+            {
+                PowerInput.Text = dbm.ToString();
+            }
+        });
     }
 
     /// <summary>Перетаскивание окна за топбар (двойной клик разворачивает сам).</summary>
