@@ -251,6 +251,8 @@ public final class MainActivity extends Activity {
 
     private void stopBleServer() {
         bleAdvertising = false;
+        bleBuffers.clear();
+        bleReplies.clear();
         try {
             if (advertiser != null) {
                 advertiser.stopAdvertising(advertiseCallback);
@@ -351,15 +353,8 @@ public final class MainActivity extends Activity {
                 byte[] reply = TeacherCardService.exchangeWithPc(token, studentDevice, MainActivity.this::vibrate);
                 if (bleBuffers.get(key) != buffer) return;
                 bleReplies.put(key, reply);
-                try {
-                    BluetoothGattServer server = gattServer;
-                    BluetoothGattCharacteristic ch = markCharacteristic;
-                    if (server != null && ch != null) {
-                        ch.setValue(reply);
-                        server.notifyCharacteristicChanged(device, ch, false);
-                    }
-                } catch (Throwable ignored) {
-                }
+                // Both clients poll their per-device result. A shared characteristic notification
+                // could race with another student's reply and incorrectly deliver code 2.
             }, "BleMark").start();
         }
 

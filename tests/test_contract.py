@@ -14,6 +14,9 @@ class ContractTests(unittest.TestCase):
             text=read(path)
             for uuid in ['F0391101-0203-0405-0607-08090A0B0C0D','F0391102-0203-0405-0607-08090A0B0C0D']:
                 self.assertIn(uuid,text,path)
+    def test_no_ios_nfc_usage_description(self):
+        self.assertNotIn("NFCReader", read("ios/Sources/Info.plist"))
+
     def test_no_android_nfc_permissions_or_service(self):
         for module in ['app','student']:
             path=f'android/{module}/src/main/AndroidManifest.xml'
