@@ -64,6 +64,21 @@ class ContractTests(unittest.TestCase):
         self.assertIn('rssi < MIN_PHONE_RSSI', board)
         self.assertIn('terminal->disconnect(dropId)', board)
 
+    def test_standalone_exe_defaults_to_board_without_marker(self):
+        project = ET.fromstring(read('Visits11.csproj'))
+        mode = project.find('./PropertyGroup/TerminalMode')
+        self.assertEqual(mode.text, 'Board')
+        source = read('Services/PhoneLink.cs')
+        self.assertNotIn('board.mode', source)
+        default = source.split('#else')[1].split('#endif')[0]
+        self.assertIn('new BoardLink', default)
+        self.assertIn('_board.Start()', default)
+        workflow = read('.github/workflows/ble.yml')
+        self.assertIn('-p:TerminalMode=Board', workflow)
+        self.assertIn('-p:TerminalMode=Phone', workflow)
+        self.assertNotIn('touch delivery/ESP32/board.mode', workflow)
+        self.assertIn('cp delivery/ESP32/KubGAU-Journal.exe .', workflow)
+
     def test_no_release_asset_deletion(self):
         for path in (ROOT/'.github/workflows').glob('*.yml'):
             self.assertNotIn('api -X DELETE',path.read_text())

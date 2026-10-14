@@ -42,15 +42,16 @@ public sealed class PhoneLink : IDisposable
     public void Start()
     {
         if (_worker is not null || _board is not null) return;
-        if (System.IO.File.Exists(System.IO.Path.Combine(AppContext.BaseDirectory, "board.mode")))
-        {
-            _board = new BoardLink(request => MarkRelay?.Invoke(request) ?? "{\"code\":4}");
-            _board.Start();
-            return;
-        }
+#if PHONE_TERMINAL
+        // The phone distribution is compiled separately; no user-created mode file.
         _cts = new CancellationTokenSource();
         var token = _cts.Token;
         _worker = Task.Run(() => RunAsync(token));
+#else
+        // Default standalone EXE: automatically discover ESP32 over USB.
+        _board = new BoardLink(request => MarkRelay?.Invoke(request) ?? "{\"code\":4}");
+        _board.Start();
+#endif
     }
 
     public void Dispose()

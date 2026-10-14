@@ -19,12 +19,22 @@ jobs:
       - name: Build
         run: dotnet build -c Release
 
-      - name: Publish single-file exe
-        run: dotnet publish -c Release -r win-x64 -p:PublishSingleFile=true -p:SelfContained=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish
+      - name: Publish standalone ESP32 EXE (default mode)
+        run: dotnet publish -c Release -r win-x64 -p:TerminalMode=Board -p:PublishSingleFile=true -p:SelfContained=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/board
 
-      - name: Upload artifact
+      - name: Publish phone terminal EXE
+        run: dotnet publish -c Release -r win-x64 -p:TerminalMode=Phone -p:PublishSingleFile=true -p:SelfContained=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/phone
+
+      - name: Upload ESP32 EXE
         uses: actions/upload-artifact@v7
         with:
           name: Visits11-win-x64
-          path: publish/Visits11.exe
+          path: publish/board/Visits11.exe
+          if-no-files-found: error
+
+      - name: Upload phone EXE
+        uses: actions/upload-artifact@v7
+        with:
+          name: Visits11-Phone-win-x64
+          path: publish/phone/Visits11.exe
           if-no-files-found: error

@@ -2,6 +2,8 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
+    <!-- The standalone/default EXE is for ESP32. No marker/configuration file required. -->
+    <TerminalMode Condition="'$(TerminalMode)' == ''">Board</TerminalMode>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
@@ -11,6 +13,14 @@
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TerminalMode)' == 'Phone'">
+    <DefineConstants>$(DefineConstants);PHONE_TERMINAL</DefineConstants>
+  </PropertyGroup>
+  <Target Name="ValidateTerminalMode" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(TerminalMode)' != 'Board' and '$(TerminalMode)' != 'Phone'"
+           Text="TerminalMode must be Board or Phone." />
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="System.IO.Ports" Version="8.0.0" />
