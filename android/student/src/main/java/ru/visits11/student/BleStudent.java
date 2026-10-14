@@ -28,7 +28,7 @@ final class BleStudent {
     private String exchangeToken;
     private byte[] payload;
     private int offset;
-    private long retryAt, deadline;
+    private long retryAt, deadline, scanSince, lastSuccessAt;
 
     BleStudent(Activity a, Supplier<String> t, Supplier<String> d, BiConsumer<Integer,String> r, Consumer<String> s) {
         activity=a; token=t; device=d; reply=r; status=s;
@@ -79,12 +79,20 @@ final class BleStudent {
                 else if (Build.VERSION.SDK_INT<31 && !activity.getSystemService(LocationManager.class).isProviderEnabled(LocationManager.GPS_PROVIDER))
                     status.accept("Включите геолокацию для поиска Bluetooth (Android 8–11)");
                 else if (gatt!=null && SystemClock.elapsedRealtime()>deadline) finish(4, "");
+                else if (scanning && gatt==null && SystemClock.elapsedRealtime()-scanSince>15000) {
+                    // Android умеет молча останавливать поиск без callbacks — принудительно перезапускаем
+                    stopScan();
+                    retryAt=SystemClock.elapsedRealtime()+300;
+                }
+                else if (scanning && gatt==null && SystemClock.elapsedRealtime()-scanSince>10000 && SystemClock.elapsedRealtime()-lastSuccessAt>10000)
+                    status.accept("Терминал не найден — поднесите телефон ближе");
                 else if (gatt==null && !scanning && SystemClock.elapsedRealtime()>=retryAt) {
                     scanner=a.getBluetoothLeScanner();
                     if (scanner!=null) {
                         scanner.startScan(Collections.singletonList(new ScanFilter.Builder().setServiceUuid(new ParcelUuid(SERVICE)).build()),
                             new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), scan);
                         scanning=true;
+                        scanSince=SystemClock.elapsedRealtime();
                         status.accept("Поднесите телефон к терминалу");
                     }
                 }
@@ -105,7 +113,7 @@ final class BleStudent {
     };
     private void stopScan() {
         try { if(scanner!=null && scanning) scanner.stopScan(scan); } catch (Exception ignored) {}
-        scanning=false; scanner=null;
+        scanning=false; scanner=null; scanSince=0;
     }
     private boolean current(BluetoothGatt g) { return wanted && gatt==g && Objects.equals(exchangeToken,token.get()); }
     private final BluetoothGattCallback callback=new BluetoothGattCallback() {
@@ -153,6 +161,7 @@ final class BleStudent {
         boolean valid=wanted && Objects.equals(exchangeToken,token.get());
         // Связь с платой освобождается мгновенно — она сразу готова принять следующего студента.
         close();
+        if (valid && code==0) lastSuccessAt=SystemClock.elapsedRealtime();
         // Успех: «Вы отмечены» висит 5 секунд (считает сама программа, таймера на экране нет),
         // затем обычный тик возобновляет поиск — повторная отметка без закрытия приложения.
         retryAt=SystemClock.elapsedRealtime()+(code==0?5000:2500);

@@ -117,6 +117,17 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn('touch delivery/ESP32/board.mode', workflow)
         self.assertIn('cp delivery/ESP32/KubGAU-Journal.exe .', workflow)
 
+    def test_search_watchdog_and_honest_status(self):
+        android = read('android/student/src/main/java/ru/visits11/student/BleStudent.java')
+        tick = android.split('private final Runnable tick')[1].split('private final ScanCallback')[0]
+        self.assertIn('elapsedRealtime()-scanSince>15000', tick)
+        self.assertIn('Терминал не найден — поднесите телефон ближе', tick)
+        self.assertIn('scanSince=SystemClock.elapsedRealtime()', tick)
+        ios = read('ios/Sources/ContentView.swift')
+        self.assertIn('scanStartedAt = Date()', ios)
+        self.assertIn('Терминал не найден — поднесите телефон ближе', ios)
+        self.assertIn('searchHintWork?.cancel()', ios)
+
     def test_board_connection_indicator_and_com_path(self):
         board = read('Services/BoardLink.cs')
         self.assertIn('public event Action<bool>? StateChanged', board)

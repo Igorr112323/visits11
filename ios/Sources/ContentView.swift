@@ -53,6 +53,9 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
     private var cooldownUntil: Date = .distantPast
     // «Вы отмечены» показывается 5 секунд, потом экран сам возвращается к «Поднесите телефон к терминалу».
     private var awaitingReturnToScan = false
+    // Пока поиск идёт без результата, через 10 секунд показываем честный статус.
+    private var scanStartedAt: Date?
+    private var searchHintWork: DispatchWorkItem?
 
     private var writeChunks: [Data] = []
     private var writeIndex = 0
@@ -75,6 +78,9 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
     func stop() {
         scanningWanted = false
         awaitingReturnToScan = false
+        searchHintWork?.cancel()
+        searchHintWork = nil
+        scanStartedAt = nil
         cleanupConnection()
         central?.stopScan()
         cooldownUntil = .distantPast
@@ -88,6 +94,15 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
             withServices: [serviceUUID],
             options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
         )
+        scanStartedAt = Date()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, self.scanningWanted, !self.busy, self.scanStartedAt != nil,
+                  Date().timeIntervalSince(self.lastMarkedAt) >= 10 else { return }
+            self.statusOverride = "Терминал не найден — поднесите телефон ближе"
+        }
+        searchHintWork?.cancel()
+        searchHintWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: work)
     }
 
     // MARK: CBCentralManagerDelegate
@@ -127,6 +142,10 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
         busy = true
         exchangeToken = token
         central.stopScan()
+        searchHintWork?.cancel()
+        searchHintWork = nil
+        scanStartedAt = nil
+        statusOverride = ""
 
         activePeripheral = peripheral
         peripheral.delegate = self
