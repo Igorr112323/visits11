@@ -140,7 +140,7 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
         // Терминал публикует свой порог расстояния в advertising-пакете
         // (manufacturer data 0x11 0xA1 <порог>); у старых прошивок его нет — строгое значение.
         let gate: Int
-        if let mfg = advertisementData[CBAdvertisementData.manufacturerDataKey] as? Data,
+        if let mfg = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data,
            mfg.count == 3, mfg[mfg.startIndex] == 0x11, mfg[mfg.startIndex+1] == 0xA1 {
             gate = Int(Int8(bitPattern: mfg[mfg.startIndex+2]))
         } else {

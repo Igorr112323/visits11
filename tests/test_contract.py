@@ -39,7 +39,7 @@ class ContractTests(unittest.TestCase):
         self.assertIn('return -46',android)
         ios=read('ios/Sources/ContentView.swift')
         self.assertIn('touchOnlyRssiThreshold = -46',ios)
-        self.assertIn('CBAdvertisementData.manufacturerDataKey',ios)
+        self.assertIn('CBAdvertisementDataManufacturerDataKey',ios)
         self.assertIn('rssiValue >= gate',ios)
     def test_late_account_response_guard(self):
         self.assertIn('Objects.equals(exchangeToken,token.get())',read('android/student/src/main/java/ru/visits11/student/BleStudent.java'))
