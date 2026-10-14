@@ -5,7 +5,7 @@ using System.Windows;
 namespace Visits11.Services;
 
 /// <summary>
-/// Переключение светлой/тёмной темы. Выбор сохраняется в settings.json рядом с exe.
+/// Переключение светлой/тёмной темы. Выбор сохраняется в папке данных пользователя.
 /// </summary>
 public sealed class ThemeService
 {

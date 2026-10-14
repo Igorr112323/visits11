@@ -16,6 +16,9 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Test automatic storage and legacy database migration
+        run: dotnet run --project tests/StorageTests/StorageTests.csproj -c Release
+
       - name: Build
         run: dotnet build -c Release
 

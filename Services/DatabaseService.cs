@@ -4,7 +4,7 @@ using Visits11.Models;
 namespace Visits11.Services;
 
 /// <summary>
-/// Локальная SQLite-база (attendance.db рядом с exe).
+/// Локальная SQLite-база в папке данных пользователя (%LOCALAPPDATA%/Visits11).
 /// </summary>
 public sealed class DatabaseService
 {

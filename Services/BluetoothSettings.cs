@@ -7,7 +7,7 @@ namespace Visits11.Services;
 public sealed class BluetoothSettings : INotifyPropertyChanged
 {
     public static BluetoothSettings Current { get; } = new();
-    private readonly string _path = Path.Combine(AppContext.BaseDirectory, "bluetooth-power.txt");
+    private readonly string _path = Path.Combine(AppDataStorage.DirectoryPath, "bluetooth-power.txt");
     private int _power;
     public string[] Levels { get; } = { "Минимум", "Низкая", "Средняя", "Высокая" };
     public event PropertyChangedEventHandler? PropertyChanged;
