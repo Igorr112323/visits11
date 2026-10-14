@@ -95,27 +95,28 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
     {
         var pending = _database.GetActiveLesson();
         if (pending is null) return;
+        var pendingLesson = pending.Value;
 
-        if (!DateTime.TryParse(pending.StartedAt, out var started) ||
+        if (!DateTime.TryParse(pendingLesson.StartedAt, out var started) ||
             (DateTime.Now - started).TotalHours > 12)
         {
             // слишком старая перекличка: закрываем, чтобы не путать с текущей
-            _database.CloseStaleLesson(pending.Id);
+            _database.CloseStaleLesson(pendingLesson.Id);
             return;
         }
 
-        var group = Groups.FirstOrDefault(g => g.Id == pending.GroupId);
+        var group = Groups.FirstOrDefault(g => g.Id == pendingLesson.GroupId);
         if (group is null)
         {
-            _database.CloseStaleLesson(pending.Id);
+            _database.CloseStaleLesson(pendingLesson.Id);
             return;
         }
 
-        _lessonStartedAt = pending.StartedAt;
-        _activeLessonId = pending.Id;
+        _lessonStartedAt = pendingLesson.StartedAt;
+        _activeLessonId = pendingLesson.Id;
         SelectedGroup = group; // при смене группы LoadStudents() сработает сам
 
-        foreach (var (studentId, markedAt) in _database.GetLessonPresents(pending.Id))
+        foreach (var (studentId, markedAt) in _database.GetLessonPresents(pendingLesson.Id))
         {
             var row = Rows.FirstOrDefault(r => r.StudentId == studentId);
             if (row is not null)
