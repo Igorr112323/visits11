@@ -45,6 +45,25 @@ class ContractTests(unittest.TestCase):
     def test_ios_no_double_dismiss(self):
         self.assertNotIn('picker.dismiss',read('ios/Sources/QrLogin.swift'))
         self.assertEqual(read('ios/Sources/ContentView.swift').count('onDismiss: pickerDismissed'),2)
+    def test_success_stops_automatic_reconnection(self):
+        android = read('android/student/src/main/java/ru/visits11/student/BleStudent.java')
+        success = android.split('if (valid && code == 0) {')[1].split('}')[0]
+        self.assertIn('wanted = false', success)
+        self.assertIn('ui.removeCallbacks(tick)', success)
+        ios = read('ios/Sources/ContentView.swift').split('        case 0:')[1].split('        case 2:')[0]
+        self.assertIn('scanningWanted = false', ios)
+        self.assertIn('central?.stopScan()', ios)
+
+    def test_terminal_checks_phone_rssi_before_queueing(self):
+        board = read('firmware/Visits11Ble/Visits11Ble.ino')
+        write = board.split('void onWrite(')[1].split('static void gapEvent(')[0]
+        self.assertNotIn('xQueueSend', write)
+        self.assertIn('checkingProximity = true', write)
+        self.assertIn('REQUIRED_SAMPLES = 3', board)
+        self.assertIn('rssiRequestId == activeId', board)
+        self.assertIn('rssi < MIN_PHONE_RSSI', board)
+        self.assertIn('terminal->disconnect(dropId)', board)
+
     def test_no_release_asset_deletion(self):
         for path in (ROOT/'.github/workflows').glob('*.yml'):
             self.assertNotIn('api -X DELETE',path.read_text())

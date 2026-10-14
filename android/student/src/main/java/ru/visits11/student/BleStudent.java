@@ -128,7 +128,7 @@ final class BleStudent {
                 if(status!=0 || value==null || value.length==0) { finish(4,""); return; }
                 int code=value[0]&255;
                 if(code==255) poll(g);
-                else if(code==0 || code==2 || code==4 || code==5) finish(code,new String(value,1,value.length-1,StandardCharsets.UTF_8));
+                else if(code==0 || code==2 || code==4 || code==5 || code==6) finish(code,new String(value,1,value.length-1,StandardCharsets.UTF_8));
                 else finish(4,"");
             });
         }
@@ -146,6 +146,12 @@ final class BleStudent {
     private void finish(int code,String name) {
         boolean valid=wanted && Objects.equals(exchangeToken,token.get());
         close(); retryAt=SystemClock.elapsedRealtime()+(code==0?5000:2500);
+        if (valid && code == 0) {
+            // The plate must serve the next student, not reconnect to this one every 5 s.
+            wanted = false;
+            stopScan();
+            ui.removeCallbacks(tick);
+        }
         if(valid) reply.accept(code,name);
     }
     private void close() {

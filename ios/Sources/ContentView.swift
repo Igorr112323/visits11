@@ -253,6 +253,8 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
 
         switch code {
         case 0:
+            scanningWanted = false
+            central?.stopScan()
             lastMarkedAt = Date()
             cooldownUntil = Date().addingTimeInterval(5.0)
             statusOverride = value.isEmpty ? "Вы отмечены" : "Вы отмечены — \(value)"
@@ -269,6 +271,9 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
             central?.stopScan()
             statusOverride = ""
             UINotificationFeedbackGenerator().notificationOccurred(.error)
+        case 6:
+            cooldownUntil = Date().addingTimeInterval(2.5)
+            statusOverride = "Поднесите телефон ближе к терминалу"
         case 5:
             cooldownUntil = Date().addingTimeInterval(2.5)
             statusOverride = "Этот телефон привязан к другому студенту"

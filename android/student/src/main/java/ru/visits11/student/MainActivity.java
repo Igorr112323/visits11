@@ -695,6 +695,10 @@ public final class MainActivity extends Activity {
             });
             return;
         }
+        if (result == 6) {
+            ui.post(() -> setStatus("Поднесите телефон ближе к терминалу"));
+            return;
+        }
         if (result == REPLY_DEVICE_BLOCKED) {
             ui.post(() -> setStatus("Этот телефон привязан к другому студенту"));
             return;
