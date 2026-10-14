@@ -22,6 +22,13 @@ static QueueHandle_t events;
 // This is a signal-strength heuristic, NOT secure distance bounding.
 static const int MIN_PHONE_RSSI = -46;
 static const int REQUIRED_SAMPLES = 3;
+// The four EXE levels are four marking distances, set by the teacher in real time:
+// level 0 ("Минимум") = touch the phone to the plate, level 3 ("Высокая") = arm's length.
+static int phoneRssiLimit() {
+  static const int limits[4] = { MIN_PHONE_RSSI, -48, -51, -55 };
+  int l = powerLevel < 0 ? 0 : (powerLevel > 3 ? 3 : powerLevel);
+  return limits[l];
+}
 static Event awaitingProximity{};
 static esp_bd_addr_t peerAddress{};
 static uint16_t connectionId = 0;
@@ -109,7 +116,7 @@ static void gapEvent(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t* param
   rssiInFlight = false;
   if (current) {
     int rssi = param->read_rssi_cmpl.rssi;
-    if (param->read_rssi_cmpl.status != ESP_BT_STATUS_SUCCESS || rssi >= 0 || rssi < MIN_PHONE_RSSI) {
+    if (param->read_rssi_cmpl.status != ESP_BT_STATUS_SUCCESS || rssi >= 0 || rssi < phoneRssiLimit()) {
       answer(6); // Too far or measurement unavailable; NEVER delete the saved account.
     } else if (++goodSamples >= REQUIRED_SAMPLES) {
       checkingProximity = false;

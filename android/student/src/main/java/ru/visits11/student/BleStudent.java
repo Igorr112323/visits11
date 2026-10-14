@@ -43,11 +43,17 @@ final class BleStudent {
         return activity.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)==PackageManager.PERMISSION_GRANTED;
     }
     void requestEnable() {
+        if (token.get() == null) return;
         if (!permitted()) {
             activity.requestPermissions(Build.VERSION.SDK_INT>=31 ? new String[]{Manifest.permission.BLUETOOTH_SCAN,Manifest.permission.BLUETOOTH_CONNECT}
                 : new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, 78);
         } else {
-            try { activity.startActivity(new Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS)); } catch (Exception ignored) {}
+            // Never throw the student into the phone's system settings: just resume the search.
+            wanted = true;
+            stopScan(); close();
+            retryAt = SystemClock.elapsedRealtime() + 1500;
+            ui.removeCallbacks(tick);
+            ui.post(tick);
         }
     }
     void start() {

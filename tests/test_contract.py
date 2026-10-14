@@ -45,6 +45,13 @@ class ContractTests(unittest.TestCase):
     def test_ios_no_double_dismiss(self):
         self.assertNotIn('picker.dismiss',read('ios/Sources/QrLogin.swift'))
         self.assertEqual(read('ios/Sources/ContentView.swift').count('onDismiss: pickerDismissed'),2)
+    def test_student_tap_never_opens_system_settings(self):
+        android = read('android/student/src/main/java/ru/visits11/student/BleStudent.java')
+        self.assertNotIn('ACTION_BLUETOOTH_SETTINGS', android)
+        handler = android.split('// Never throw the student into the phone')[1].split('}')[0]
+        self.assertIn('wanted = true', handler)
+        self.assertIn('ui.post(tick)', handler)
+
     def test_success_stops_automatic_reconnection(self):
         android = read('android/student/src/main/java/ru/visits11/student/BleStudent.java')
         success = android.split('if (valid && code == 0) {')[1].split('}')[0]
@@ -61,7 +68,8 @@ class ContractTests(unittest.TestCase):
         self.assertIn('checkingProximity = true', write)
         self.assertIn('REQUIRED_SAMPLES = 3', board)
         self.assertIn('rssiRequestId == activeId', board)
-        self.assertIn('rssi < MIN_PHONE_RSSI', board)
+        self.assertIn('rssi < phoneRssiLimit()', board)
+        self.assertIn('static const int limits[4] = { MIN_PHONE_RSSI, -48, -51, -55 }', board)
         self.assertIn('terminal->disconnect(dropId)', board)
 
     def test_standalone_exe_defaults_to_board_without_marker(self):
