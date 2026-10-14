@@ -293,20 +293,17 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
             scanningWanted = false
             central?.stopScan()
             statusOverride = ""
-            UINotificationFeedbackGenerator().notificationOccurred(.error)
         case 6:
             cooldownUntil = Date().addingTimeInterval(2.5)
             statusOverride = "Поднесите телефон ближе к терминалу"
         case 5:
             cooldownUntil = Date().addingTimeInterval(2.5)
             statusOverride = "Этот телефон привязан к другому студенту"
-            UINotificationFeedbackGenerator().notificationOccurred(.error)
         default:
             cooldownUntil = Date().addingTimeInterval(2.0)
             // Как на Android: если только что успешно отметились, не затираем «Вы отмечены» при отведении руки
             if Date().timeIntervalSince(lastMarkedAt) >= 5.0 {
                 statusOverride = "Не получилось: перекличка не идёт"
-                UINotificationFeedbackGenerator().notificationOccurred(.error)
             }
         }
 
@@ -524,7 +521,7 @@ struct LoginView: View {
         }
         prefs.set(credentials.token, forKey: keyToken)
         prefs.set(credentials.name, forKey: keyName)
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        // Без вибрации: телефон вибрирует только когда отметка записана в журнал.
         done()
     }
 }

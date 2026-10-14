@@ -453,6 +453,11 @@ public final class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode == 78) {
+            // Результат разрешения Bluetooth: сразу начинаем свежий поиск
+            ble.rescanNow();
+            return;
+        }
         if (requestCode != REQ_CAMERA) {
             return;
         }
@@ -535,7 +540,7 @@ public final class MainActivity extends Activity {
         closeScanner(null);
         showReady();
         if (resumed) ble.start();
-        vibrate();
+        // Без вибрации: телефон вибрирует только когда отметка записана в журнал.
         toast(credentials.name.isEmpty()
                 ? "Вход выполнен"
                 : "Вход выполнен: " + credentials.name);

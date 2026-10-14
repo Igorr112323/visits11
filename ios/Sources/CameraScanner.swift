@@ -143,7 +143,7 @@ final class QrScannerViewController: UIViewController, AVCaptureMetadataOutputOb
                 session.stopRunning()
             }
         }
-        AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+        // Без вибрации: телефон вибрирует только когда отметка записана в журнал.
         onCode?(value)
     }
 

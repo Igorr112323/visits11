@@ -29,6 +29,7 @@ final class BleStudent {
     private byte[] payload;
     private int offset;
     private long retryAt, deadline, scanSince, lastSuccessAt;
+    private boolean wasPermitted = false;
 
     BleStudent(Activity a, Supplier<String> t, Supplier<String> d, BiConsumer<Integer,String> r, Consumer<String> s) {
         activity=a; token=t; device=d; reply=r; status=s;
@@ -73,33 +74,52 @@ final class BleStudent {
             if (!wanted || token.get()==null) return;
             try {
                 BluetoothAdapter a=adapter();
-                if (a==null) status.accept("Bluetooth на этом телефоне недоступен");
-                else if (!permitted()) status.accept("Разрешите Bluetooth — нажмите на надпись");
-                else if (!a.isEnabled()) { stopScan(); close(); status.accept("Включите Bluetooth в настройках телефона"); }
-                else if (Build.VERSION.SDK_INT<31 && !activity.getSystemService(LocationManager.class).isProviderEnabled(LocationManager.GPS_PROVIDER))
-                    status.accept("Включите геолокацию для поиска Bluetooth (Android 8–11)");
-                else if (gatt!=null && SystemClock.elapsedRealtime()>deadline) finish(4, "");
-                else if (scanning && gatt==null && SystemClock.elapsedRealtime()-scanSince>15000) {
-                    // Android умеет молча останавливать поиск без callbacks — принудительно перезапускаем
-                    stopScan();
-                    retryAt=SystemClock.elapsedRealtime()+300;
-                }
-                else if (scanning && gatt==null && SystemClock.elapsedRealtime()-scanSince>10000 && SystemClock.elapsedRealtime()-lastSuccessAt>10000)
-                    status.accept("Терминал не найден — поднесите телефон ближе");
-                else if (gatt==null && !scanning && SystemClock.elapsedRealtime()>=retryAt) {
-                    scanner=a.getBluetoothLeScanner();
-                    if (scanner!=null) {
-                        scanner.startScan(Collections.singletonList(new ScanFilter.Builder().setServiceUuid(new ParcelUuid(SERVICE)).build()),
-                            new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), scan);
-                        scanning=true;
-                        scanSince=SystemClock.elapsedRealtime();
-                        status.accept("Поднесите телефон к терминалу");
+                if (a==null) {
+                    status.accept("Bluetooth на этом телефоне недоступен");
+                } else {
+                    boolean perm = permitted();
+                    if (perm && !wasPermitted) {
+                        // Разрешение только что дали: первый поиск мог не стартовать — начинаем заново
+                        stopScan(); close(); retryAt=0;
+                    }
+                    wasPermitted = perm;
+                    if (!perm) status.accept("Разрешите Bluetooth — нажмите на надпись");
+                    else if (!a.isEnabled()) { stopScan(); close(); status.accept("Включите Bluetooth в настройках телефона"); }
+                    else if (Build.VERSION.SDK_INT<31 && !activity.getSystemService(LocationManager.class).isProviderEnabled(LocationManager.GPS_PROVIDER))
+                        status.accept("Включите геолокацию для поиска Bluetooth (Android 8–11)");
+                    else if (gatt!=null && SystemClock.elapsedRealtime()>deadline) finish(4, "");
+                    else if (scanning && gatt==null && SystemClock.elapsedRealtime()-scanSince>10000) {
+                        // Android умеет молча останавливать поиск без callbacks — принудительно перезапускаем
+                        stopScan();
+                        retryAt=SystemClock.elapsedRealtime()+300;
+                    }
+                    else if (scanning && gatt==null && SystemClock.elapsedRealtime()-scanSince>8000 && SystemClock.elapsedRealtime()-lastSuccessAt>8000)
+                        status.accept("Терминал не найден — поднесите телефон ближе");
+                    else if (gatt==null && !scanning && SystemClock.elapsedRealtime()>=retryAt) {
+                        scanner=a.getBluetoothLeScanner();
+                        if (scanner!=null) {
+                            scanner.startScan(Collections.singletonList(new ScanFilter.Builder().setServiceUuid(new ParcelUuid(SERVICE)).build()),
+                                new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), scan);
+                            scanning=true;
+                            scanSince=SystemClock.elapsedRealtime();
+                            status.accept("Поднесите телефон к терминалу");
+                        }
                     }
                 }
             } catch (Exception e) { stopScan(); close(); retryAt=SystemClock.elapsedRealtime()+2000; }
             if (wanted) ui.postDelayed(this, 600);
         }
     };
+
+    /** Свежий поиск: после выдачи разрешения и при входе. */
+    void rescanNow() {
+        if (!wanted || token.get() == null) return;
+        stopScan();
+        close();
+        retryAt = 0;
+        ui.removeCallbacks(tick);
+        ui.post(tick);
+    }
     private final ScanCallback scan=new ScanCallback() {
         @Override public void onScanResult(int type, ScanResult result) {
             ui.post(() -> {

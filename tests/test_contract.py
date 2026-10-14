@@ -120,13 +120,42 @@ class ContractTests(unittest.TestCase):
     def test_search_watchdog_and_honest_status(self):
         android = read('android/student/src/main/java/ru/visits11/student/BleStudent.java')
         tick = android.split('private final Runnable tick')[1].split('private final ScanCallback')[0]
-        self.assertIn('elapsedRealtime()-scanSince>15000', tick)
+        self.assertIn('elapsedRealtime()-scanSince>10000', tick)
         self.assertIn('Терминал не найден — поднесите телефон ближе', tick)
         self.assertIn('scanSince=SystemClock.elapsedRealtime()', tick)
+        self.assertIn('perm && !wasPermitted', tick)
         ios = read('ios/Sources/ContentView.swift')
         self.assertIn('scanStartedAt = Date()', ios)
         self.assertIn('Терминал не найден — поднесите телефон ближе', ios)
         self.assertIn('searchHintWork?.cancel()', ios)
+
+    def test_first_launch_fresh_scan(self):
+        android = read('android/student/src/main/java/ru/visits11/student/BleStudent.java')
+        self.assertIn('void rescanNow()', android)
+        self.assertIn('wasPermitted = perm', android)
+        activity = read('android/student/src/main/java/ru/visits11/student/MainActivity.java')
+        handler = activity.split('public void onRequestPermissionsResult')[1].split('pickQrImage')[0]
+        self.assertIn('requestCode == 78', handler)
+        self.assertIn('ble.rescanNow()', handler)
+
+    def test_vibration_only_on_recorded_mark(self):
+        # Вход (камера/галерея) и неудачные попытки не вибрируют; вибрирует только запись в журнал.
+        activity = read('android/student/src/main/java/ru/visits11/student/MainActivity.java')
+        login = activity.split('applyQrPayload')[1].split('private static final class Credentials')[0]
+        self.assertNotIn('vibrate()', login)
+        marked = activity.split('private void handleReply')[1].split('private void vibrate')[0]
+        self.assertIn('vibrate()', marked.split('REPLY_UNKNOWN_QR')[0])
+        self.assertNotIn('vibrate()', marked.split('REPLY_UNKNOWN_QR')[1])
+        camera = read('ios/Sources/CameraScanner.swift')
+        self.assertNotIn('kSystemSoundID_Vibrate', camera)
+        ios = read('ios/Sources/ContentView.swift')
+        login = ios.split('private func apply(_ text: String?)')[1].split('}')[0]
+        self.assertNotIn('notificationOccurred', login)
+        case0 = ios.split('        case 0:')[1].split('        case 2:')[0]
+        self.assertIn('kSystemSoundID_Vibrate', case0)
+        # только область finishExchange после case 0: там вибраций не должно быть вовсе
+        rest = ios.split('        case 2:')[1].split('let delay = max(0.5, cooldownUntil.timeIntervalSinceNow)')[0]
+        self.assertNotIn('notificationOccurred', rest)
 
     def test_board_connection_indicator_and_com_path(self):
         board = read('Services/BoardLink.cs')
