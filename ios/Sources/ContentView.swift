@@ -137,7 +137,16 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
 
         let rssiValue = RSSI.intValue
         // Приблизительный фильтр близости; мощность терминала задаётся на ПК.
-        guard rssiValue < 0 && rssiValue >= touchOnlyRssiThreshold else { return }
+        // Терминал публикует свой порог расстояния в advertising-пакете
+        // (manufacturer data 0x11 0xA1 <порог>); у старых прошивок его нет — строгое значение.
+        let gate: Int
+        if let mfg = advertisementData[CBAdvertisementData.manufacturerDataKey] as? Data,
+           mfg.count == 3, mfg[mfg.startIndex] == 0x11, mfg[mfg.startIndex+1] == 0xA1 {
+            gate = Int(Int8(bitPattern: mfg[mfg.startIndex+2]))
+        } else {
+            gate = touchOnlyRssiThreshold
+        }
+        guard rssiValue < 0 && rssiValue >= gate else { return }
 
         busy = true
         exchangeToken = token

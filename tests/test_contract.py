@@ -31,8 +31,16 @@ class ContractTests(unittest.TestCase):
         self.assertIn('id==activeId',read('firmware/Visits11Ble/Visits11Ble.ino'))
         self.assertIn('lastPcAt>4500',read('firmware/Visits11Ble/Visits11Ble.ino'))
     def test_same_proximity_filter(self):
-        self.assertIn('result.getRssi() < -46',read('android/student/src/main/java/ru/visits11/student/BleStudent.java'))
-        self.assertIn('touchOnlyRssiThreshold = -46',read('ios/Sources/ContentView.swift'))
+        # Телефоны читают порог из advertising-пакета терминала;
+        # без него (старая прошивка) оба приложения откатываются на строгий -46.
+        android=read('android/student/src/main/java/ru/visits11/student/BleStudent.java')
+        self.assertIn('getManufacturerSpecificData((short) 0xA111)',android)
+        self.assertIn('result.getRssi() < gateFor(result)',android)
+        self.assertIn('return -46',android)
+        ios=read('ios/Sources/ContentView.swift')
+        self.assertIn('touchOnlyRssiThreshold = -46',ios)
+        self.assertIn('CBAdvertisementData.manufacturerDataKey',ios)
+        self.assertIn('rssiValue >= gate',ios)
     def test_late_account_response_guard(self):
         self.assertIn('Objects.equals(exchangeToken,token.get())',read('android/student/src/main/java/ru/visits11/student/BleStudent.java'))
         self.assertIn('exchangeToken == prefs.string(forKey: keyToken)',read('ios/Sources/ContentView.swift'))
@@ -99,8 +107,27 @@ class ContractTests(unittest.TestCase):
         self.assertIn('REQUIRED_SAMPLES = 3', board)
         self.assertIn('rssiRequestId == activeId', board)
         self.assertIn('rssi < phoneRssiLimit()', board)
-        self.assertIn('static const int limits[4] = { MIN_PHONE_RSSI, -48, -51, -55 }', board)
+        self.assertIn('static const int limits[4] = { MIN_PHONE_RSSI, -50, -54, -62 }', board)
+        self.assertIn('phoneRssiLimit() + txDbm(powerLevel) + 12', board)
         self.assertIn('terminal->disconnect(dropId)', board)
+
+    def test_board_advertises_distance_gate(self):
+        # Плата публикует порог расстояния для телефонов (manufacturer data 0x11 0xA1)
+        # и сразу перепубликует его, когда учитель меняет уровень: телефоны подключаются
+        # не дальше, чем плата может отметить, — без «слишком далеко» на дальних уровнях.
+        board=read('firmware/Visits11Ble/Visits11Ble.ino')
+        self.assertIn('adv.setCompleteServices(BLEUUID(SERVICE))', board)
+        self.assertIn('adv.setManufacturerData', board)
+        self.assertIn('0xA1', board)
+        self.assertIn('a->setAdvertisementData(adv)', board)
+        power=board.split('static void power(int level)')[1].split('static void command(')[0]
+        self.assertIn('refreshAdvertising()', power)
+        self.assertIn('BLEDevice::stopAdvertising()', power)
+        self.assertIn('BLEDevice::startAdvertising()', power)
+        android=read('android/student/src/main/java/ru/visits11/student/BleStudent.java')
+        self.assertIn('gateFor(ScanResult result)', android)
+        ios=read('ios/Sources/ContentView.swift')
+        self.assertIn('Int8(bitPattern: mfg[mfg.startIndex+2])', ios)
 
     def test_standalone_exe_defaults_to_board_without_marker(self):
         project = ET.fromstring(read('Visits11.csproj'))

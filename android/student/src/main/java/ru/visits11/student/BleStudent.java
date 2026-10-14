@@ -120,10 +120,20 @@ final class BleStudent {
         ui.removeCallbacks(tick);
         ui.post(tick);
     }
+    /** Терминал публикует свой порог расстояния в advertising-пакете
+     *  (manufacturer data 0x11 0xA1 <порог>); у старых прошивок его нет — строгое значение. */
+    private int gateFor(ScanResult result) {
+        try {
+            ScanRecord rec = result.getScanRecord();
+            byte[] mfg = rec == null ? null : rec.getManufacturerSpecificData((short) 0xA111);
+            if (mfg != null && mfg.length >= 1) return mfg[0];
+        } catch (Exception ignored) {}
+        return -46;
+    }
     private final ScanCallback scan=new ScanCallback() {
         @Override public void onScanResult(int type, ScanResult result) {
             ui.post(() -> {
-                if (!wanted || gatt!=null || token.get()==null || result.getRssi() < -46 || result.getRssi()>=0 || SystemClock.elapsedRealtime()<retryAt) return;
+                if (!wanted || gatt!=null || token.get()==null || result.getRssi() < gateFor(result) || result.getRssi()>=0 || SystemClock.elapsedRealtime()<retryAt) return;
                 stopScan(); exchangeToken=token.get(); deadline=SystemClock.elapsedRealtime()+8000;
                 try { gatt=result.getDevice().connectGatt(activity,false,callback,BluetoothDevice.TRANSPORT_LE); }
                 catch (Exception e) { close(); }

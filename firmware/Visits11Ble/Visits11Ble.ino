@@ -25,9 +25,31 @@ static const int REQUIRED_SAMPLES = 3;
 // The four EXE levels are four marking distances, set by the teacher in real time:
 // level 0 ("Минимум") = touch the phone to the plate, level 3 ("Высокая") = arm's length.
 static int phoneRssiLimit() {
-  static const int limits[4] = { MIN_PHONE_RSSI, -48, -51, -55 };
+  static const int limits[4] = { MIN_PHONE_RSSI, -50, -54, -62 };
   int l = powerLevel < 0 ? 0 : (powerLevel > 3 ? 3 : powerLevel);
   return limits[l];
+}
+// TX power per level in dBm; must stay in sync with the table in power().
+static int txDbm(int level) {
+  static const int dbm[4] = { -12, -6, 0, 9 };
+  int l = level < 0 ? 0 : (level > 3 ? 3 : level);
+  return dbm[l];
+}
+// Discovery threshold advertised to the phones. The phone measures the board's signal,
+// the board measures the phone's signal: at the same distance the two readings differ
+// only by the TX difference, so the board publishes its own limit plus that difference.
+// A phone then connects only where the board can still mark - no out-of-range connect,
+// no pointless "too far" rejections, and higher levels reach farther, not closer.
+static int phoneGate() { return phoneRssiLimit() + txDbm(powerLevel) + 12; }
+// (Re)publish the advertisement with the current level's gate. Advertising data and
+// power only take effect on an advertising (re)start.
+static void refreshAdvertising() {
+  auto a = BLEDevice::getAdvertising();
+  BLEAdvertisementData adv;
+  adv.setCompleteServices(BLEUUID(SERVICE));
+  char mfg[3] = { 0x11, (char)0xA1, (char)phoneGate() };
+  adv.setManufacturerData(std::string(mfg, 3));
+  a->setAdvertisementData(adv);
 }
 static Event awaitingProximity{};
 static esp_bd_addr_t peerAddress{};
@@ -136,6 +158,13 @@ static void power(int level) {
     BLEDevice::setPower(levels[level], ESP_BLE_PWR_TYPE_ADV);
     BLEDevice::setPower(levels[level], ESP_BLE_PWR_TYPE_SCAN);
     powerLevel=level;
+    refreshAdvertising();
+    // Restart advertising so phones immediately see the new level's gate;
+    // while a phone is connected nothing is advertised anyway.
+    xSemaphoreTake(lock, portMAX_DELAY);
+    bool idle = !connected;
+    xSemaphoreGive(lock);
+    if (idle) { BLEDevice::stopAdvertising(); BLEDevice::startAdvertising(); }
   }
 }
 static void command(const String& line) {
@@ -165,7 +194,7 @@ void setup() {
   uint8_t waiting=255; mark->setValue(&waiting,1);
   service->start();
   auto advertising=BLEDevice::getAdvertising(); advertising->addServiceUUID(SERVICE);
-  advertising->setScanResponse(true); power(0); BLEDevice::startAdvertising();
+  advertising->setScanResponse(true); power(0); // also (re)starts advertising with the level's gate
   Serial.println("V11ESP32\t1");
 }
 void loop() {
