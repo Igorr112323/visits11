@@ -117,6 +117,27 @@ class ContractTests(unittest.TestCase):
         self.assertNotIn('touch delivery/ESP32/board.mode', workflow)
         self.assertIn('cp delivery/ESP32/KubGAU-Journal.exe .', workflow)
 
+    def test_board_connection_indicator_and_com_path(self):
+        board = read('Services/BoardLink.cs')
+        self.assertIn('public event Action<bool>? StateChanged', board)
+        self.assertIn('StateChanged?.Invoke(true)', board)
+        self.assertIn('StateChanged?.Invoke(false)', board)
+        self.assertIn('int.TryParse(com.AsSpan(3), out var n) && n >= 10', board)
+        self.assertIn('VID_067B', board)
+        phone = read('Services/PhoneLink.cs')
+        self.assertIn('public event Action<bool>? BoardConnected', phone)
+        self.assertIn('_board.StateChanged += state => BoardConnected?.Invoke(state)', phone)
+        vm = read('ViewModels/MainViewModel.cs')
+        self.assertIn('ShowBoardIndicator = phone.UsesBoard', vm)
+        self.assertIn('public bool BoardConnected', vm)
+        xaml = read('Views/MainWindow.xaml')
+        top = xaml.split('Text="Bluetooth"')[0].split('HorizontalAlignment="Right"')[1]
+        self.assertIn('Ellipse', top)
+        self.assertIn('BoardConnected', top)
+        self.assertIn('Brush.Green', top)
+        self.assertIn('Brush.Red', top)
+        self.assertIn('ShowBoardIndicator', top)
+
     def test_no_release_asset_deletion(self):
         for path in (ROOT/'.github/workflows').glob('*.yml'):
             self.assertNotIn('api -X DELETE',path.read_text())

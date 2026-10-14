@@ -39,6 +39,12 @@ public sealed class PhoneLink : IDisposable
     /// <summary>BLE-запрос с телефона (json) → ответ (json). Блокирующий, потокобезопасный.</summary>
     public event Func<string, string>? MarkRelay;
 
+    /// <summary>true — режим «плата по USB» (для индикатора в топбаре).</summary>
+    public bool UsesBoard => _board is not null;
+
+    /// <summary>true — плата подключена и прошла handshake. Фоновый поток.</summary>
+    public event Action<bool>? BoardConnected;
+
     public void Start()
     {
         if (_worker is not null || _board is not null) return;
@@ -50,6 +56,7 @@ public sealed class PhoneLink : IDisposable
 #else
         // Default standalone EXE: automatically discover ESP32 over USB.
         _board = new BoardLink(request => MarkRelay?.Invoke(request) ?? "{\"code\":4}");
+        _board.StateChanged += state => BoardConnected?.Invoke(state);
         _board.Start();
 #endif
     }

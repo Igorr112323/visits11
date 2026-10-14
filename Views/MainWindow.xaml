@@ -316,6 +316,14 @@
                     </StackPanel>
 
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                        <Grid Width="9" Height="9" Margin="0,0,10,0" VerticalAlignment="Center"
+                              Visibility="{Binding ShowBoardIndicator, Converter={StaticResource Conv.BoolToVis}}"
+                              ToolTip="Плата: зелёный — подключена по USB, красный — нет (кабель, монитор порта)">
+                            <Ellipse Fill="{DynamicResource Brush.Green}"
+                                     Visibility="{Binding BoardConnected, Converter={StaticResource Conv.BoolToVis}}" />
+                            <Ellipse Fill="{DynamicResource Brush.Red}"
+                                     Visibility="{Binding BoardConnected, Converter={StaticResource Conv.BoolToVis}, ConverterParameter=invert}" />
+                        </Grid>
                         <TextBlock Text="Bluetooth" VerticalAlignment="Center" Margin="0,0,8,0"
                                    Foreground="{DynamicResource Brush.TextDim}" />
                         <ComboBox Style="{StaticResource Widget.PowerCombo}"

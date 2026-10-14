@@ -13,8 +13,20 @@ public sealed class BoardLink : IDisposable
     private readonly CancellationTokenSource _stop = new();
     private Task? _worker;
     public BoardLink(Func<string, string> relay) => _relay = relay;
+
+    /// <summary>true — handshake с платой состоялся; false — связь потеряна. Фоновый поток.</summary>
+    public event Action<bool>? StateChanged;
+
     public void Start() => _worker ??= Task.Run(Run);
     public void Dispose() => _stop.Cancel(); // never wait on UI: relay may be using Dispatcher
+
+    /// <summary>Windows требует вид \.\COM10 и выше; для COM1–9 имя подходит как есть.</summary>
+    internal static string PortPath(string com)
+    {
+        if (com.Length > 3 && int.TryParse(com.AsSpan(3), out var n) && n >= 10)
+            return $@"\\.\{com}";
+        return com;
+    }
 
     private static IEnumerable<string> UsbPorts()
     {
@@ -25,7 +37,8 @@ public sealed class BoardLink : IDisposable
             using (item)
             {
                 var id = item["PNPDeviceID"]?.ToString() ?? "";
-                if (!new[] { "VID_10C4", "VID_1A86", "VID_0403", "VID_303A" }.Any(id.Contains)) continue;
+                // CP210x, CH340, FTDI, ESP32 native USB, Prolific (дешёвые кабели)
+                if (!new[] { "VID_10C4", "VID_1A86", "VID_0403", "VID_303A", "VID_067B" }.Any(id.Contains)) continue;
                 var match = System.Text.RegularExpressions.Regex.Match(item["Name"]?.ToString() ?? "", @"\((COM\d+)\)");
                 if (match.Success) ports.Add(match.Groups[1].Value);
             }
@@ -50,7 +63,7 @@ public sealed class BoardLink : IDisposable
     }
     private void Connect(string name)
     {
-        using var port = new SerialPort(name, 115200) {
+        using var port = new SerialPort(PortPath(name), 115200) {
             ReadTimeout = 300, WriteTimeout = 500, Encoding = Encoding.ASCII,
             NewLine = "\n", DtrEnable = false, RtsEnable = false
         };
@@ -66,8 +79,11 @@ public sealed class BoardLink : IDisposable
             if (ReadLine(port, buffer) == "V11ESP32\t1") { recognized = true; break; }
         }
         if (!recognized) return;
+        StateChanged?.Invoke(true);
         var lastSeen = watch.ElapsedMilliseconds;
         long heartbeat = 0;
+        try
+        {
         while (!_stop.IsCancellationRequested)
         {
             if (watch.ElapsedMilliseconds >= heartbeat)
@@ -94,6 +110,11 @@ public sealed class BoardLink : IDisposable
                 }
             }
             if (watch.ElapsedMilliseconds - lastSeen > 5000) return;
+        }
+        }
+        finally
+        {
+            StateChanged?.Invoke(false);
         }
     }
     private static string? ReadLine(SerialPort port, StringBuilder buffer)
