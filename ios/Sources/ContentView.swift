@@ -51,6 +51,8 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
     private var busy = false
     private var lastMarkedAt: Date = .distantPast
     private var cooldownUntil: Date = .distantPast
+    // «Вы отмечены» показывается 5 секунд, потом экран сам возвращается к «Поднесите телефон к терминалу».
+    private var awaitingReturnToScan = false
 
     private var writeChunks: [Data] = []
     private var writeIndex = 0
@@ -72,6 +74,7 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
 
     func stop() {
         scanningWanted = false
+        awaitingReturnToScan = false
         cleanupConnection()
         central?.stopScan()
         cooldownUntil = .distantPast
@@ -253,10 +256,11 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
 
         switch code {
         case 0:
-            scanningWanted = false
-            central?.stopScan()
+            // Связь с платой уже освобождена cleanupConnection(): она принимает следующего студента.
+            // «Вы отмечены» держится 5 секунд (считает сама программа), потом поиск возобновится сам.
             lastMarkedAt = Date()
             cooldownUntil = Date().addingTimeInterval(5.0)
+            awaitingReturnToScan = true
             statusOverride = value.isEmpty ? "Вы отмечены" : "Вы отмечены — \(value)"
             AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
             UINotificationFeedbackGenerator().notificationOccurred(.success)
@@ -289,7 +293,12 @@ final class MarkModel: NSObject, ObservableObject, CBCentralManagerDelegate, CBP
 
         let delay = max(0.5, cooldownUntil.timeIntervalSinceNow)
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            self?.beginScanIfNeeded()
+            guard let self = self, self.scanningWanted else { return }
+            if self.awaitingReturnToScan {
+                self.awaitingReturnToScan = false
+                self.statusOverride = ""
+            }
+            self.beginScanIfNeeded()
         }
     }
 

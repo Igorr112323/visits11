@@ -52,14 +52,44 @@ class ContractTests(unittest.TestCase):
         self.assertIn('wanted = true', handler)
         self.assertIn('ui.post(tick)', handler)
 
-    def test_success_stops_automatic_reconnection(self):
+    def test_success_releases_board_and_readies_next_mark(self):
+        # Плата освобождается мгновенно; «Вы отмечены» 5 с (внутри, без таймера на экране),
+        # потом приложение само готово к повторной отметке — без закрытия.
         android = read('android/student/src/main/java/ru/visits11/student/BleStudent.java')
-        success = android.split('if (valid && code == 0) {')[1].split('}')[0]
-        self.assertIn('wanted = false', success)
-        self.assertIn('ui.removeCallbacks(tick)', success)
-        ios = read('ios/Sources/ContentView.swift').split('        case 0:')[1].split('        case 2:')[0]
-        self.assertIn('scanningWanted = false', ios)
-        self.assertIn('central?.stopScan()', ios)
+        finish = android.split('private void finish(int code,String name)')[1].split('\n    private void close')[0]
+        self.assertIn('close()', finish)
+        self.assertIn('code==0?5000:2500', finish)
+        self.assertNotIn('wanted = false', finish)
+        self.assertNotIn('removeCallbacks', finish)
+        tick = android.split('private final Runnable tick')[1].split('private final ScanCallback')[0]
+        self.assertIn('Поднесите телефон к терминалу', tick)
+        ios = read('ios/Sources/ContentView.swift')
+        case0 = ios.split('        case 0:')[1].split('        case 2:')[0]
+        self.assertIn('awaitingReturnToScan = true', case0)
+        self.assertIn('cooldownUntil = Date().addingTimeInterval(5.0)', case0)
+        self.assertNotIn('scanningWanted = false', case0)
+        tail = ios.split('let delay = max(0.5, cooldownUntil.timeIntervalSinceNow)')[1]
+        self.assertIn('self.statusOverride = ""', tail)
+        self.assertIn('self.beginScanIfNeeded()', tail)
+
+    def test_active_rollcall_survives_exe_restart(self):
+        vm = read('ViewModels/LessonViewModel.cs')
+        self.assertIn('_database.BeginLesson(', vm)
+        self.assertIn('_database.SaveMark(', vm)
+        self.assertIn('_database.RemoveMark(', vm)
+        self.assertIn('_database.FinishLesson(', vm)
+        self.assertIn('ResumePendingLesson()', vm)
+        self.assertIn('RollcallState = StateActive', vm.split('private void ResumePendingLesson')[1])
+        db = read('Services/DatabaseService.cs')
+        self.assertIn('WHERE FinishedAt IS NULL', db)
+        self.assertIn('UPDATE Lessons SET FinishedAt=StartedAt WHERE Id=@l', db)
+
+    def test_power_selector_uses_app_theme(self):
+        xaml = read('Views/MainWindow.xaml')
+        self.assertIn('Style="{StaticResource Widget.PowerCombo}"', xaml)
+        controls = read('Styles/Controls.xaml')
+        self.assertIn('x:Key="Widget.PowerCombo"', controls)
+        self.assertIn('DynamicResource Brush.TextDim', controls.split('x:Key="Widget.PowerCombo"')[1].split('<Style x:Key="Widget.')[0])
 
     def test_terminal_checks_phone_rssi_before_queueing(self):
         board = read('firmware/Visits11Ble/Visits11Ble.ino')

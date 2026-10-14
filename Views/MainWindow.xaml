@@ -318,8 +318,9 @@
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                         <TextBlock Text="Bluetooth" VerticalAlignment="Center" Margin="0,0,8,0"
                                    Foreground="{DynamicResource Brush.TextDim}" />
-                        <ComboBox Width="116" Margin="0,0,16,0" VerticalAlignment="Center"
-                                  ToolTip="Мощность передатчика. Применяется к терминалу по USB; это не расстояние в сантиметрах."
+                        <ComboBox Style="{StaticResource Widget.PowerCombo}"
+                                  Width="112" Margin="0,0,16,0" VerticalAlignment="Center"
+                                  ToolTip="Расстояние отметки: Минимум — вплотную, Высокая — держать на расстоянии вытянутой руки."
                                   ItemsSource="{Binding Levels, Source={x:Static services:BluetoothSettings.Current}}"
                                   SelectedIndex="{Binding Power, Source={x:Static services:BluetoothSettings.Current}, Mode=TwoWay}" />
                         <Button Style="{StaticResource Btn.Icon}"

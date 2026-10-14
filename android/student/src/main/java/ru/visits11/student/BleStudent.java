@@ -151,13 +151,11 @@ final class BleStudent {
     },300); }
     private void finish(int code,String name) {
         boolean valid=wanted && Objects.equals(exchangeToken,token.get());
-        close(); retryAt=SystemClock.elapsedRealtime()+(code==0?5000:2500);
-        if (valid && code == 0) {
-            // The plate must serve the next student, not reconnect to this one every 5 s.
-            wanted = false;
-            stopScan();
-            ui.removeCallbacks(tick);
-        }
+        // Связь с платой освобождается мгновенно — она сразу готова принять следующего студента.
+        close();
+        // Успех: «Вы отмечены» висит 5 секунд (считает сама программа, таймера на экране нет),
+        // затем обычный тик возобновляет поиск — повторная отметка без закрытия приложения.
+        retryAt=SystemClock.elapsedRealtime()+(code==0?5000:2500);
         if(valid) reply.accept(code,name);
     }
     private void close() {
