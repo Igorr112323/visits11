@@ -7,3 +7,12 @@ publish/
 attendance.db
 settings.json
 image-search/
+
+bluetooth-power.txt
+.pio/
+*.bin
+*.elf
+*.map
+
+__pycache__/
+*.pyc

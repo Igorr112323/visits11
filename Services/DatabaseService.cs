@@ -4,7 +4,7 @@ using Visits11.Models;
 namespace Visits11.Services;
 
 /// <summary>
-/// Локальная SQLite-база (attendance.db рядом с exe).
+/// Локальная SQLite-база в папке данных пользователя (%LOCALAPPDATA%/Visits11).
 /// </summary>
 public sealed class DatabaseService
 {
@@ -504,5 +504,146 @@ public sealed class DatabaseService
         }
         transaction.Commit();
         RaiseDataChanged();
+    }
+
+    /// <summary>Начало переклички: занятие уже существует в базе, пока не будет завершено.</summary>
+    /// <remarks>Без RaiseDataChanged: список групп/студентов не меняется.</remarks>
+    public int BeginLesson(int groupId, string startedAt)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            INSERT INTO Lessons (GroupId, StartedAt)
+            VALUES (@groupId, @startedAt);
+            SELECT last_insert_rowid();
+            """;
+        command.Parameters.AddWithValue("@groupId", groupId);
+        command.Parameters.AddWithValue("@startedAt", startedAt);
+        return Convert.ToInt32(command.ExecuteScalar());
+    }
+
+    /// <summary>Отметка «есть» в идущей перекличке (idempotent).</summary>
+    public void SaveMark(int lessonId, int studentId, string markedAt)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        using (var del = connection.CreateCommand())
+        {
+            del.CommandText = "DELETE FROM Attendance WHERE LessonId=@l AND StudentId=@s;";
+            del.Parameters.AddWithValue("@l", lessonId);
+            del.Parameters.AddWithValue("@s", studentId);
+            del.ExecuteNonQuery();
+        }
+        using (var ins = connection.CreateCommand())
+        {
+            ins.CommandText = """
+                INSERT INTO Attendance (LessonId, StudentId, Status, MarkedAt)
+                VALUES (@l, @s, 'present', @m);
+                """;
+            ins.Parameters.AddWithValue("@l", lessonId);
+            ins.Parameters.AddWithValue("@s", studentId);
+            ins.Parameters.AddWithValue("@m", markedAt);
+            ins.ExecuteNonQuery();
+        }
+        transaction.Commit();
+    }
+
+    /// <summary>Снятие отметки (ручной клик по строке).</summary>
+    public void RemoveMark(int lessonId, int studentId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "DELETE FROM Attendance WHERE LessonId=@l AND StudentId=@s;";
+        command.Parameters.AddWithValue("@l", lessonId);
+        command.Parameters.AddWithValue("@s", studentId);
+        command.ExecuteNonQuery();
+    }
+
+    /// <summary>Завершение переклички: FinishedAt + полный снимок (есть и отсутствуют).</summary>
+    public void FinishLesson(int lessonId, string finishedAt,
+        IEnumerable<(int StudentId, bool Present, string MarkedAt)> snapshot)
+    {
+        using var connection = Open();
+        using var transaction = connection.BeginTransaction();
+        using (var upd = connection.CreateCommand())
+        {
+            upd.CommandText = "UPDATE Lessons SET FinishedAt=@f WHERE Id=@l;";
+            upd.Parameters.AddWithValue("@f", finishedAt);
+            upd.Parameters.AddWithValue("@l", lessonId);
+            upd.ExecuteNonQuery();
+        }
+        using (var del = connection.CreateCommand())
+        {
+            del.CommandText = "DELETE FROM Attendance WHERE LessonId=@l;";
+            del.Parameters.AddWithValue("@l", lessonId);
+            del.ExecuteNonQuery();
+        }
+        using (var ins = connection.CreateCommand())
+        {
+            ins.CommandText = """
+                INSERT INTO Attendance (LessonId, StudentId, Status, MarkedAt)
+                VALUES (@l, @s, @st, @m);
+                """;
+            var pl = ins.Parameters.Add("@l", SqliteType.Integer);
+            var ps = ins.Parameters.Add("@s", SqliteType.Integer);
+            var pst = ins.Parameters.Add("@st", SqliteType.Text);
+            var pm = ins.Parameters.Add("@m", SqliteType.Text);
+            pl.Value = lessonId;
+            foreach (var (studentId, present, markedAt) in snapshot)
+            {
+                ps.Value = studentId;
+                pst.Value = present ? "present" : "absent";
+                pm.Value = markedAt;
+                ins.ExecuteNonQuery();
+            }
+        }
+        transaction.Commit();
+        RaiseDataChanged();
+    }
+
+    /// <summary>Занятие, которое так и не было завершено (EXE закрыли в середине переклички).</summary>
+    public (int Id, int GroupId, string StartedAt)? GetActiveLesson()
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT Id, GroupId, StartedAt
+            FROM Lessons
+            WHERE FinishedAt IS NULL
+            ORDER BY Id DESC
+            LIMIT 1;
+            """;
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return null;
+        return (Convert.ToInt32(reader.GetInt64(0)),
+                Convert.ToInt32(reader.GetInt64(1)),
+                reader.GetString(2));
+    }
+
+    public List<(int StudentId, string MarkedAt)> GetLessonPresents(int lessonId)
+    {
+        var result = new List<(int, string)>();
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT StudentId, MarkedAt
+            FROM Attendance
+            WHERE LessonId=@l AND Status='present';
+            """;
+        command.Parameters.AddWithValue("@l", lessonId);
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            result.Add((Convert.ToInt32(reader.GetInt64(0)), reader.GetString(1)));
+        return result;
+    }
+
+    /// <summary>Слишком старая незавершённая перекличка — просто закрываем её.</summary>
+    public void CloseStaleLesson(int lessonId)
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE Lessons SET FinishedAt=StartedAt WHERE Id=@l AND FinishedAt IS NULL;";
+        command.Parameters.AddWithValue("@l", lessonId);
+        command.ExecuteNonQuery();
     }
 }

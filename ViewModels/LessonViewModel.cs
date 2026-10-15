@@ -43,7 +43,7 @@ public sealed class StudentRow : ObservableObject
 /// <summary>
 /// Вкладка «Занятия»: выбор группы, перекличка, статистика.
 /// Отметка приходит с телефона преподавателя по USB: студент прикладывает
-/// телефон (NFC), ПК проверяет код из его QR-кода и привязку устройства.
+/// телефон (BLE), ПК проверяет код из его QR-кода и привязку устройства.
 /// </summary>
 public sealed class LessonViewModel : ObservableObject, ITabViewModel
 {
@@ -65,6 +65,8 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
     private DateTime _lastFinishedAt = DateTime.MinValue;
     private string _lessonStartedAt = string.Empty;
     private bool _savingLesson;
+    /// <summary>Id занятия в базе, пока перекличка идёт (живёт между перезапусками EXE).</summary>
+    private int? _activeLessonId;
 
     public LessonViewModel(DatabaseService database, ToastService toasts, PhoneLink phone)
     {
@@ -78,18 +80,64 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         _database.DataChanged += OnDataChanged;
 
         // касания с телефона преподавателя обрабатывает сама программа
-        _phone.NfcRelay += HandleNfcRequest;
+        _phone.MarkRelay += HandleMarkRequest;
 
         ReloadGroups();
+        ResumePendingLesson();
     }
 
-    // ------------------------------------------------------------- NFC-касания
+    /// <summary>
+    /// Перекличка не была завершена в прошлый запуск (EXE закрыли или он упал) —
+    /// продолжаем её автоматически: группа, уже сделанные отметки и состояние «идёт»
+    /// восстанавливаются из базы, поэтому телефоны продолжают работать сразу.
+    /// </summary>
+    private void ResumePendingLesson()
+    {
+        var pending = _database.GetActiveLesson();
+        if (pending is null) return;
+        var pendingLesson = pending.Value;
+
+        if (!DateTime.TryParse(pendingLesson.StartedAt, out var started) ||
+            (DateTime.Now - started).TotalHours > 12)
+        {
+            // слишком старая перекличка: закрываем, чтобы не путать с текущей
+            _database.CloseStaleLesson(pendingLesson.Id);
+            return;
+        }
+
+        var group = Groups.FirstOrDefault(g => g.Id == pendingLesson.GroupId);
+        if (group is null)
+        {
+            _database.CloseStaleLesson(pendingLesson.Id);
+            return;
+        }
+
+        _lessonStartedAt = pendingLesson.StartedAt;
+        _activeLessonId = pendingLesson.Id;
+        SelectedGroup = group; // при смене группы LoadStudents() сработает сам
+
+        foreach (var (studentId, markedAt) in _database.GetLessonPresents(pendingLesson.Id))
+        {
+            var row = Rows.FirstOrDefault(r => r.StudentId == studentId);
+            if (row is not null)
+            {
+                row.IsPresent = true;
+                row.MarkedAt = markedAt;
+            }
+        }
+        RecalcStats();
+        RollcallState = StateActive;
+        _toasts.Success("Перекличка восстановлена",
+            $"Группа {group.Name}: отмечено {PresentCount} из {Rows.Count}.");
+    }
+
+    // ------------------------------------------------------------- BLE-касания
 
     /// <summary>
     /// Запрос с телефона преподавателя: {"id":N,"token":"...","device":"..."}.
     /// Ответ: {"id":N,"code":C,"value":"..."} — его телефон отдаёт студенту.
     /// </summary>
-    private string HandleNfcRequest(string json)
+    private string HandleMarkRequest(string json)
     {
         long id = 0;
         var token = string.Empty;
@@ -121,9 +169,9 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
             var dispatcher = System.Windows.Application.Current?.Dispatcher;
             if (dispatcher is not null && !dispatcher.CheckAccess())
             {
-                return dispatcher.Invoke(() => ProcessNfcTap(id, token, device));
+                return dispatcher.Invoke(() => ProcessBleTap(id, token, device));
             }
-            return ProcessNfcTap(id, token, device);
+            return ProcessBleTap(id, token, device);
         }
         catch
         {
@@ -131,9 +179,11 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         }
     }
 
-    private string ProcessNfcTap(long id, string token, string device)
+    private string ProcessBleTap(long id, string token, string device)
     {
-        var student = token.Length == 0 ? null : _database.FindByQrToken(token);
+        if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(device))
+            return Reply(id, ReplyUnavailable, string.Empty);
+        var student = _database.FindByQrToken(token);
         if (student is null)
         {
             _toasts.Error("Касание: неизвестный QR-код",
@@ -154,7 +204,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         return $"{{\"id\":{id},\"code\":{code},\"value\":\"{escaped}\"}}";
     }
 
-    /// <summary>Отметка студента по id (NFC «телефон к телефону») или ручным кликом.</summary>
+    /// <summary>Отметка студента по id (BLE «телефон к телефону») или ручным кликом.</summary>
     private (bool Ok, bool DeviceBlocked, string Name) MarkStudentInternal(int studentId, string device)
     {
         var row = Rows.FirstOrDefault(r => r.StudentId == studentId);
@@ -323,6 +373,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
             row.MarkedAt = null;
         }
         _lessonStartedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+        _activeLessonId = _database.BeginLesson(SelectedGroup.Id, _lessonStartedAt);
 
         RecalcStats();
         RollcallState = StateActive;
@@ -338,6 +389,11 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
             row.IsPresent = false;
             row.MarkedAt = null;
             RecalcStats();
+            if (_activeLessonId is { } lessonId)
+            {
+                try { _database.RemoveMark(lessonId, row.StudentId); }
+                catch { /* снимок восстановится в Finish() */ }
+            }
         }
         else
         {
@@ -351,6 +407,13 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         row.MarkedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
 
         RecalcStats();
+
+        // сохраняем сразу: перекличка переживёт перезапуск EXE
+        if (_activeLessonId is { } lessonId)
+        {
+            try { _database.SaveMark(lessonId, row.StudentId, row.MarkedAt!); }
+            catch { /* база недоступна — полный снимок дублируется в Finish() */ }
+        }
 
         if (Rows.All(r => r.IsPresent))
         {
@@ -369,13 +432,21 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
             _savingLesson = true;
             try
             {
-                var lessonId = _database.AddLesson(SelectedGroup.Id, _lessonStartedAt, now);
-                _database.AddAttendance(lessonId, snapshot);
+                if (_activeLessonId is { } lessonId)
+                {
+                    _database.FinishLesson(lessonId, now, snapshot);
+                }
+                else
+                {
+                    var newLessonId = _database.AddLesson(SelectedGroup.Id, _lessonStartedAt, now);
+                    _database.AddAttendance(newLessonId, snapshot);
+                }
             }
             finally
             {
                 _savingLesson = false;
             }
+            _activeLessonId = null;
         }
 
         _toasts.Success("Перекличка завершена", $"Присутствуют {PresentCount} из {Rows.Count}.");

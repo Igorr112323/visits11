@@ -1,15 +1,8 @@
-name: Build iOS
-
+name: Build iOS (manual)
 on:
-  push:
-    paths:
-      - 'ios/**'
-      - '.github/workflows/ios.yml'
   workflow_dispatch:
-
 permissions:
-  contents: write
-
+  contents: read
 jobs:
   ios:
     runs-on: macos-14
@@ -61,16 +54,3 @@ jobs:
         with:
           name: Visits11-Student-iOS-unsigned-ipa
           path: Visits11-Student-iOS-unsigned.ipa
-
-      - name: Publish to release v1.0.0
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release upload v1.0.0 Visits11-Student-iOS-unsigned.ipa --clobber --repo "$GITHUB_REPOSITORY"
-          else
-            gh release create v1.0.0 Visits11-Student-iOS-unsigned.ipa \
-              --title "Visits11 v1.0.0" \
-              --notes "Учёт посещаемости — офлайн. Exe для ПК, APK преподавателя и студента, iOS-приложение студента." \
-              --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY"
-          fi

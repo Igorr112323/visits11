@@ -9,6 +9,8 @@ public sealed class MainViewModel : ObservableObject
 {
     private readonly ThemeService _theme;
 
+    private readonly PhoneLink _phone;
+
     public MainViewModel(
         DatabaseService database,
         ToastService toasts,
@@ -18,6 +20,7 @@ public sealed class MainViewModel : ObservableObject
         PhoneLink phone)
     {
         _theme = theme;
+        _phone = phone;
         Toasts = toasts;
 
         Lesson = new LessonViewModel(database, toasts, phone);
@@ -27,7 +30,30 @@ public sealed class MainViewModel : ObservableObject
         ToggleThemeCommand = new RelayCommand(_ => _theme.Toggle());
         _theme.ThemeChanged += () => OnPropertyChanged(nameof(IsDarkTheme));
 
+        // Индикатор связи с платой: только в режиме «плата по USB»
+        ShowBoardIndicator = phone.UsesBoard;
+        if (ShowBoardIndicator)
+        {
+            phone.BoardConnected += state =>
+            {
+                var dispatcher = System.Windows.Application.Current?.Dispatcher;
+                if (dispatcher is null || dispatcher.CheckAccess()) BoardConnected = state;
+                else dispatcher.BeginInvoke(() => BoardConnected = state);
+            };
+        }
+
         _currentTab = Lesson;
+    }
+
+    /// <summary>Показывать ли кружок состояния платы (нет в режиме «телефон преподавателя»).</summary>
+    public bool ShowBoardIndicator { get; }
+
+    private bool _boardConnected;
+    /// <summary>Зелёный кружок — плата подключена по USB и отвечает; красный — нет.</summary>
+    public bool BoardConnected
+    {
+        get => _boardConnected;
+        private set => Set(ref _boardConnected, value);
     }
 
     public LessonViewModel Lesson { get; }

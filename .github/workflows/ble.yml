@@ -1,0 +1,202 @@
+name: BLE distribution
+on:
+  push:
+    branches: ["main", "arena/8abfc551-visits11"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ble-distribution-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Test automatic storage and legacy database migration
+        run: dotnet run --project tests/StorageTests/StorageTests.csproj -c Release
+
+      - name: Build
+        run: dotnet build -c Release
+
+      - name: Publish standalone ESP32 EXE (default mode)
+        run: dotnet publish -c Release -r win-x64 -p:TerminalMode=Board -p:PublishSingleFile=true -p:SelfContained=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/board
+
+      - name: Publish phone terminal EXE
+        run: dotnet publish -c Release -r win-x64 -p:TerminalMode=Phone -p:PublishSingleFile=true -p:SelfContained=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish/phone
+
+      - name: Upload ESP32 EXE
+        uses: actions/upload-artifact@v7
+        with:
+          name: Visits11-win-x64
+          path: publish/board/Visits11.exe
+          if-no-files-found: error
+
+      - name: Upload phone EXE
+        uses: actions/upload-artifact@v7
+        with:
+          name: Visits11-Phone-win-x64
+          path: publish/phone/Visits11.exe
+          if-no-files-found: error
+
+
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.9'
+
+      - name: Build release APKs (камера преподавателя + студент)
+        working-directory: android
+        run: gradle assembleRelease --no-daemon
+
+      - name: Upload teacher APK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Visits11-Teacher-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Upload student APK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Visits11-Student-apk
+          path: android/student/build/outputs/apk/release/student-release.apk
+
+
+  ios:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: |
+          xcodegen generate
+          # XcodeGen пишет формат Xcode 16 (objectVersion 77), а на раннере Xcode 15 — понижаем
+          sed -i '' 's/objectVersion = 77;/objectVersion = 56;/' Visits11Student.xcodeproj/project.pbxproj
+
+      - name: Build unsigned app (проверка компиляции)
+        working-directory: ios
+        run: |
+          xcodebuild -project Visits11Student.xcodeproj \
+            -scheme Visits11Student \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            clean build > build.log 2>&1 || {
+              grep -m 5 "error:" build.log | while read -r line; do echo "::error::$line"; done
+              tail -5 build.log | while read -r line; do echo "::error::$line"; done
+              exit 1
+            }
+
+      - name: Diagnostics (схема/список)
+        if: failure()
+        working-directory: ios
+        run: |
+          xcodebuild -project Visits11Student.xcodeproj -list 2>&1 | head -14 | while read -r line; do echo "::error::LIST: $line"; done
+
+      - name: Package unsigned .ipa (подписывается через Sideloadly своим Apple ID)
+        working-directory: ios
+        run: |
+          mkdir Payload
+          cp -r build/Build/Products/Release-iphoneos/Visits11Student.app Payload/
+          zip -qry Visits11-Student-iOS-unsigned.ipa Payload
+          cp Visits11-Student-iOS-unsigned.ipa ..
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Visits11-Student-iOS-unsigned-ipa
+          path: Visits11-Student-iOS-unsigned.ipa
+
+
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - run: python -m unittest discover -s tests -v
+      - run: pip install platformio==6.1.18
+      - run: pio run -d firmware
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ESP32-firmware
+          path: |
+            firmware/.pio/build/esp32dev/firmware.bin
+            firmware/.pio/build/esp32dev/bootloader.bin
+            firmware/.pio/build/esp32dev/partitions.bin
+          if-no-files-found: error
+  release:
+    needs: [windows, android, ios, firmware]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - name: Package two independent folders
+        run: |
+          mkdir -p delivery/Phone delivery/ESP32/Visits11Ble
+          cp artifacts/Visits11-Phone-win-x64/Visits11.exe delivery/Phone/KubGAU-Journal-Phone.exe
+          cp artifacts/Visits11-Student-apk/student-release.apk delivery/Phone/KubGAU-Student.apk
+          cp artifacts/Visits11-Teacher-apk/app-release.apk delivery/Phone/KubGAU-Teacher.apk
+          cp artifacts/Visits11-Student-iOS-unsigned-ipa/*.ipa delivery/Phone/
+          cp artifacts/Visits11-win-x64/Visits11.exe delivery/ESP32/KubGAU-Journal.exe
+          cp delivery/Phone/KubGAU-Student.apk delivery/ESP32/
+          cp delivery/Phone/*.ipa delivery/ESP32/
+          cp firmware/Visits11Ble/Visits11Ble.ino delivery/ESP32/Visits11Ble/
+          cp packages/Phone/README.md delivery/Phone/
+          cp packages/ESP32/README.md delivery/ESP32/
+          cp -r artifacts/ESP32-firmware delivery/ESP32/compiled
+          (cd delivery && zip -qr ../KubGAU-BLE-two-folders.zip Phone ESP32)
+          (cd delivery && zip -qr ../KubGAU-ESP32.zip ESP32)
+          (cd delivery && zip -qr ../KubGAU-Phone.zip Phone)
+          cp delivery/Phone/KubGAU-Student.apk .
+          cp delivery/Phone/KubGAU-Teacher.apk .
+          cp delivery/ESP32/KubGAU-Journal.exe .
+          cp delivery/Phone/KubGAU-Journal-Phone.exe .
+          cmp KubGAU-Journal.exe delivery/ESP32/KubGAU-Journal.exe
+          if cmp -s KubGAU-Journal.exe KubGAU-Journal-Phone.exe; then
+            echo "ERROR: board and phone EXEs must use different embedded transports"
+            exit 1
+          fi
+          test ! -e delivery/ESP32/board.mode
+          cp delivery/Phone/*.ipa .
+          cp firmware/Visits11Ble/Visits11Ble.ino .
+      - name: Publish verified build without touching the old release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="ble-${GITHUB_SHA::8}"
+          gh release create "$tag" KubGAU-BLE-two-folders.zip KubGAU-ESP32.zip KubGAU-Phone.zip KubGAU-Student.apk KubGAU-Teacher.apk KubGAU-Journal.exe KubGAU-Journal-Phone.exe Visits11-Student-iOS-unsigned.ipa Visits11Ble.ino \
+            --target "$GITHUB_SHA" --title "КубГАУ · Bluetooth BLE · ${GITHUB_SHA::8}" \
+            --notes-file BLE_RELEASE.md --prerelease

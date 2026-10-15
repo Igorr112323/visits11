@@ -29,6 +29,9 @@ final class QrScannerViewController: UIViewController, AVCaptureMetadataOutputOb
     private let sessionQueue = DispatchQueue(label: "ru.visits11.student.camera")
     private var preview: AVCaptureVideoPreviewLayer?
     private var handled = false
+    // Accessed only on sessionQueue.
+    private var wantsCamera = true
+    private var configured = false
 
     private let hintLabel = UILabel()
     private let cancelButton = UIButton(type: .system)
@@ -49,11 +52,19 @@ final class QrScannerViewController: UIViewController, AVCaptureMetadataOutputOb
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        let session = self.session
-        sessionQueue.async {
-            if session.isRunning {
-                session.stopRunning()
-            }
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.wantsCamera = false
+            if self.session.isRunning { self.session.stopRunning() }
+        }
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.wantsCamera = true
+            if self.configured && !self.session.isRunning { self.session.startRunning() }
         }
     }
 
@@ -79,35 +90,33 @@ final class QrScannerViewController: UIViewController, AVCaptureMetadataOutputOb
     }
 
     private func configureAndStart() {
-        guard let device = AVCaptureDevice.default(for: .video),
-              let input = try? AVCaptureDeviceInput(device: device),
-              session.canAddInput(input) else {
-            showMessage("Камера недоступна — выберите картинку из галереи")
-            return
-        }
-
-        session.beginConfiguration()
-        session.addInput(input)
-
-        let output = AVCaptureMetadataOutput()
-        if session.canAddOutput(output) {
-            session.addOutput(output)
-            output.setMetadataObjectsDelegate(self, queue: .main)
-            output.metadataObjectTypes = [.qr]
-        }
-        session.commitConfiguration()
-
-        let preview = AVCaptureVideoPreviewLayer(session: session)
-        preview.videoGravity = .resizeAspectFill
-        preview.frame = view.bounds
-        view.layer.insertSublayer(preview, at: 0)
-        self.preview = preview
-
-        let session = self.session
-        sessionQueue.async {
-            if !session.isRunning {
-                session.startRunning()
+        // Configuration as well as start/stop must not block SwiftUI sheet dismissal.
+        sessionQueue.async { [weak self] in
+            guard let self = self, self.wantsCamera, !self.configured else { return }
+            guard let device = AVCaptureDevice.default(for: .video),
+                  let input = try? AVCaptureDeviceInput(device: device),
+                  self.session.canAddInput(input) else {
+                DispatchQueue.main.async { self.showMessage("Камера недоступна — выберите картинку из галереи") }
+                return
             }
+            self.session.beginConfiguration()
+            self.session.addInput(input)
+            let output = AVCaptureMetadataOutput()
+            if self.session.canAddOutput(output) {
+                self.session.addOutput(output)
+                output.setMetadataObjectsDelegate(self, queue: .main)
+                output.metadataObjectTypes = [.qr]
+            }
+            self.session.commitConfiguration()
+            self.configured = true
+            DispatchQueue.main.async {
+                let preview = AVCaptureVideoPreviewLayer(session: self.session)
+                preview.videoGravity = .resizeAspectFill
+                preview.frame = self.view.bounds
+                self.view.layer.insertSublayer(preview, at: 0)
+                self.preview = preview
+            }
+            if self.wantsCamera && !self.session.isRunning { self.session.startRunning() }
         }
     }
 
@@ -134,7 +143,7 @@ final class QrScannerViewController: UIViewController, AVCaptureMetadataOutputOb
                 session.stopRunning()
             }
         }
-        AudioServicesPlaySystemSound(kSystemSoundID_Vibrate)
+        // Без вибрации: телефон вибрирует только когда отметка записана в журнал.
         onCode?(value)
     }
 

@@ -74,10 +74,14 @@ struct StudentQrCredentials {
 /// ни интернета, ни разрешений, ни сторонних библиотек.
 enum QrImageDecoder {
     static func text(from image: UIImage) -> String? {
-        let cgImage: CGImage? = image.cgImage ?? {
-            let renderer = UIGraphicsImageRenderer(size: image.size)
-            return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: image.size)) }.cgImage
-        }()
+        let longest = max(image.size.width, image.size.height)
+        guard longest > 0 else { return nil }
+        let scale = min(1, 2048 / longest)
+        let size = CGSize(width: max(1, image.size.width * scale), height: max(1, image.size.height * scale))
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let renderer = UIGraphicsImageRenderer(size: size, format: format)
+        let cgImage = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }.cgImage
         guard let cgImage else { return nil }
 
         let request = VNDetectBarcodesRequest()
@@ -128,7 +132,6 @@ struct PhotoPicker: UIViewControllerRepresentable {
         }
 
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-            picker.dismiss(animated: true)
             onFinish()
 
             guard let provider = results.first?.itemProvider,

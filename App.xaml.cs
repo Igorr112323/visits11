@@ -13,11 +13,37 @@ public partial class App : Application
     public static ToastService Toasts { get; private set; } = null!;
     public static PhoneLink Phone { get; private set; } = null!;
 
+    private System.Threading.Mutex? _instance;
+    private bool _ownsInstance;
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
 
-        var appDir = GetAppDirectory();
+        var appDir = AppDataStorage.DirectoryPath;
+        // Serialize migration and prevent two copies of this terminal journal sharing one database.
+        var key = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(appDir.ToUpperInvariant())));
+        _instance = new System.Threading.Mutex(false, @"Local\Visits11-" + key);
+        try { _ownsInstance = _instance.WaitOne(0); }
+        catch (System.Threading.AbandonedMutexException) { _ownsInstance = true; }
+        if (!_ownsInstance)
+        {
+            MessageBox.Show("Этот журнал уже открыт. Используйте открытое окно.", "Журнал КубГАУ");
+            Shutdown();
+            return;
+        }
+        try
+        {
+            AppDataStorage.Prepare(AppContext.BaseDirectory, appDir);
+        }
+        catch (Exception error)
+        {
+            MessageBox.Show("Не удалось подготовить данные журнала. Исходная база сохранена.\n" + error.Message,
+                "Журнал КубГАУ", MessageBoxButton.OK, MessageBoxImage.Error);
+            Shutdown();
+            return; // Never silently replace a failed migration with an empty journal.
+        }
 
         Db = new DatabaseService(Path.Combine(appDir, "attendance.db"));
         Db.Initialize();
@@ -45,24 +71,10 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        Phone.Dispose();
+        Phone?.Dispose();
+        if (_ownsInstance) _instance?.ReleaseMutex();
+        _instance?.Dispose();
         base.OnExit(e);
     }
 
-    /// <summary>
-    /// Каталог приложения. Для single-file публикации — папка с .exe.
-    /// </summary>
-    private static string GetAppDirectory()
-    {
-        var processPath = Environment.ProcessPath;
-        if (!string.IsNullOrEmpty(processPath))
-        {
-            var name = Path.GetFileNameWithoutExtension(processPath);
-            if (string.Equals(name, "Visits11", StringComparison.OrdinalIgnoreCase))
-            {
-                return Path.GetDirectoryName(processPath)!;
-            }
-        }
-        return AppContext.BaseDirectory;
-    }
 }
