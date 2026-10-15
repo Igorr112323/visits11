@@ -1,7 +1,7 @@
 name: BLE distribution
 on:
   push:
-    branches: ["main", "arena/8abfc551-visits11", "arena/092fb173-visits11"]
+    branches: ["main", "arena/8abfc551-visits11"]
   workflow_dispatch:
 permissions:
   contents: read
