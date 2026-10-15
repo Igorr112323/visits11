@@ -176,8 +176,11 @@ public sealed class WordService
         var table = CreateTable("№", "ФИО", "Статус");
         for (var i = 0; i < rows.Count; i++)
         {
+            var status = rows[i].Present ? "Присутствовал" : "Отсутствовал";
+            if (rows[i].Present && rows[i].HasCrown) status += " 👑";
+            var name = rows[i].FullName + (rows[i].HasCrown ? " 👑" : string.Empty);
             table.Append(CreateRow(
-                new[] { (i + 1).ToString(), rows[i].FullName, rows[i].Present ? "Присутствовал" : "Отсутствовал" },
+                new[] { (i + 1).ToString(), name, status },
                 Array.Empty<int>()));
         }
         body.Append(table);

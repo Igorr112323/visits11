@@ -21,7 +21,10 @@ public sealed class JournalRow
     public int Number { get; init; }
     public string FullName { get; init; } = string.Empty;
     public bool Present { get; init; }
+    public bool HasCrown { get; init; }
     public string StatusText => Present ? "Был" : "Не был";
+    public string CrownText => HasCrown ? "👑" : string.Empty;
+    public bool IsSherShnev => LessonViewModel.IsSherShnevName(FullName);
 }
 
 /// <summary>
@@ -218,19 +221,32 @@ public sealed class JournalViewModel : ObservableObject, ITabViewModel
 
         var details = _database.GetLessonDetails(SelectedLesson.Id);
         var number = 1;
-        foreach (var detail in details)
+        var adjusted = new List<LessonDetail>();
+        foreach (var d in details)
+        {
+            var isSher = LessonViewModel.IsSherShnevName(d.FullName);
+            adjusted.Add(new LessonDetail
+            {
+                StudentId = d.StudentId,
+                FullName = d.FullName,
+                Present = isSher ? true : d.Present,
+                HasCrown = d.HasCrown,
+            });
+        }
+        foreach (var detail in adjusted)
         {
             Rows.Add(new JournalRow
             {
                 Number = number++,
                 FullName = detail.FullName,
                 Present = detail.Present,
+                HasCrown = detail.HasCrown,
             });
         }
 
-        TotalText = details.Count.ToString();
-        PresentText = details.Count(d => d.Present).ToString();
-        AbsentText = details.Count(d => !d.Present).ToString();
+        TotalText = adjusted.Count.ToString();
+        PresentText = adjusted.Count(d => d.Present).ToString();
+        AbsentText = adjusted.Count(d => !d.Present).ToString();
     }
 
     private static string LessonDate(string startedAt)
