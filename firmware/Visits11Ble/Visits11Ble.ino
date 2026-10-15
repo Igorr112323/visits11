@@ -47,8 +47,13 @@ static void refreshAdvertising() {
   auto a = BLEDevice::getAdvertising();
   BLEAdvertisementData adv;
   adv.setCompleteServices(BLEUUID(SERVICE));
-  char mfg[3] = { 0x11, (char)0xA1, (char)phoneGate() };
-  adv.setManufacturerData(std::string(mfg, 3));
+  String mfg; mfg.reserve(3);
+  mfg += (char)0x11; mfg += (char)0xA1; mfg += (char)phoneGate();
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  adv.setManufacturerData(mfg);                    // arduino-esp32 3.x BLE lib takes String
+#else
+  adv.setManufacturerData(std::string(mfg.c_str())); // arduino-esp32 2.x BLE lib takes std::string
+#endif
   a->setAdvertisementData(adv);
 }
 static Event awaitingProximity{};
