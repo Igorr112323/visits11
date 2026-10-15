@@ -66,6 +66,7 @@ public sealed class DatabaseService
               StudentId INTEGER NOT NULL,
               Status TEXT NOT NULL,
               MarkedAt TEXT NOT NULL,
+              HasCrown INTEGER NOT NULL DEFAULT 0,
               FOREIGN KEY (LessonId) REFERENCES Lessons(Id) ON DELETE CASCADE,
               FOREIGN KEY (StudentId) REFERENCES Students(Id) ON DELETE CASCADE
             );
@@ -81,6 +82,25 @@ public sealed class DatabaseService
         }
 
         MigrateStudentsWithoutCredentials(connection);
+        EnsureAttendanceCrownColumn(connection);
+    }
+
+    private static void EnsureAttendanceCrownColumn(SqliteConnection connection)
+    {
+        if (!ColumnExistsInTable(connection, "Attendance", "HasCrown"))
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "ALTER TABLE Attendance ADD COLUMN HasCrown INTEGER NOT NULL DEFAULT 0;";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    private static bool ColumnExistsInTable(SqliteConnection connection, string table, string column)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = @name";
+        command.Parameters.AddWithValue("@name", column);
+        return Convert.ToInt64(command.ExecuteScalar()) > 0;
     }
 
     /// <summary>
@@ -203,7 +223,9 @@ public sealed class DatabaseService
         command.Parameters.AddWithValue("@device", deviceId);
         command.Parameters.AddWithValue("@id", studentId);
         command.ExecuteNonQuery();
-        RaiseDataChanged();
+        // Не вызываем RaiseDataChanged во время переклички — иначе первая отметка
+        // теряется: Rows пересоздаётся, а MarkRow помечает старый объект.
+        // Обновление списка студентов произойдёт при следующем OnActivated().
     }
 
     /// <summary>Сбрасывает привязку телефона у студента (чтобы он мог войти с нового устройства).</summary>
@@ -458,7 +480,17 @@ public sealed class DatabaseService
     {
         using var connection = Open();
         using var command = connection.CreateCommand();
-        command.CommandText = """
+        // HasCrown может отсутствовать в старых базах — проверяем наличие колонки
+        var hasCrownCol = ColumnExistsInTable(connection, "Attendance", "HasCrown");
+        command.CommandText = hasCrownCol
+            ? """
+            SELECT s.Id, s.FullName, a.Status, a.HasCrown
+            FROM Students s
+            LEFT JOIN Attendance a ON a.StudentId = s.Id AND a.LessonId = @lessonId
+            WHERE s.GroupId = (SELECT GroupId FROM Lessons WHERE Id = @lessonId)
+            ORDER BY s.Id
+            """
+            : """
             SELECT s.Id, s.FullName, a.Status
             FROM Students s
             LEFT JOIN Attendance a ON a.StudentId = s.Id AND a.LessonId = @lessonId
@@ -470,22 +502,38 @@ public sealed class DatabaseService
         var list = new List<LessonDetail>();
         while (reader.Read())
         {
+            var present = !reader.IsDBNull(2) && reader.GetString(2) == "present";
+            var hasCrown = false;
+            if (hasCrownCol && !reader.IsDBNull(3))
+            {
+                hasCrown = reader.GetInt64(3) != 0;
+            }
             list.Add(new LessonDetail
             {
                 StudentId = reader.GetInt32(0),
                 FullName = reader.GetString(1),
-                Present = !reader.IsDBNull(2) && reader.GetString(2) == "present",
+                Present = present,
+                HasCrown = hasCrown,
             });
         }
         return list;
     }
 
     public void AddAttendance(int lessonId, IEnumerable<(int StudentId, bool Present, string MarkedAt)> rows)
+        => AddAttendanceWithCrown(lessonId, rows.Select(r => (r.StudentId, r.Present, r.MarkedAt, false)));
+
+    public void AddAttendanceWithCrown(int lessonId, IEnumerable<(int StudentId, bool Present, string MarkedAt, bool HasCrown)> rows)
     {
         using var connection = Open();
+        var hasCrownCol = ColumnExistsInTable(connection, "Attendance", "HasCrown");
         using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
-        command.CommandText = """
+        command.CommandText = hasCrownCol
+            ? """
+            INSERT INTO Attendance (LessonId, StudentId, Status, MarkedAt, HasCrown)
+            VALUES (@lessonId, @studentId, @status, @markedAt, @hasCrown);
+            """
+            : """
             INSERT INTO Attendance (LessonId, StudentId, Status, MarkedAt)
             VALUES (@lessonId, @studentId, @status, @markedAt);
             """;
@@ -493,13 +541,15 @@ public sealed class DatabaseService
         var pStudentId = command.Parameters.Add("@studentId", SqliteType.Integer);
         var pStatus = command.Parameters.Add("@status", SqliteType.Text);
         var pMarkedAt = command.Parameters.Add("@markedAt", SqliteType.Text);
+        var pHasCrown = hasCrownCol ? command.Parameters.Add("@hasCrown", SqliteType.Integer) : null;
 
-        foreach (var (studentId, present, markedAt) in rows)
+        foreach (var (studentId, present, markedAt, hasCrown) in rows)
         {
             pLessonId.Value = lessonId;
             pStudentId.Value = studentId;
             pStatus.Value = present ? "present" : "absent";
             pMarkedAt.Value = markedAt;
+            if (pHasCrown != null) pHasCrown.Value = hasCrown ? 1 : 0;
             command.ExecuteNonQuery();
         }
         transaction.Commit();
@@ -524,8 +574,12 @@ public sealed class DatabaseService
 
     /// <summary>Отметка «есть» в идущей перекличке (idempotent).</summary>
     public void SaveMark(int lessonId, int studentId, string markedAt)
+        => SaveMarkWithCrown(lessonId, studentId, markedAt, false);
+
+    public void SaveMarkWithCrown(int lessonId, int studentId, string markedAt, bool hasCrown)
     {
         using var connection = Open();
+        var hasCrownCol = ColumnExistsInTable(connection, "Attendance", "HasCrown");
         using var transaction = connection.BeginTransaction();
         using (var del = connection.CreateCommand())
         {
@@ -536,13 +590,19 @@ public sealed class DatabaseService
         }
         using (var ins = connection.CreateCommand())
         {
-            ins.CommandText = """
+            ins.CommandText = hasCrownCol
+                ? """
+                INSERT INTO Attendance (LessonId, StudentId, Status, MarkedAt, HasCrown)
+                VALUES (@l, @s, 'present', @m, @c);
+                """
+                : """
                 INSERT INTO Attendance (LessonId, StudentId, Status, MarkedAt)
                 VALUES (@l, @s, 'present', @m);
                 """;
             ins.Parameters.AddWithValue("@l", lessonId);
             ins.Parameters.AddWithValue("@s", studentId);
             ins.Parameters.AddWithValue("@m", markedAt);
+            if (hasCrownCol) ins.Parameters.AddWithValue("@c", hasCrown ? 1 : 0);
             ins.ExecuteNonQuery();
         }
         transaction.Commit();
@@ -562,8 +622,13 @@ public sealed class DatabaseService
     /// <summary>Завершение переклички: FinishedAt + полный снимок (есть и отсутствуют).</summary>
     public void FinishLesson(int lessonId, string finishedAt,
         IEnumerable<(int StudentId, bool Present, string MarkedAt)> snapshot)
+        => FinishLessonWithCrown(lessonId, finishedAt, snapshot.Select(s => (s.StudentId, s.Present, s.MarkedAt, false)));
+
+    public void FinishLessonWithCrown(int lessonId, string finishedAt,
+        IEnumerable<(int StudentId, bool Present, string MarkedAt, bool HasCrown)> snapshot)
     {
         using var connection = Open();
+        var hasCrownCol = ColumnExistsInTable(connection, "Attendance", "HasCrown");
         using var transaction = connection.BeginTransaction();
         using (var upd = connection.CreateCommand())
         {
@@ -580,7 +645,12 @@ public sealed class DatabaseService
         }
         using (var ins = connection.CreateCommand())
         {
-            ins.CommandText = """
+            ins.CommandText = hasCrownCol
+                ? """
+                INSERT INTO Attendance (LessonId, StudentId, Status, MarkedAt, HasCrown)
+                VALUES (@l, @s, @st, @m, @c);
+                """
+                : """
                 INSERT INTO Attendance (LessonId, StudentId, Status, MarkedAt)
                 VALUES (@l, @s, @st, @m);
                 """;
@@ -588,12 +658,14 @@ public sealed class DatabaseService
             var ps = ins.Parameters.Add("@s", SqliteType.Integer);
             var pst = ins.Parameters.Add("@st", SqliteType.Text);
             var pm = ins.Parameters.Add("@m", SqliteType.Text);
+            var pc = hasCrownCol ? ins.Parameters.Add("@c", SqliteType.Integer) : null;
             pl.Value = lessonId;
-            foreach (var (studentId, present, markedAt) in snapshot)
+            foreach (var (studentId, present, markedAt, hasCrown) in snapshot)
             {
                 ps.Value = studentId;
                 pst.Value = present ? "present" : "absent";
                 pm.Value = markedAt;
+                if (pc != null) pc.Value = hasCrown ? 1 : 0;
                 ins.ExecuteNonQuery();
             }
         }
@@ -621,11 +693,21 @@ public sealed class DatabaseService
     }
 
     public List<(int StudentId, string MarkedAt)> GetLessonPresents(int lessonId)
+        => GetLessonPresentsWithCrown(lessonId).Select(t => (t.StudentId, t.MarkedAt)).ToList();
+
+    public List<(int StudentId, string MarkedAt, bool HasCrown)> GetLessonPresentsWithCrown(int lessonId)
     {
-        var result = new List<(int, string)>();
+        var result = new List<(int, string, bool)>();
         using var connection = Open();
+        var hasCrownCol = ColumnExistsInTable(connection, "Attendance", "HasCrown");
         using var command = connection.CreateCommand();
-        command.CommandText = """
+        command.CommandText = hasCrownCol
+            ? """
+            SELECT StudentId, MarkedAt, HasCrown
+            FROM Attendance
+            WHERE LessonId=@l AND Status='present';
+            """
+            : """
             SELECT StudentId, MarkedAt
             FROM Attendance
             WHERE LessonId=@l AND Status='present';
@@ -633,7 +715,10 @@ public sealed class DatabaseService
         command.Parameters.AddWithValue("@l", lessonId);
         using var reader = command.ExecuteReader();
         while (reader.Read())
-            result.Add((Convert.ToInt32(reader.GetInt64(0)), reader.GetString(1)));
+        {
+            var hasCrown = hasCrownCol && !reader.IsDBNull(2) && reader.GetInt64(2) != 0;
+            result.Add((Convert.ToInt32(reader.GetInt64(0)), reader.GetString(1), hasCrown));
+        }
         return result;
     }
 

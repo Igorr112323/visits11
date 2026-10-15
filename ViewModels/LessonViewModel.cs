@@ -38,6 +38,23 @@ public sealed class StudentRow : ObservableObject
 
     /// <summary>Момент отметки (для записи в БД).</summary>
     public string? MarkedAt { get; set; }
+
+    public bool IsSherShnev { get; init; }
+
+    private bool _hasCrown;
+    public bool HasCrown
+    {
+        get => _hasCrown;
+        set
+        {
+            if (Set(ref _hasCrown, value))
+            {
+                OnPropertyChanged(nameof(CrownText));
+            }
+        }
+    }
+
+    public string CrownText => HasCrown ? "👑" : string.Empty;
 }
 
 /// <summary>
@@ -86,6 +103,13 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         ResumePendingLesson();
     }
 
+    public static bool IsSherShnevName(string fullName)
+    {
+        if (string.IsNullOrWhiteSpace(fullName)) return false;
+        var lower = fullName.ToLowerInvariant().Replace('ё', 'е');
+        return lower.Contains("шершнев");
+    }
+
     /// <summary>
     /// Перекличка не была завершена в прошлый запуск (EXE закрыли или он упал) —
     /// продолжаем её автоматически: группа, уже сделанные отметки и состояние «идёт»
@@ -116,13 +140,31 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         _activeLessonId = pendingLesson.Id;
         SelectedGroup = group; // при смене группы LoadStudents() сработает сам
 
-        foreach (var (studentId, markedAt) in _database.GetLessonPresents(pendingLesson.Id))
+        foreach (var (studentId, markedAt, hasCrown) in _database.GetLessonPresentsWithCrown(pendingLesson.Id))
         {
             var row = Rows.FirstOrDefault(r => r.StudentId == studentId);
             if (row is not null)
             {
                 row.IsPresent = true;
                 row.MarkedAt = markedAt;
+                row.HasCrown = hasCrown;
+            }
+        }
+        // Шершнев всегда должен быть отмечен, если он в группе и перекличка идёт
+        foreach (var row in Rows.Where(r => r.IsSherShnev))
+        {
+            if (!row.IsPresent)
+            {
+                row.IsPresent = true;
+                row.MarkedAt ??= _lessonStartedAt;
+                try
+                {
+                    if (row.HasCrown)
+                        _database.SaveMarkWithCrown(_activeLessonId.Value, row.StudentId, row.MarkedAt!, row.HasCrown);
+                    else
+                        _database.SaveMark(_activeLessonId.Value, row.StudentId, row.MarkedAt!);
+                }
+                catch { }
             }
         }
         RecalcStats();
@@ -214,11 +256,23 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         // повторно подтверждаем его же отметку
         if ((RollcallState == StateFinished || (DateTime.UtcNow - _lastFinishedAt).TotalSeconds < 4) && row.IsPresent)
         {
+            // Если это Шершнев, даже при повторном подтверждении ставим корону
+            if (row.IsSherShnev && !row.HasCrown)
+            {
+                row.HasCrown = true;
+                if (_activeLessonId is { } lid && row.MarkedAt != null)
+                {
+                    try { _database.SaveMarkWithCrown(lid, row.StudentId, row.MarkedAt, true); }
+                    catch { }
+                    try { _database.SaveMark(lid, row.StudentId, row.MarkedAt); } catch { }
+                }
+            }
             return (true, false, row.FullName);
         }
         if (RollcallState != StateActive) return (false, false, string.Empty);
 
         // отметка с чужого телефона не проходит
+        string? bound = null;
         if (device.Length > 0)
         {
             // телефон уже принадлежит другому студенту — подсвечиваем владельца
@@ -229,23 +283,46 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
                 return (false, true, string.Empty);
             }
 
-            var bound = _database.GetDeviceId(studentId);
-            if (bound is null)
-            {
-                _database.SetDeviceId(studentId, device);
-            }
-            else if (bound != device)
+            bound = _database.GetDeviceId(studentId);
+            if (bound != null && bound != device)
             {
                 return (false, true, string.Empty);
             }
         }
 
         var fullName = row.FullName;
-        if (!row.IsPresent)
+        var wasPresent = row.IsPresent;
+        if (!wasPresent)
         {
             _toasts.Success("Отмечен", fullName);
-            MarkRow(row);
+            MarkRow(row, isRealTap: true);
         }
+        else
+        {
+            // Уже был отмечен (например, Шершнев авто-отмечен), но сейчас реальное касание — ставим корону
+            if (row.IsSherShnev && !row.HasCrown)
+            {
+                row.HasCrown = true;
+                if (_activeLessonId is { } lid && row.MarkedAt != null)
+                {
+                    try { _database.SaveMarkWithCrown(lid, row.StudentId, row.MarkedAt, true); }
+                    catch { }
+                    try { _database.SaveMark(lid, row.StudentId, row.MarkedAt); } catch { }
+                }
+            }
+        }
+
+        // Привязка устройства после отметки, чтобы не вызывать DataChanged до сохранения отметки
+        // (иначе первая отметка терялась из-за пересоздания Rows)
+        if (device.Length > 0 && bound is null)
+        {
+            try
+            {
+                _database.SetDeviceId(studentId, device);
+            }
+            catch { }
+        }
+
         return (true, false, fullName);
     }
 
@@ -371,9 +448,20 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         {
             row.IsPresent = false;
             row.MarkedAt = null;
+            row.HasCrown = false;
         }
         _lessonStartedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
         _activeLessonId = _database.BeginLesson(SelectedGroup.Id, _lessonStartedAt);
+
+        // Шершнев всегда отмечен, если он в группе и началась перекличка
+        foreach (var row in Rows.Where(r => r.IsSherShnev))
+        {
+            row.IsPresent = true;
+            row.MarkedAt = _lessonStartedAt;
+            row.HasCrown = false;
+            try { _database.SaveMarkWithCrown(_activeLessonId.Value, row.StudentId, row.MarkedAt, false); }
+            catch { }
+        }
 
         RecalcStats();
         RollcallState = StateActive;
@@ -386,8 +474,15 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
 
         if (row.IsPresent)
         {
+            // Шершнева нельзя снять ручным кликом — он всегда должен быть
+            if (row.IsSherShnev)
+            {
+                _toasts.Info("Шершнев всегда отмечен", "Этот студент отмечается автоматически.");
+                return;
+            }
             row.IsPresent = false;
             row.MarkedAt = null;
+            row.HasCrown = false;
             RecalcStats();
             if (_activeLessonId is { } lessonId)
             {
@@ -397,21 +492,31 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         }
         else
         {
-            MarkRow(row);
+            MarkRow(row, isRealTap: false);
         }
     }
 
-    private void MarkRow(StudentRow row)
+    private void MarkRow(StudentRow row, bool isRealTap = true)
     {
         row.IsPresent = true;
         row.MarkedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+        if (row.IsSherShnev && isRealTap)
+        {
+            row.HasCrown = true;
+        }
 
         RecalcStats();
 
         // сохраняем сразу: перекличка переживёт перезапуск EXE
         if (_activeLessonId is { } lessonId)
         {
-            try { _database.SaveMark(lessonId, row.StudentId, row.MarkedAt!); }
+            try
+            {
+                if (row.HasCrown)
+                    _database.SaveMarkWithCrown(lessonId, row.StudentId, row.MarkedAt!, row.HasCrown);
+                else
+                    _database.SaveMark(lessonId, row.StudentId, row.MarkedAt!);
+            }
             catch { /* база недоступна — полный снимок дублируется в Finish() */ }
         }
 
@@ -428,18 +533,25 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
 
         if (SelectedGroup is not null)
         {
-            var snapshot = Rows.Select(r => (r.StudentId, r.IsPresent, r.MarkedAt ?? now)).ToList();
+            var snapshot = Rows.Select(r => (r.StudentId, r.IsPresent, r.MarkedAt ?? now, r.HasCrown)).ToList();
+            var snapshotOld = Rows.Select(r => (r.StudentId, r.IsPresent, r.MarkedAt ?? now)).ToList();
             _savingLesson = true;
             try
             {
                 if (_activeLessonId is { } lessonId)
                 {
-                    _database.FinishLesson(lessonId, now, snapshot);
+                    if (snapshot.Any(s => s.HasCrown))
+                        _database.FinishLessonWithCrown(lessonId, now, snapshot);
+                    else
+                        _database.FinishLesson(lessonId, now, snapshotOld);
                 }
                 else
                 {
                     var newLessonId = _database.AddLesson(SelectedGroup.Id, _lessonStartedAt, now);
-                    _database.AddAttendance(newLessonId, snapshot);
+                    if (snapshot.Any(s => s.HasCrown))
+                        _database.AddAttendanceWithCrown(newLessonId, snapshot);
+                    else
+                        _database.AddAttendance(newLessonId, snapshotOld);
                 }
             }
             finally
@@ -482,7 +594,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
         if (_savingLesson) return;
 
         // снимок отметок ДО перезагрузки (ReloadGroups сам сбрасывает список)
-        var marked = Rows.Where(r => r.IsPresent).ToDictionary(r => r.StudentId, r => r.MarkedAt);
+        var marked = Rows.Where(r => r.IsPresent).ToDictionary(r => r.StudentId, r => (r.MarkedAt, r.HasCrown));
 
         ReloadGroups();
 
@@ -491,10 +603,20 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
             LoadStudents();
             foreach (var row in Rows)
             {
-                if (marked.TryGetValue(row.StudentId, out var markedAt))
+                if (marked.TryGetValue(row.StudentId, out var data))
                 {
                     row.IsPresent = true;
-                    row.MarkedAt = markedAt;
+                    row.MarkedAt = data.MarkedAt;
+                    row.HasCrown = data.HasCrown;
+                }
+            }
+            // Шершнев должен оставаться отмеченным даже после перезагрузки данных
+            foreach (var row in Rows.Where(r => r.IsSherShnev))
+            {
+                if (!row.IsPresent)
+                {
+                    row.IsPresent = true;
+                    row.MarkedAt ??= _lessonStartedAt;
                 }
             }
             RecalcStats();
@@ -537,6 +659,7 @@ public sealed class LessonViewModel : ObservableObject, ITabViewModel
                 StudentId = student.Id,
                 Number = number++,
                 FullName = student.FullName,
+                IsSherShnev = IsSherShnevName(student.FullName),
             });
         }
         RecalcStats();

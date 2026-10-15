@@ -210,6 +210,7 @@
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="40" />
                                                     <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
                                                     <ColumnDefinition Width="120" />
                                                 </Grid.ColumnDefinitions>
                                                 <TextBlock Grid.Column="0" Text="{Binding Number}"
@@ -220,13 +221,17 @@
                                                            Style="{StaticResource Txt.Body}"
                                                            TextTrimming="CharacterEllipsis"
                                                            VerticalAlignment="Center" />
-                                                <Border Grid.Column="2" CornerRadius="20" Padding="11,4"
+                                                <TextBlock Grid.Column="2" Text="{Binding CrownText}"
+                                                           FontSize="14"
+                                                           VerticalAlignment="Center"
+                                                           Margin="6,0,10,0" />
+                                                <Border Grid.Column="3" CornerRadius="20" Padding="11,4"
                                                         HorizontalAlignment="Left"
                                                         Background="{DynamicResource Brush.RedSoft}"
                                                         TextElement.Foreground="{DynamicResource Brush.Red}">
                                                     <TextBlock Text="{Binding StatusText}" Style="{StaticResource Txt.Badge}" />
                                                 </Border>
-                                                <Border Grid.Column="2" CornerRadius="20" Padding="11,4"
+                                                <Border Grid.Column="3" CornerRadius="20" Padding="11,4"
                                                         HorizontalAlignment="Left"
                                                         Background="{DynamicResource Brush.GreenSoft}"
                                                         TextElement.Foreground="{DynamicResource Brush.Green}"
